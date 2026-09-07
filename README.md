@@ -13,7 +13,7 @@ I intend on reviewing code, testing, and editing documentation regularly. If you
 
 ## The Reference Game
 A 3D dev-textured arena deathmatch, built entirely out of the
-[dot-*](../NOTES.md) family. Four weapons, one map, a match that ends on its score
+[dot-*](https://github.com/modcommunity) family. Four weapons, one map, a match that ends on its score
 limit, and a HUD and menus with no art assets anywhere.
 
 **This is the reference game.** It exists to prove the addons compose, to show what the
@@ -28,7 +28,7 @@ godot --headless --path . res://examples/headless_net.tscn     # the netcode
 godot --headless --path . res://examples/dedicated.tscn        # a real DotServer
 ```
 
-Or, once [dot-serve](../dot-serve) is installed:
+Or, once [dot-serve](https://github.com/modcommunity/dot-serve) is installed:
 
 ```bash
 dotserve --game res://examples/dedicated.tscn --name "My arena"
@@ -38,13 +38,13 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 
 | | |
 | --- | --- |
-| [dot-core](../dot-core) | Everything shared. |
-| [dot-fps-controller](../dot-fps-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
-| [dot-combat](../dot-combat) | Health, weapons, hit registration. |
-| [dot-loadout](../dot-loadout) | What you take in, and what you may take. |
-| [dot-match](../dot-match) | Rounds, scoring, spawning, respawning. |
-| [dot-ui](../dot-ui) | HUD, pause menu, settings, controls, scoreboard. |
-| [dot-server](../dot-server) | The dedicated server, through one module. |
+| [dot-core](https://github.com/modcommunity/dot-core) | Everything shared. |
+| [dot-fps-controller](https://github.com/modcommunity/dot-fps-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
+| [dot-combat](https://github.com/modcommunity/dot-combat) | Health, weapons, hit registration. |
+| [dot-loadout](https://github.com/modcommunity/dot-loadout) | What you take in, and what you may take. |
+| [dot-match](https://github.com/modcommunity/dot-match) | Rounds, scoring, spawning, respawning. |
+| [dot-ui](https://github.com/modcommunity/dot-ui) | HUD, pause menu, settings, controls, scoreboard. |
+| [dot-server](https://github.com/modcommunity/dot-server) | The dedicated server, through one module. |
 
 ## The four files that matter
 
