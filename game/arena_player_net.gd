@@ -163,7 +163,19 @@ func _net_state_applied(tick: int) -> void:
 	# receiving client does not simulate this player. Without this the state moves and
 	# the node — and so the view, the muzzle and the hitboxes hanging off it — stays
 	# where it spawned.
-	player.global_position = player.controller.state.position
+	#
+	# [b]But NOT on a predicted entity, which is the local player.[/b]
+	# `DotNetManager.receive_snapshot` calls `read_state` — and therefore this — BEFORE
+	# `DotNetPredictor.reconcile`, and the first thing reconcile does is read the node
+	# as "what the client is showing" so it can measure the correction. Writing the
+	# server's position here first makes that measurement the entire replay distance:
+	# every reconciliation logs a snap, `correction_rate()` reads near 1.0, and the
+	# simulation is right the whole time. game-hungario had this exact line and the
+	# family's notes have named it as unfixed here ever since; nothing in this
+	# repository could see it, because `headless_net` drives the bridge directly and
+	# there has never been a client to feel it.
+	if identity == null or not identity.is_predicted():
+		player.global_position = player.controller.state.position
 
 	if not player.health.alive and player.hitboxes.enabled:
 		# The server's word that this player is dead. `make_dead` is what takes them

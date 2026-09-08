@@ -67,6 +67,12 @@ var hitboxes: DotHitboxSet = null
 ## Where the eyes are, and where shots start.
 var view: Node3D = null
 
+## The local player's camera. Null on a server, on a remote player, and headless.
+var camera: Camera3D = null
+
+## What a remote player is drawn as. Null on the local player, who sees their own eyes.
+var body_mesh: Node3D = null
+
 var _map: ArenaMap = null
 var _combat: DotCombatManager = null
 var _command := DotCombatCommand.new()
@@ -377,6 +383,118 @@ func simulate_tick(
 		_combat.set_authoritative_origin(player_id, muzzle_position())
 
 	return arsenal.simulate_tick(tick, delta, _command)
+
+
+## Draws this player at where they are BETWEEN ticks. Called once per rendered frame.
+##
+## [b]Nothing in this family rendered between ticks until it was measured.[/b]
+## `DotFpsController.render_state` has interpolated between the last two ticks since the
+## controller was written and is documented as the cure for exactly this stutter; its
+## guard was `if drive != Drive.LOCAL: return state`, and `LOCAL` is the drive no
+## networked game uses. Measured at 60 frames against a 128-tick server, drawing at the
+## last tick instead: the camera advanced 74 mm on six frames out of seven and 112 mm on
+## the seventh — **a 47% change in apparent speed, eight times a second**.
+##
+## The other half is that the engine must run at the SERVER's tick rate. The fraction a
+## renderer interpolates at is a fraction through a physics frame, which is a fraction
+## through a tick only while the two rates agree, so either fix alone measures as no
+## better than doing nothing. `ArenaNetBridge._adopt_tick_rate` is the other half.
+##
+## View angles are deliberately NOT interpolated, and they never juddered: mouse motion
+## is delivered once per frame and the sampler consumes everything pending, so whichever
+## tick runs next absorbs exactly that frame's motion. Blending it would add a tick of
+## latency to aiming to fix nothing.
+func present(delta: float) -> void:
+	if controller == null:
+		return
+
+	var drawn := controller.render_state() if camera != null else controller.state
+
+	if camera != null:
+		# Written globally rather than by moving this node: this node is the
+		# controller's body, and the tick writes it. Moving it here would fight the
+		# simulation and, on the predicted local player, would be read back by
+		# reconciliation as "what the client is showing".
+		if view != null:
+			view.global_position = (
+				controller.motor.eye_position(drawn)
+				if controller.motor != null
+				else drawn.position + Vector3(0.0, 1.6, 0.0)
+			)
+
+		camera.global_position = view.global_position
+		camera.global_rotation = Vector3(
+			deg_to_rad(drawn.pitch), deg_to_rad(drawn.yaw), 0.0
+		)
+	elif body_mesh != null:
+		# A remote player. Its node is moved by `_net_interpolated`, so all that is
+		# left is to face it the way its yaw says.
+		body_mesh.global_rotation = Vector3(0.0, deg_to_rad(drawn.yaw), 0.0)
+
+	var _unused := delta
+
+
+## Gives this player a camera and something to look at it with. Client side, local
+## player only.
+##
+## [b]The field of view is horizontal-at-4:3, converted.[/b] Godot's `Camera3D.fov` is
+## vertical and fixed; an arena shooter's 100 is horizontal on a 4:3 frame and widens
+## on a wider screen. Handing 100 straight to Godot gives about 133 at 16:9 and a
+## player who cannot aim and cannot say why.
+func attach_camera(horizontal_fov_at_4_3: float = 100.0) -> Camera3D:
+	if camera != null:
+		return camera
+
+	camera = Camera3D.new()
+	camera.name = "Camera"
+	camera.current = true
+	camera.near = 0.05
+	camera.far = 512.0
+
+	var half := deg_to_rad(horizontal_fov_at_4_3 * 0.5)
+	camera.fov = rad_to_deg(2.0 * atan(tan(half) * 3.0 / 4.0))
+
+	# Parented to the game rather than to this player, and positioned globally every
+	# frame. A camera hanging off the body inherits the body's per-tick position, which
+	# is the stepping `present` exists to remove.
+	add_child(camera)
+
+	return camera
+
+
+## Something to see a remote player as. There is no art in this project by design, so
+## it is a capsule and a nose.
+func attach_body_mesh(colour: Color) -> void:
+	if body_mesh != null:
+		return
+
+	body_mesh = Node3D.new()
+	body_mesh.name = "Body"
+	add_child(body_mesh)
+
+	var material := StandardMaterial3D.new()
+	material.albedo_color = colour
+	material.roughness = 0.85
+
+	var trunk := MeshInstance3D.new()
+	var capsule := CapsuleMesh.new()
+	capsule.radius = 0.4
+	capsule.height = 1.8
+	trunk.mesh = capsule
+	trunk.material_override = material
+	trunk.position = Vector3(0.0, 0.9, 0.0)
+	body_mesh.add_child(trunk)
+
+	# A nose, so which way somebody is facing is visible from across the arena. Two
+	# overlapping shapes need the smaller one OUTSIDE the larger or the silhouette is
+	# one blob — game-playground drew every NPC icon as a coloured bar that way.
+	var nose := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.16, 0.16, 0.35)
+	nose.mesh = box
+	nose.material_override = material
+	nose.position = Vector3(0.0, 1.5, -0.45)
+	body_mesh.add_child(nose)
 
 
 ## Where shots start: the eyes, not the feet.

@@ -24,6 +24,10 @@ var armour_bar: DotStatBar = null
 var ammo_bar: DotStatBar = null
 var feed: DotFeedView = null
 var timer_label: Label = null
+
+## Seconds left, when something other than this game's own match knows. NAN means
+## "ask the match", which is what a server and an offline client do.
+var remaining_override: float = NAN
 var score_label: Label = null
 
 
@@ -152,6 +156,17 @@ func _live() -> bool:
 	return player != null and is_instance_valid(player)
 
 
+## Puts a kill on the feed.
+##
+## Public because on a NETWORKED client nothing local scores anything: `game.player_killed`
+## fires on the server, and the client learns about a kill from an `ArenaEvents.Kind.KILL`
+## event. `ArenaClient` rebuilds the entry and calls this; the signal path below is the
+## offline and listen-server one. Both end in the same place deliberately — a feed that
+## looked different depending on how the kill arrived would be two feeds.
+func show_kill(entry: DotKillFeed.Entry) -> void:
+	_on_kill(entry)
+
+
 func _on_kill(entry: DotKillFeed.Entry) -> void:
 	if feed == null:
 		return
@@ -200,7 +215,17 @@ func _process(_delta: float) -> void:
 	if Engine.is_editor_hint() or game == null or timer_label == null:
 		return
 
-	var remaining := game.match_node.seconds_remaining()
+	# The override first, when there is one.
+	#
+	# [b]A networked client's own `DotMatch` never runs.[/b] Nothing ticks it, so
+	# `seconds_remaining()` is derived from `_ticks_in_state` against a `_current_tick`
+	# that is still 0 — a number nothing ever wrote, not a stale one. A connected
+	# browser client showed "IDLE" for ever while the server was playing a round.
+	# `ArenaClient` writes the server's figure here from the MATCH event.
+	var remaining := (
+		remaining_override if not is_nan(remaining_override)
+		else game.match_node.seconds_remaining()
+	)
 
 	timer_label.text = (
 		DotMatch.State.keys()[game.match_node.state] if remaining < 0.0

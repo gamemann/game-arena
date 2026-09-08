@@ -141,6 +141,73 @@ a half is what `DotNetPredictor` documents as "the two simulations disagree, and
 smoothing will fix that". Found from `dot-2d-hungry`, whose bridge was written from this
 one and inherited it.
 
+## The client
+
+`ArenaClient` is everything a person needs on top of `ArenaGame`, and a dedicated
+server never loads it: a camera rig, input sampling, the renderer, the HUD, the menus
+and the keys. Until it existed this was the reference game with nothing to sit down at.
+
+Four decisions in it are not obvious, and three of them were bugs first.
+
+**It uses `Mode.HEADLESS` collision, on a client with a screen.** That reads like the
+wrong setting and is the only correct one. `HEADLESS` is `ArenaMap`'s analytic geometry
+— the same list of `AABB`s the meshes come from — and what matters is the last clause
+of dot-fps-controller's own note on it: *it gives the same answer on a client replaying
+a tick and a server that ran it.* **A predicting client must use the same collision
+backend as the server it is predicting against.** Godot physics on the client is a
+second solver with its own contact epsilons; every replay would land somewhere slightly
+different and reconciliation would correct a client that had done nothing wrong. It was
+tried the other way first: `Mode.PHYSICS` wants a collision shape on the player node,
+`ArenaPlayer` is a plain `Node3D`, and the player fell through a floor that was drawn
+perfectly — a void with one box in it and no error anywhere.
+
+**It watches `player_added`, not `player_spawned`.** `player_spawned` comes out of
+dot-match's respawn queue, which runs on the *authority*; a mirroring client never
+fires it. A client waiting on it waits for ever, and the symptom is the most misleading
+in this project: the HUD binds by id and works, the scoreboard works, the connection is
+live, and there is no camera and no world at all, because both hang off that one
+reference. `ArenaGame.player_added` was added for this. It is the same bug g2gfast
+shipped, one signal over.
+
+**It owns the mouse; `DotScreenStack.manage_mouse` is off.** dot-ui's stack forces
+CAPTURED whenever no screen is open, which is right on a desktop and impossible in a
+browser: pointer lock needs transient user activation and a browser refuses it
+*silently* — `Input.mouse_mode` reads back as CAPTURED while the cursor sits on top of
+the game. Two owners fighting over it is a cursor that flickers, which dot-ui's own
+documentation says. So there is exactly one, and it knows about the click.
+
+**It draws between ticks.** `ArenaPlayer.present` uses `DotFpsController.render_state`,
+and `ArenaNetBridge._adopt_tick_rate` moves `Engine.physics_ticks_per_second` as well as
+the game's, the config's and the clock's. Either half alone measures as no better than
+doing nothing: the fraction a renderer interpolates at is a fraction through a *physics
+frame*, which is a fraction through a tick only while the two rates agree.
+
+## One number, written once
+
+`ArenaGame.NET_WORLD_EXTENT` and `NET_SNAPSHOT_RATE` are constants on the game because
+the module and the client both build a `DotNetConfig` and **a quantised position decoded
+against a different range is a different position, not a less precise one**. They were
+written separately — 128 in `ArenaModule`, 256 in `ArenaClient`, two files a hundred
+lines apart — and what that looked like in a real browser was: connects, seals a
+byte-identical message schema, adopts its own player alive with 100 health, logs every
+stage correctly, and draws sky in every direction with a HUD reading zero. No error
+anywhere, because there is no error. `headless_net._test_config_agreement` asserts the
+two ends agree on the extent, the tick rate and the schema hash.
+
+## Where it runs besides here
+
+`dot-server-setup-test` vendors it — `setup.sh` copies `game/`, `scenes/*.tscn` and
+`maps/`, `content/arena/game.yml` points at `res://scenes/arena_server.tscn`, and the
+browser shell maps content id `arena` to `res://game/arena.tscn`. It is **demo server
+five**, on loopback `:6110` and nginx TLS `:6068`, at 64 ticks.
+
+**`setup.sh` copies only `scenes/*.tscn`, not the scripts beside them**, which is why
+`arena_server.gd` lives in `game/` and not next to its own scene. A script under
+`scenes/` never reaches that build; the scene then fails to load with "referenced
+non-existent resource", the module refuses to load because no game registered itself,
+and the server reports "the game loaded but its module did not". Every other game in
+the family already keeps its server scene's script in `game/`.
+
 ## Two examples, two deployment shapes
 
 **`headless_match`** drives an `ArenaGame` directly. No socket, no netcode, no

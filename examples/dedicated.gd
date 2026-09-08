@@ -48,6 +48,7 @@ func _run() -> void:
 
 	if built:
 		_test_module_loaded()
+		_test_client_spawn()
 		_test_commands()
 		_test_unload()
 
@@ -177,6 +178,60 @@ func _test_module_loaded() -> void:
 
 	_check(
 		_server.console.find_cvar("arena_scorelimit") != null, "and its cvar"
+	)
+
+
+func _test_client_spawn() -> void:
+	print("")
+	print("a client spawning")
+
+	# **`client_spawn` carries `userid` and `name`. It does not carry `peer_id`.**
+	#
+	# This module read `event.get_int("peer_id")` and looked the session up by it. That
+	# is 0 on every event, `session_of(0)` is null, and a null session is a legitimate
+	# thing to find — so the handler returned and **nobody ever joined a dedicated arena
+	# server**, silently, for as long as this module has existed.
+	#
+	# This suite passed its twenty-one checks the whole time, because it never connected
+	# a client. It still does not: connecting one is dot-platform's seam and repeating it
+	# here would test dot-server. What it does instead is fire the event dot-server fires,
+	# with the payload dot-server puts in it, and assert somebody joined — which is the
+	# smallest thing that can tell the two spellings apart.
+	var module := _server.modules.get_module("arena") as ArenaModule
+
+	if not _check(module != null, "the module is loaded"):
+		return
+
+	var before := _game.player_ids().size()
+
+	# `adopt_session` exists for exactly this: dot-server's own documentation calls it
+	# "a test that needs the session table populated without a socket". Everything that
+	# counts players counts sessions, so a participant without one is invisible to the
+	# roster, the slots and the queries — and to `session_by_userid`, which is what the
+	# module has to call.
+	var session := DotClientSession.new()
+	session.peer_id = 4242
+	session.userid = 77
+	session.display_name = "Ada"
+
+	if not _check(_server.adopt_session(session).ok, "a session is adopted"):
+		return
+
+	# The payload dot-server actually fires: `{"userid", "name"}`. No peer_id.
+	_server.events.fire("client_spawn", {"userid": session.userid, "name": session.display_name})
+
+	_check(
+		_game.player_ids().size() == before + 1,
+		"a spawning client is added to the match",
+		"%d -> %d" % [before, _game.player_ids().size()]
+	)
+	_check(
+		_game.player_for(77) != null,
+		"under its SESSION id (77), not its peer id (4242)"
+	)
+	_check(
+		_game.player_for(4242) == null,
+		"and the peer id is not a player key here"
 	)
 
 

@@ -46,11 +46,15 @@ func _run() -> void:
 	_build_client(2, 11)
 	_build_client(3, 12)
 	_test_command_wire()
+	_test_event_wire()
+	_test_config_agreement()
 	_join_everyone()
 	_run_ticks()
 	_test_convergence()
 	_test_acks_and_recovery()
 	_test_owner_only()
+	_test_ready_gate()
+	_test_predicted_node_is_not_moved()
 	_test_disconnect()
 
 	print("")
@@ -103,11 +107,28 @@ func _make_manager(is_server: bool, scope: StringName, peer_id: int) -> DotNetMa
 	net.config = DotNetConfig.new()
 	net.config.tick_rate = TICK_RATE
 	net.config.snapshot_rate = SNAPSHOT_RATE
+	# From the game, exactly as `ArenaModule` and `ArenaClient` do it. A suite that
+	# left this at dot-net's default would agree with itself on both ends and prove
+	# nothing about the two that actually ship — which is how the 128-against-256
+	# mismatch survived until a browser drew sky in every direction.
+	net.config.world_extent = ArenaGame.NET_WORLD_EXTENT
 	add_child(net)
 
 	_check(net.setup().ok, "%s manager sets up" % scope)
-	net.start()
+
+	# NOT started here. `DotNetManager.start` seals the message registry, and
+	# `ArenaNetBridge.attach` registers this game's two message types — registering
+	# after the seal fails, because ids are on the wire and adding a type would
+	# renumber every id above it and silently reinterpret every message. So the order
+	# is setup, attach, start, and it is the same order `ArenaModule` and
+	# `ArenaClient` use. See `_start`.
 	return net
+
+
+## Seals the message registry and starts a manager. Called AFTER its bridge attached.
+func _start(net: DotNetManager) -> void:
+	net.messages.seal()
+	net.start()
 
 
 func _build_server() -> void:
@@ -121,6 +142,7 @@ func _build_server() -> void:
 	_server_bridge.name = "ServerBridge"
 	add_child(_server_bridge)
 	_check(_server_bridge.attach(_server_game, _server_net).ok, "the bridge attaches")
+	_start(_server_net)
 
 	# A game and a manager that disagree about authority is the one wiring mistake
 	# that produces a server resolving nobody's hits, silently.
@@ -154,6 +176,7 @@ func _build_client(peer_id: int, session_id: int) -> void:
 	bridge.name = "Bridge%d" % peer_id
 	add_child(bridge)
 	_check(bridge.attach(game, net).ok, "the bridge attaches")
+	_start(net)
 
 	# The clock is estimated from the server's ticks in a real deployment; this run
 	# drives both sides tick for tick, so it is simply told.
@@ -467,3 +490,256 @@ func _test_disconnect() -> void:
 	# breaks: a stale entry in the command table would crash the next tick.
 	_server_bridge.server_tick(RUN_TICKS + 41)
 	_check(_server_game.current_tick() == RUN_TICKS + 41, "the server ticks on")
+
+
+func _test_event_wire() -> void:
+	print("")
+	print("[events]")
+
+	# Every encoder and its decoder, round-tripped. **The two ends of a serialisation
+	# are exactly as capable of never meeting as the two ends of a wire** — this family
+	# has shipped a stored voice mute that loaded back as a warning, and a leaderboard
+	# reporter whose file format was not its wire format. Nothing checks that a pair are
+	# inverses except a test that runs both.
+	var hello := ArenaEvents.read_hello(DotNetReader.new(
+		ArenaEvents.write_hello(128, 4242, 7, 90210, "dm_box", 25, 600.0)
+	))
+	_check(bool(hello["ok"]), "a HELLO round-trips")
+	_check(int(hello["tick_rate"]) == 128, "with the tick rate", str(hello["tick_rate"]))
+	_check(int(hello["session_id"]) == 4242, "the session id it names")
+	_check(int(hello["peer_id"]) == 7, "the peer id")
+	_check(int(hello["server_tick"]) == 90210, "the server's tick")
+	_check(String(hello["map_name"]) == "dm_box", "and the map")
+	_check(int(hello["score_limit"]) == 25, "and the rules")
+
+	var kill := ArenaEvents.read_kill(DotNetReader.new(
+		ArenaEvents.write_kill(11, 12, "rifle", true)
+	))
+	_check(bool(kill["ok"]), "a KILL round-trips")
+	_check(
+		int(kill["killer_id"]) == 11 and int(kill["victim_id"]) == 12,
+		"with both players"
+	)
+	_check(String(kill["weapon"]) == "rifle", "the weapon")
+	_check(bool(kill["headshot"]), "and the headshot flag")
+
+	# The world kills as 0, not as a name. It is the one value with two shapes, and a
+	# string on the wire for it is a string somebody eventually puts a name in.
+	var world := ArenaEvents.read_kill(DotNetReader.new(
+		ArenaEvents.write_kill(0, 12, "fall", false)
+	))
+	_check(int(world["killer_id"]) == 0, "and the world kills as 0")
+
+	var state := ArenaEvents.read_match(DotNetReader.new(
+		ArenaEvents.write_match(3, 1920, 5)
+	))
+	_check(bool(state["ok"]), "a MATCH round-trips")
+	_check(int(state["state"]) == 3 and int(state["round"]) == 5, "with the state and round")
+	_check(int(state["remaining_ticks"]) == 1920, "and the clock, in ticks")
+
+	# Negative, because "no limit" is negative and a match past its clock reports a
+	# negative remainder. A uint here would have wrapped it to four billion.
+	var over := ArenaEvents.read_match(DotNetReader.new(
+		ArenaEvents.write_match(3, -64, 5)
+	))
+	_check(int(over["remaining_ticks"]) == -64, "and a clock past zero stays negative")
+
+	var leave := ArenaEvents.read_leave(DotNetReader.new(ArenaEvents.write_leave(99)))
+	_check(bool(leave["ok"]) and int(leave["session_id"]) == 99, "a LEAVE round-trips")
+
+	var notice := ArenaEvents.read_notice(DotNetReader.new(
+		ArenaEvents.write_notice("Match point")
+	))
+	_check(
+		bool(notice["ok"]) and String(notice["text"]) == "Match point",
+		"a NOTICE round-trips"
+	)
+
+	var score := ArenaEvents.read_score(DotNetReader.new(ArenaEvents.write_score(11, 7, 3)))
+	_check(
+		bool(score["ok"]) and int(score["kills"]) == 7 and int(score["deaths"]) == 3,
+		"a SCORE round-trips"
+	)
+
+	# A truncated body must not read as a valid event of nothing. `StreamPeerBuffer`
+	# reads past its end by returning zeros rather than failing, and dot-timer shipped a
+	# replay that parsed that way; `DotNetReader.ok()` is the equivalent here and it is
+	# sticky, so a decoder that skipped the check gets a plausible value for the field
+	# AFTER the overrun.
+	var truncated := ArenaEvents.read_hello(DotNetReader.new(
+		ArenaEvents.write_hello(128, 1, 1, 1, "dm_box", 25, 600.0).slice(0, 3)
+	))
+	_check(not bool(truncated["ok"]), "and a truncated HELLO is refused, not guessed")
+
+	# Both message types validate their kind, so a peer that disagrees about the schema
+	# is a refusal rather than an out-of-range read.
+	_check(
+		not ArenaEvent.of(ArenaEvents.Kind.size(), PackedByteArray()).validate().ok,
+		"an unknown event kind is refused"
+	)
+	_check(
+		ArenaEvent.of(ArenaEvents.Kind.HELLO, PackedByteArray()).validate().ok,
+		"and a known one is not"
+	)
+
+
+func _test_ready_gate() -> void:
+	print("")
+	print("[the ready gate]")
+
+	# **Nothing may be sent to a peer before it says it can receive.** dot-server's
+	# signon finishes and THEN the client builds its scene, so everything sent in
+	# between lands on a node that does not exist and is lost — one "Node not found"
+	# per call, and a client that never learns who it is. game-hungario found this the
+	# hard way and the gate is what came out of it.
+	var sent: Array = []
+	var bridge := ArenaNetBridge.new()
+	bridge.name = "GateBridge"
+	add_child(bridge)
+
+	var game := _make_game(true)
+	var net := _make_manager(true, &"gate", 1)
+	_check(bridge.attach(game, net).ok, "a gate bridge attaches")
+	_start(net)
+
+	var link := bridge.open_link(bridge)
+	link.loopback = func(method: StringName, peer: int, payload: PackedByteArray) -> void:
+		sent.append([method, peer, payload.size()])
+
+	bridge.send_event(77, ArenaEvents.Kind.NOTICE, ArenaEvents.write_notice("early"))
+	_check(sent.is_empty(), "an event to a peer that has not said READY is dropped")
+
+	bridge.mark_ready(77)
+	var after_ready: int = sent.size()
+	_check(after_ready > 0, "and marking it ready sends it the whole signon", str(after_ready))
+
+	bridge.send_event(77, ArenaEvents.Kind.NOTICE, ArenaEvents.write_notice("late"))
+	_check(sent.size() > after_ready, "and later events reach it")
+
+	# A broadcast goes to ready peers only, which is the same rule stated the other way.
+	sent.clear()
+	bridge.send_event(0, ArenaEvents.Kind.NOTICE, ArenaEvents.write_notice("all"))
+	_check(sent.size() == 1, "a broadcast reaches exactly the ready peers", str(sent.size()))
+
+	bridge.queue_free()
+	game.queue_free()
+	net.queue_free()
+
+
+func _test_predicted_node_is_not_moved() -> void:
+	print("")
+	print("[the predicted entity's node]")
+
+	# `DotNetManager.receive_snapshot` calls `read_state` — and therefore
+	# `_net_state_applied` — BEFORE `DotNetPredictor.reconcile`, and the first thing
+	# reconcile does is read the node as "what the client is showing" so it can measure
+	# the correction. Writing the server's position there first makes that measurement
+	# the entire replay distance: every reconciliation logs a snap, the correction rate
+	# reads near 1.0, and the simulation is right the whole time.
+	#
+	# game-hungario had this exact line and the family's notes have listed it as unfixed
+	# here ever since. Nothing in this file could see it before: the check is not on a
+	# position, it is on WHETHER THE NODE MOVED, which no assertion about the
+	# simulation can reach.
+	var behaviour := (_clients[2]["bridge"] as ArenaNetBridge).behaviour_for(11)
+
+	if not _check(behaviour != null, "the local player's behaviour is found"):
+		return
+
+	var player := behaviour.player
+	var predicted := behaviour.identity != null and behaviour.identity.is_predicted()
+
+	_check(predicted, "and the local player is predicted, not server-driven")
+
+	# Put the node somewhere the state is not, then hand the behaviour a state applied.
+	var parked := Vector3(123.0, 4.0, 56.0)
+	player.global_position = parked
+	behaviour.net_position = Vector3(7.0, 0.0, 7.0)
+	behaviour._net_state_applied((_clients[2]["net"] as DotNetManager).clock.tick)
+
+	_check(
+		player.global_position.is_equal_approx(parked),
+		"applying state does NOT move a predicted player's node",
+		str(player.global_position)
+	)
+
+	# The remote player is the other half, and it must move: its node is driven by
+	# nothing else, so a guard that skipped it would leave every remote player standing
+	# where they spawned.
+	var remote := (_clients[2]["bridge"] as ArenaNetBridge).behaviour_for(12)
+
+	if not _check(remote != null, "the remote player's behaviour is found"):
+		return
+
+	_check(
+		remote.identity == null or not remote.identity.is_predicted(),
+		"and the remote player is not predicted"
+	)
+
+	remote.player.global_position = parked
+	remote.net_position = Vector3(3.0, 0.0, 3.0)
+	remote._net_state_applied((_clients[2]["net"] as DotNetManager).clock.tick)
+
+	_check(
+		not remote.player.global_position.is_equal_approx(parked),
+		"applying state DOES move a remote player's node",
+		str(remote.player.global_position)
+	)
+
+
+func _test_config_agreement() -> void:
+	print("")
+	print("[the two ends agree]")
+
+	# **A quantised value decoded against a different range is a different value, not a
+	# less precise one.** `world_extent` is the range every replicated position is an
+	# integer over, and the server and the client used to write it separately — 128 in
+	# `ArenaModule`, 256 in `ArenaClient`, in two files a hundred lines apart.
+	#
+	# What that looked like, in a real browser against a real server: the client
+	# connected, sealed an identical message schema, adopted its own player alive with
+	# 100 health, logged every stage correctly — and drew sky in every direction with a
+	# HUD reading zero. No error anywhere, because there is no error: both ends did
+	# exactly what they were told.
+	#
+	# The fix is that there is now one constant and nothing to keep in step. This check
+	# is what stops somebody typing a number into one of the two again.
+	_check(
+		is_equal_approx(_server_net.config.world_extent, ArenaGame.NET_WORLD_EXTENT),
+		"the server quantises positions over the game's extent",
+		"%.1f" % _server_net.config.world_extent
+	)
+
+	for peer_id in _clients:
+		var net: DotNetManager = _clients[peer_id]["net"]
+
+		_check(
+			is_equal_approx(net.config.world_extent, _server_net.config.world_extent),
+			"and client %d over the same one" % peer_id,
+			"%.1f vs %.1f" % [net.config.world_extent, _server_net.config.world_extent]
+		)
+
+		# The tick rate is the other number the two ends must not disagree about, and
+		# the one this family has already paid for: a client counting at its own rate
+		# against a 128-tick server read a 0.218 s finish as 0.466 s and never
+		# converged. HELLO carries it; `_adopt_tick_rate` is what applies it.
+		_check(
+			net.config.tick_rate == _server_net.config.tick_rate,
+			"and counts at the same rate",
+			"%d vs %d" % [net.config.tick_rate, _server_net.config.tick_rate]
+		)
+
+	# The schema hash is the third. Two peers that registered different message types,
+	# or the same ones in a different order, hash differently — and `Array.sort()` on a
+	# StringName sorts by interned POINTER, which every suite in this family missed by
+	# running both ends in one process and sharing one intern table.
+	var server_hash := _server_net.messages.schema_hash()
+
+	for peer_id in _clients:
+		var net: DotNetManager = _clients[peer_id]["net"]
+
+		_check(
+			net.messages.schema_hash() == server_hash,
+			"and client %d sealed the same message schema" % peer_id,
+			"%s vs %s" % [net.messages.schema_hash(), server_hash]
+		)

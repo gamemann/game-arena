@@ -17,11 +17,44 @@ extends Node
 const CHANNEL := "arena"
 const SERVICE := &"arena_game"
 
+## How far from the origin the netcode quantises positions over, in metres.
+##
+## [b]Both ends must use the same number, and there is therefore exactly one.[/b] A
+## quantised position is an integer over this range, so a server encoding against 128
+## and a client decoding against 256 do not produce a rounding error — they produce a
+## DIFFERENT POSITION, for every entity, on every snapshot. The symptom is a client
+## that connects, adopts its player alive with full health, and then finds itself
+## somewhere the world is not: sky in every direction, a HUD reading zero, and not one
+## error anywhere.
+##
+## That is what happened here the first time the two were written separately, in two
+## files, a hundred lines apart. This constant exists so there is nothing to keep in
+## step. `dm_box` is 48 metres across; 128 leaves room for a player thrown out of it.
+const NET_WORLD_EXTENT := 128.0
+
+## Snapshots a second. 32, because it divides 64 and 128 — an uneven send spacing
+## arrives as jitter no interpolator can remove. Also one number, for the reason above.
+const NET_SNAPSHOT_RATE := 32
+
 ## A player was killed. After the scoreboard and the feed have seen it.
 signal player_killed(entry: DotKillFeed.Entry)
 
 ## A player was put back into the world.
 signal player_spawned(player: ArenaPlayer)
+
+## A player exists. Fired by [method add_player], on every machine that has one.
+##
+## [b]Distinct from [signal player_spawned], and a client needs this one.[/b]
+## `player_spawned` fires from `_on_respawn_due`, which is dot-match's, which runs on
+## the AUTHORITY — so on a mirroring client it never fires at all. A client that waited
+## for it to find its own player waited for ever: the HUD still bound by id and worked,
+## the scoreboard worked, and there was no camera and no world, because both hang off
+## the local player.
+##
+## That is this family's commonest shape with the ends swapped — a value consumed by a
+## client and produced by nobody on the client's path — and it is the same bug
+## game-g2gfast shipped, one signal over.
+signal player_added(player: ArenaPlayer)
 
 signal match_state_changed(from: DotMatch.State, to: DotMatch.State)
 
@@ -238,6 +271,10 @@ func add_player(id: int, display_name: String) -> DotResult:
 	if not added.ok:
 		remove_player(id)
 		return added
+
+	# Last, and only once the player is fully in: a handler runs synchronously inside
+	# this and the first thing a client's does is hang a camera off them.
+	player_added.emit(player)
 
 	return DotResult.success(player)
 
