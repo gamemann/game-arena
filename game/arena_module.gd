@@ -74,6 +74,9 @@ func _module_load() -> DotResult:
 	add_command(
 		"arena_restart", _cmd_restart, "Restart the match", DotAdminFlags.CHANGEMAP
 	)
+	add_command(
+		"arena_maps", _cmd_maps, "List the maps this server can boot", ""
+	)
 
 	add_cvar("arena_scorelimit", str(game.score_limit), "Kills to win the match")
 
@@ -326,6 +329,24 @@ func _cmd_net(ctx: DotCmdContext) -> void:
 func _cmd_status(ctx: DotCmdContext) -> void:
 	for line in game.describe_lines():
 		ctx.reply(line)
+
+
+## What `arena_maps` prints.
+##
+## [b]It lists and does not change, and that is the whole state of map handling here.[/b]
+## `ArenaGame.setup` is not re-entrant — it builds the combat trace, the match node and
+## every spawn point as children in one pass — so a `changelevel` that called it twice
+## would leave two matches and two sets of spawns in one tree. The command that would
+## do it properly has to tear that down and tell every connected client, which is a
+## feature and not a line. Until then an operator restarts with `-- --map <id>`, and
+## this is how they find out what to type.
+func _cmd_maps(ctx: DotCmdContext) -> void:
+	var current := game.map.display_name if game.map != null else "?"
+
+	for id in ArenaMap.ids():
+		ctx.reply("%s %s" % ["*" if String(id) == current else " ", String(id)])
+
+	ctx.reply("Restart with `-- --map <id>` to change. No hot changelevel yet.")
 
 
 func _cmd_score(ctx: DotCmdContext) -> void:

@@ -37,9 +37,40 @@ func _ready() -> void:
 	game.headless = true
 	add_child(game)
 
-	var built := game.setup(ArenaMap.dm_box())
+	var built := game.setup(startup_map())
 
 	DotLog.result(CHANNEL, "the arena was built", built)
 
 	if built.ok:
 		game.start(0)
+
+
+## Which map to boot on, from `-- --map <id>`.
+##
+## [b]A launch argument and not a cvar, because a cvar is read after the game is
+## built.[/b] `ArenaGame.setup` builds the combat trace, the match and every spawn point
+## out of the map in one pass and is not re-entrant, so by the time a module has added a
+## cvar for an operator to set, the map it would name is already the one running. A
+## hot `changelevel` is a real feature and a real amount of work; until it exists, the
+## honest interface is the one that is read before anything is built.
+##
+## An unknown id is refused rather than silently falling back: an operator who typed
+## `dm_atruim` and got `dm_box` has no way to tell that from a map that failed to build.
+static func startup_map() -> ArenaMap:
+	var args := OS.get_cmdline_user_args()
+	var index := args.find("--map")
+
+	if index < 0 or index + 1 >= args.size():
+		return ArenaMap.dm_box()
+
+	var id := StringName(args[index + 1])
+	var map := ArenaMap.by_id(id)
+
+	if map == null:
+		DotLog.warn(CHANNEL, "no such map, booting the default instead", {
+			"asked": String(id),
+			"known": ArenaMap.ids(),
+		})
+		return ArenaMap.dm_box()
+
+	return map

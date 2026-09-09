@@ -256,7 +256,14 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-75 + 62 + 21 checks.
+84 + 104 + 26 checks.
+
+`tools/screenshot.sh <map>` renders a map from three angles into `screenshots/`
+(gitignored). It needs `xvfb-run`, because it needs a real rendering context — under
+`--headless` every frame it saves is empty, which is worse than no screenshot because
+it looks like one. **A map is a rendered thing**: this family has shipped a 0 x 0
+`Control` twice and a black screen once, and every assertion available about a map
+passes just as happily for a pile of boxes in the same place.
 
 **Re-run `--import` after adding any script with a new `class_name`.** Without it the
 identifier does not resolve, the scene fails to load, and the process *hangs* rather
@@ -283,5 +290,10 @@ and cost two timed-out runs before the log was read.
   chat, touch — and is the shape this would take.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
-- **More than one map.** `ArenaMap.dm_box()` is the only level. A second one is a
-  static function.
+- **A hot `changelevel`.** There are two maps now (`dm_box`, `dm_atrium`) and
+  `ArenaMap.by_id` / `ids()` address them, but `ArenaGame.setup` builds the combat
+  trace, the match node and every spawn point as children in one pass and is not
+  re-entrant — calling it twice would leave two matches and two sets of spawns in one
+  tree. So the map is chosen at boot with `-- --map <id>` and `arena_maps` lists what
+  can be typed. Changing it under live players means tearing that down and telling
+  every client, which is dot-map's `DotMapSyncHost` job rather than a line here.

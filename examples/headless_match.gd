@@ -58,6 +58,7 @@ func _run() -> void:
 
 	_test_content()
 	_test_map()
+	await _test_atrium()
 
 	await _build()
 	_test_players_exist()
@@ -630,3 +631,95 @@ func _test_geometry_held() -> void:
 		"and the level geometry blocks shots",
 		"%d of 64 directions" % blocked
 	)
+
+
+## [b]The second map, walked rather than asserted.[/b]
+##
+## A map is a rendered, playable thing and this family has shipped a 0 x 0 Control twice
+## and a black screen once — so the check that matters is not "the list has 40 boxes in
+## it" but "a body starting on the yard floor ends up on the roof by using the stair".
+## Box counts pass on a pile of boxes in the same place.
+func _test_atrium() -> void:
+	_group("dm_atrium")
+
+	var map := ArenaMap.dm_atrium()
+
+	_check(map.boxes.size() > 30, "the map has geometry", str(map.boxes.size()))
+	_check(map.spawns.size() == 10, "and ten spawns", str(map.spawns.size()))
+
+	# The catalogue duplication, which is the point of checking it: `ids()` lists names
+	# and `by_id()` builds geometry, and a map added to one and not the other either
+	# cannot be listed or cannot be loaded.
+	var missing: Array[String] = []
+
+	for id in ArenaMap.ids():
+		if ArenaMap.by_id(id) == null:
+			missing.append(String(id))
+
+	_check(missing.is_empty(), "every listed map id builds", ", ".join(missing))
+	_check(ArenaMap.by_id(&"dm_nosuchmap") == null, "and an unknown one does not")
+
+	# One description, three representations — the same invariant `_test_map` checks
+	# for dm_box, re-checked here because a second map is a second chance to write the
+	# geometry twice.
+	_check(
+		map.to_fps_body().boxes.size() == map.boxes.size()
+		and map.to_trace().boxes.size() == map.boxes.size(),
+		"the movement and tracing backends have every box"
+	)
+
+	# [b]The shaft is open.[/b] The roof is a ring and the middle of it is the map: a
+	# ray straight up from the plinth must reach the sky, and one from under the ring
+	# must not. If the ring were solid this map would be a closed box with a plinth in
+	# it and every check above would still pass.
+	var trace := map.to_trace()
+	var up_shaft := trace.ray(Vector3(0.0, 2.0, 0.0), Vector3.UP, 40.0)
+	var up_ring := trace.ray(Vector3(-8.0, 2.0, 0.0), Vector3.UP, 40.0)
+
+	_check(not (up_shaft.ok() and up_shaft.blocked), "the atrium shaft is open to the sky")
+	_check(up_ring.ok() and up_ring.blocked, "and the ring above the walkway is not")
+
+	# [b]The walk.[/b] A controller on the yard floor at the foot of the north-west
+	# stair, told to hold forward for four seconds. It has to end up on the roof, which
+	# it can only do by climbing the eight steps.
+	var walker := ArenaPlayer.new()
+	walker.name = "Walker"
+	add_child(walker)
+	walker.setup(ArenaPlayer.Mode.HEADLESS, map, 9001, "walker")
+
+	var start := Vector3(-22.0, 0.5, -2.0)
+	walker.controller.teleport(start)
+
+	var command := DotFpsCommand.new()
+	# +X, which is up the stair. Held rather than re-aimed: a bot that steers is a bot
+	# whose failure to arrive tells you nothing about the geometry.
+	command.yaw = 0.0
+	command.move = Vector2(1.0, 0.0)
+
+	var tick_rate := 64
+	var delta := 1.0 / float(tick_rate)
+	var peak := start.y
+
+	for tick in range(tick_rate * 4):
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		peak = maxf(peak, walker.controller.state.position.y)
+
+	var landed := walker.controller.state.position
+
+	_check(
+		peak > 4.0,
+		"a bot holding forward at the north-west stair reaches the roof",
+		"y %.2f -> peak %.2f, ended at (%.1f, %.2f, %.1f)"
+			% [start.y, peak, landed.x, landed.y, landed.z]
+	)
+	_check(
+		landed.x > start.x + 4.0,
+		"and it got there by moving along the stair rather than up a wall",
+		"x %.1f -> %.1f" % [start.x, landed.x]
+	)
+
+	walker.queue_free()
+	remove_child(walker)
+
+	await get_tree().process_frame
