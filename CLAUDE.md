@@ -667,6 +667,30 @@ rate however smoothly the thing it is following is interpolated.
   outgoing map's points are still children for the rest of the frame in which the new
   match calls `refresh_spawns`.
 
+### `arena_mode`, and the layers a mode change forgot
+
+Adding `koth` and `ctf` was not finishing them. `ArenaGame.mode_id` is an export read
+once at `setup`, so a deployment had **a game with five modes and one of them** — the two
+new ones were reachable from a suite and from nothing else. `arena_mode` is the cvar, and
+it goes through `change_map`, which is the only re-entrant path this game has.
+
+Wiring it found the half that was actually missing: **`_build_world_layers` ran at setup
+and never again.** Switching to `koth` produced a game whose mode said it had objectives
+and whose `objectives` was null; switching to `siege` produced one with no monsters in it.
+Nothing errored — a null layer is a legitimate thing for a mode with no layer to have, and
+the only symptom is a mode that does not do what it says.
+
+`_reconcile_world_layers` runs on every map change and does both directions: build what
+the new mode asks for, take away what it does not. The builder is idempotent and each
+layer is built **once** and then left alone, because a rebuilt layer is a layer whose
+signal connections have to be remade, and a connection to a freed object is an error at
+the next emit rather than at the disconnect that was skipped.
+
+The cvar is also **put back** when a mode is refused. A cvar reading `koth` on a server
+playing free-for-all is worse than one that refused, because an operator believes it — and
+the put-back is guarded against its own `changed` signal, which would otherwise be a
+second mode change that fails for the same reason and undoes itself.
+
 ## Things deliberately not here
 
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and

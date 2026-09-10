@@ -584,6 +584,30 @@ func _test_king_of_the_hill() -> void:
 		"while the new owner's runs"
 	)
 
+	# **A mode change has to build and unbuild the layers the mode asks for.**
+	# Before it did, `changegame`-ing from a deathmatch to koth produced a game whose
+	# mode said it had objectives and whose `objectives` was null — and nothing errored,
+	# because a null layer is a legitimate thing for a mode with no layer to have.
+	var to_ffa := game.change_map(ArenaMap.dm_box(), ArenaMode.free_for_all())
+	_check(to_ffa.ok, "the mode changes to one with no objectives", str(to_ffa.error))
+	_check(
+		game.objectives == null,
+		"and the objective layer is taken away, so a HUD does not draw a hill nobody "
+		+ "can capture"
+	)
+
+	var to_ctf := game.change_map(ArenaMap.dm_atrium(), ArenaMode.capture_the_flag())
+	_check(to_ctf.ok, "and to one that has them", str(to_ctf.error))
+	_check(
+		game.objectives != null and game.objectives.layout == &"ctf",
+		"which builds the layer the new mode asks for",
+		String(game.objectives.layout) if game.objectives != null else "<none>"
+	)
+	_check(
+		game.effects != null and game.spectate != null,
+		"while the layers every mode has survive the change rather than being rebuilt"
+	)
+
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame

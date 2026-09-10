@@ -115,6 +115,32 @@ func _module_load() -> DotResult:
 			})
 	)
 
+	# **What is being played, on a running server.**
+	#
+	# Without this the two modes that are not about killing people are unreachable from
+	# a deployment: `ArenaGame.mode_id` is an export read once at setup, and a vote can
+	# offer a mode only where somebody has configured one. A game with modes nobody can
+	# select is a game with one mode and some dead code — the family's own "produced
+	# correctly and consumed by nothing", at the level of a whole feature.
+	#
+	# It goes through `change_map`, which is the only re-entrant path this game has:
+	# `setup` builds the combat trace, the match node and every spawn point in one pass
+	# and calling it twice leaves two of each. The map stays the same unless the new
+	# mode asks for another one.
+	add_cvar(
+		"arena_mode",
+		String(game.mode.id),
+		"What is being played: %s" % ", ".join(_mode_ids()),
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).changed.connect(
+		func(old_value: String, new_value: String) -> void:
+			_change_mode(old_value, new_value)
+	)
+
+	add_command(
+		"arena_modes", _cmd_modes, "What can be played here", ""
+	)
+
 	add_command(
 		"arena_net", _cmd_net, "Show the netcode's state", ""
 	)
@@ -853,6 +879,79 @@ func _cmd_horde(ctx: DotCmdContext) -> void:
 	for line in game.horde.describe_lines():
 		ctx.reply(line)
 
+
+
+## Set while a refused mode change is being put back, so the `changed` handler does not
+## run on its own correction.
+##
+## A cvar's `changed` signal fires for every write, including the one that undoes a
+## refusal — and without this the undo is a second mode change, which fails for the same
+## reason, and undoes itself. One flag, and the alternative is a stack overflow the first
+## time somebody types a mode that does not exist.
+var _reverting_mode: bool = false
+
+
+## Every mode id, for a cvar's help line and for a refusal that names the alternatives.
+static func _mode_ids() -> PackedStringArray:
+	var out := PackedStringArray()
+
+	for id in ArenaModes.ids():
+		out.append(String(id))
+
+	return out
+
+
+## `arena_mode <id>` — switch what is being played, under the players standing in it.
+func _change_mode(old_value: String, new_value: String) -> void:
+	if _reverting_mode or new_value == old_value:
+		return
+
+	var wanted := ArenaModes.by_id(StringName(new_value))
+
+	if wanted == null:
+		# Refused and put back, rather than left showing a mode the game is not
+		# playing. A cvar that reads as `koth` on a server running free-for-all is
+		# worse than one that refused: an operator believes it.
+		log_warn("no such mode", {"wanted": new_value, "known": str(_mode_ids())})
+		_revert_mode(old_value)
+		return
+
+	var map := game.map
+
+	if wanted.preferred_map != &"" and wanted.preferred_map != map.id:
+		var preferred := ArenaMap.by_id(wanted.preferred_map)
+
+		if preferred != null:
+			map = preferred
+
+	var changed := game.change_map(map, wanted)
+
+	if not changed.ok:
+		log_warn("the mode did not change", {"why": changed.error.message})
+		_revert_mode(old_value)
+		return
+
+	log_info("the mode changed", {
+		"mode": new_value,
+		"map": String(game.map.id),
+		"objectives": String(game.mode.objective_layout),
+	})
+
+
+## Put the cvar back to what the game is actually playing.
+##
+## Refused and put back rather than left showing a mode the game is not playing: a cvar
+## that reads `koth` on a server running free-for-all is worse than one that refused,
+## because an operator believes it.
+func _revert_mode(value: String) -> void:
+	_reverting_mode = true
+	var _res := server.console.set_cvar("arena_mode", value)
+	_reverting_mode = false
+
+
+func _cmd_modes(ctx: DotCmdContext) -> void:
+	ctx.reply_lines(PackedStringArray(ArenaModes.describe_lines()))
+	ctx.reply("Playing: %s" % String(game.mode.id))
 
 
 func _cmd_net(ctx: DotCmdContext) -> void:

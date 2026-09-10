@@ -237,7 +237,7 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 	# Last, and after the combat manager: a monster is a combat entity and a prop is a
 	# rigid body that has to land on the map. Both read `mode`, which is why neither is
 	# an export on this class — see `ArenaMode.horde`.
-	_build_world_layers()
+	_reconcile_world_layers()
 
 	if register_service:
 		_registered_name = (
@@ -447,6 +447,46 @@ func _build_progress() -> DotResult:
 ## mode with no monsters is the ordinary case; a mode that wanted them and could not
 ## have them is worth a line, because the symptom is an empty arena in a game called
 ## Siege and nothing to say why.
+## Build the layers a mode asks for, and take away the ones it does not.
+##
+## [b]Called from `change_map` as well as from `setup`, and that is the whole point.[/b]
+## Before it was, the layers were built once and never reconsidered — so switching from
+## free-for-all to `koth` produced a game whose mode said it had objectives and whose
+## `objectives` was null, and switching to `siege` produced one with no monsters in it.
+## Nothing errored: a null layer is a legitimate thing for a mode with no layer to have,
+## and the only symptom was a mode that did not do what it says.
+func _reconcile_world_layers() -> void:
+	if not is_authority or mode == null:
+		return
+
+	_build_world_layers()
+
+	# And the other direction. A mode with no objectives must not keep the last one's,
+	# because a HUD reads the layer rather than the mode and would draw a hill nobody
+	# can capture.
+	if objectives != null and mode.objective_layout == &"":
+		remove_child(objectives)
+		objectives.queue_free()
+		objectives = null
+
+	if horde != null and not mode.horde:
+		remove_child(horde)
+		horde.queue_free()
+		horde = null
+
+	if props != null and not mode.player_props and mode.scatter_props <= 0:
+		remove_child(props)
+		props.queue_free()
+		props = null
+
+
+## Build whatever is missing. Idempotent, because [method _reconcile_world_layers]
+## calls it on every map change as well as at setup.
+##
+## Each layer is built once and then left alone: a rebuilt layer is a layer whose signal
+## connections have to be remade, and a connection to a freed object is an error at the
+## next emit rather than at the disconnect that was skipped. What a MODE change needs is
+## the layer to exist or not exist, which the reconcile above does by taking it away.
 func _build_world_layers() -> void:
 	if not is_authority or mode == null:
 		return
@@ -455,33 +495,37 @@ func _build_world_layers() -> void:
 	# whether a player may capture, and a layer that is not there yet answers "no
 	# layer", which is a legitimate answer and would silently let an invulnerable
 	# player take a point.
-	effects = ArenaEffects.new()
-	effects.name = "Effects"
-	effects.game = self
-	add_child(effects)
+	if effects == null:
+		effects = ArenaEffects.new()
+		effects.name = "Effects"
+		effects.game = self
+		add_child(effects)
 
-	var effects_ready := effects.setup()
+		var effects_ready := effects.setup()
 
-	if not effects_ready.ok:
-		DotLog.warn(CHANNEL, "effects are off", {"why": effects_ready.error.message})
-		remove_child(effects)
-		effects.queue_free()
-		effects = null
+		if not effects_ready.ok:
+			DotLog.warn(CHANNEL, "effects are off", {"why": effects_ready.error.message})
+			remove_child(effects)
+			effects.queue_free()
+			effects = null
 
-	spectate = ArenaSpectate.new()
-	spectate.name = "Spectate"
-	spectate.game = self
-	add_child(spectate)
+	if spectate == null:
+		spectate = ArenaSpectate.new()
+		spectate.name = "Spectate"
+		spectate.game = self
+		add_child(spectate)
 
-	var spectate_ready := spectate.setup()
+		var spectate_ready := spectate.setup()
 
-	if not spectate_ready.ok:
-		DotLog.warn(CHANNEL, "spectating is off", {"why": spectate_ready.error.message})
-		remove_child(spectate)
-		spectate.queue_free()
-		spectate = null
+		if not spectate_ready.ok:
+			DotLog.warn(
+				CHANNEL, "spectating is off", {"why": spectate_ready.error.message}
+			)
+			remove_child(spectate)
+			spectate.queue_free()
+			spectate = null
 
-	if mode.objective_layout != &"":
+	if mode.objective_layout != &"" and objectives == null:
 		objectives = ArenaObjectives.new()
 		objectives.name = "Objectives"
 		objectives.game = self
@@ -497,7 +541,7 @@ func _build_world_layers() -> void:
 			objectives.queue_free()
 			objectives = null
 
-	if mode.player_props or mode.scatter_props > 0:
+	if (mode.player_props or mode.scatter_props > 0) and props == null:
 		props = ArenaProps.new()
 		props.name = "Props"
 		props.game = self
@@ -513,7 +557,7 @@ func _build_world_layers() -> void:
 			props.queue_free()
 			props = null
 
-	if not mode.horde:
+	if not mode.horde or horde != null:
 		return
 
 	horde = ArenaHorde.new()
@@ -630,6 +674,15 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 
 	if progress != null:
 		progress.rebind_world()
+
+	# The layers the NEW mode asks for, and only them. Before this existed a mode
+	# change built nothing and took nothing away, so `changegame`-ing from a deathmatch
+	# to `koth` produced a game whose mode said it had objectives and whose objectives
+	# were null — and to `siege` produced one with no monsters in it.
+	#
+	# Before the announcement, because a HUD and a net bridge both read these off the
+	# game inside their `map_changed` handlers.
+	_reconcile_world_layers()
 
 	# Whatever state the last match ended in, the new one starts from the beginning.
 	match_node.start(_tick)

@@ -641,6 +641,48 @@ func _test_commands() -> void:
 		"round %d -> %d" % [before, _game.match_node.round_number]
 	)
 
+	var modes := _server.console.execute("arena_modes")
+	_check(modes.ok, "arena_modes runs", str(modes.error))
+
+	# **The cvar that makes the two modes which are not about killing people reachable
+	# from a deployment.** `ArenaGame.mode_id` is an export read once at setup, so
+	# without this an operator has a game with five modes and one of them.
+	var was := String(_game.mode.id)
+	var switched := _server.console.execute("arena_mode koth")
+	_check(switched.ok, "arena_mode koth runs", str(switched.error))
+	_check(
+		_game.mode.id == &"koth",
+		"and the game is playing it",
+		String(_game.mode.id)
+	)
+	_check(
+		_game.objectives != null and _game.objectives.layout == &"koth",
+		"with the objectives that mode asks for",
+		String(_game.objectives.layout) if _game.objectives != null else "<none>"
+	)
+
+	# A mode that does not exist is refused AND the cvar is put back. A cvar reading
+	# `koth` on a server playing free-for-all is worse than one that refused, because
+	# an operator believes it — and the put-back must not recurse through its own
+	# `changed` signal.
+	var bad := _server.console.execute("arena_mode not_a_mode")
+	_check(bad.ok, "a bad mode does not error the console", str(bad.error))
+	_check(
+		_game.mode.id == &"koth",
+		"and the game keeps playing what it was",
+		String(_game.mode.id)
+	)
+	_check(
+		_server.console.get_string("arena_mode", "") == "koth",
+		"with the cvar put back to what is actually running",
+		_server.console.get_string("arena_mode", "")
+	)
+
+	# And back, so the rest of the suite sees the game it expects.
+	var restored := _server.console.execute("arena_mode %s" % was)
+	_check(restored.ok, "and it changes back", str(restored.error))
+	_check(_game.mode.id == StringName(was), "to the mode it started on")
+
 
 func _test_unload() -> void:
 	print("")
