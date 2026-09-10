@@ -48,6 +48,15 @@ var spawns: Array[Transform3D] = []
 ## repeated bug; the helper is the only reason they cannot.
 var spawn_tags: PackedStringArray = PackedStringArray()
 
+## What [method by_id] answers to, and what a [DotMapDef] is keyed on.
+##
+## [b]Separate from [member display_name] even though the two happen to match.[/b] An
+## id is an address — a rotation entry, a leaderboard scope, a vote choice and a record
+## all name a map by it — and a display name is text somebody may want to change.
+## [ArenaMapDirector] used to read `display_name` as the id, which worked exactly until
+## the first map that wanted a nicer name than its filename.
+var id: StringName = &"dm_box"
+
 var display_name: String = "dm_box"
 
 
@@ -58,6 +67,7 @@ var display_name: String = "dm_box"
 ## so the map that ships is also the map that exercises it.
 static func dm_box() -> ArenaMap:
 	var map := ArenaMap.new()
+	map.id = &"dm_box"
 	map.display_name = "dm_box"
 	map.extent = 24.0
 	map.wall_height = 8.0
@@ -121,6 +131,7 @@ static func dm_box() -> ArenaMap:
 ## roof without leaving the yard.
 static func dm_atrium() -> ArenaMap:
 	var map := ArenaMap.new()
+	map.id = &"dm_atrium"
 	map.display_name = "dm_atrium"
 	map.extent = 30.0
 	map.wall_height = 12.0
@@ -371,17 +382,58 @@ func to_scene() -> Node3D:
 	return root
 
 
+## The level as collision only: static bodies, no meshes, no material.
+##
+## [b]This exists for one reason, and it is dot-props.[/b] Everything else in this game
+## is analytic — the player's movement, the shot tracing, the navigation — precisely so
+## a headless server needs no physics space. A physics prop is the exception: a rigid
+## body has to have something to land on, and on a dedicated server nothing has ever
+## instantiated the level, because there is nothing to draw it to.
+##
+## So this is [method to_scene] with the meshes left out. Same boxes, same list, same
+## invariant — a fourth representation generated from the one description rather than a
+## fifth one written by hand.
+##
+## [b]A client should NOT add this as well as [method to_scene].[/b] Two sets of static
+## bodies in one space is every prop resting on whichever the solver reached first, and
+## a shot that stops at a wall the player can walk through. [ArenaProps] builds one or
+## the other, never both.
+func to_collision() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Collision"
+
+	root.add_child(_make_box(
+		AABB(
+			Vector3(-extent - 2.0, floor_y - 1.0, -extent - 2.0),
+			Vector3(extent * 2.0 + 4.0, 1.0, extent * 2.0 + 4.0)
+		),
+		null,
+		"Floor"
+	))
+
+	for index in range(boxes.size()):
+		root.add_child(_make_box(boxes[index], null, "Box%02d" % index))
+
+	return root
+
+
+## One box as a static body, with a mesh when there is a material to draw it with.
+##
+## A null material means collision only. Not a separate function, because two functions
+## that each build a box out of one [AABB] is two descriptions of a box — which is the
+## exact drift this class exists to prevent, one level down.
 static func _make_box(box: AABB, material: Material, node_name: String) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.name = node_name
 	body.position = box.position + box.size * 0.5
 
-	var mesh := MeshInstance3D.new()
-	var box_mesh := BoxMesh.new()
-	box_mesh.size = box.size
-	mesh.mesh = box_mesh
-	mesh.material_override = material
-	body.add_child(mesh)
+	if material != null:
+		var mesh := MeshInstance3D.new()
+		var box_mesh := BoxMesh.new()
+		box_mesh.size = box.size
+		mesh.mesh = box_mesh
+		mesh.material_override = material
+		body.add_child(mesh)
 
 	var shape := CollisionShape3D.new()
 	var box_shape := BoxShape3D.new()

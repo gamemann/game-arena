@@ -241,6 +241,38 @@ func _build_hitboxes() -> void:
 	hitboxes.refresh()
 
 
+## Rebuilds this player's collision against a different map.
+##
+## [b]Assigning the body is not enough, and that is the whole reason this is a
+## method.[/b] `DotFpsMotor` holds a reference to the body it was built with — the same
+## trap `DotFpsController.set_style` documents for the tunables — so a player handed
+## new geometry without a rebuilt motor keeps colliding against the level they are no
+## longer standing in. The symptom is a player wedged in mid-air where a wall used to
+## be, with every property reading correctly.
+##
+## Only the analytic backend is rebuilt. Under [constant Mode.PHYSICS] the collision
+## comes from Godot's physics space, which the host project has already repopulated by
+## the time this runs, and there is nothing here that knows about it.
+func rebind_map(new_map: ArenaMap) -> void:
+	_map = new_map
+
+	if new_map == null or controller == null:
+		return
+
+	if controller is HeadlessController:
+		(controller as HeadlessController).flat_body = new_map.to_fps_body()
+
+	# `setup()` is what builds the body and the motor, and it is the documented way to
+	# rebuild both. Re-running it also re-resolves the node references, which is
+	# harmless: they name this player's own children and have not moved.
+	var rebuilt := controller.setup()
+
+	if not rebuilt.ok:
+		DotLog.warn(CHANNEL, "a player could not be re-bodied for the new map", {
+			"player": player_id, "why": rebuilt.error.message
+		})
+
+
 # --- Registration ----------------------------------------------------------
 
 ## Registers with the combat manager so this player can shoot and be shot.

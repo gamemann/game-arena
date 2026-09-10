@@ -49,6 +49,27 @@ var _tick: int = 0
 ## The RPC surface, on both ends. Created by [method attach].
 var link: ArenaNetLink = null
 
+## [code]func(bytes: PackedByteArray) -> void[/code]. Where a received voice frame
+## goes on a client. [ArenaClient] points it at `DotVoiceManager.receive`.
+##
+## A callable rather than a typed reference, because this file must not name dot-voice:
+## a server build with no voice addon installed would otherwise fail to parse, and the
+## whole point of the bridge is that it is the only file naming two things at once.
+var voice_in_fn: Callable = Callable()
+
+## [code]func(speaker_peer: int, bytes: PackedByteArray) -> void[/code]. Where a
+## client's captured audio goes on a server. [ArenaServices] points it at
+## `DotVoiceRouter.relay`.
+var voice_relay_fn: Callable = Callable()
+
+## [code]func(payload: Dictionary) -> void[/code]. A map-change announcement, client
+## side. [ArenaClient] points it at `DotMapSyncClient.handle`.
+var map_in_fn: Callable = Callable()
+
+## [code]func(peer: int, payload: Dictionary) -> void[/code]. A client's map progress
+## or readiness, server side. [ArenaModule] points it at `DotMapSyncHost.handle`.
+var map_report_fn: Callable = Callable()
+
 ## How the client learns its round-trip time, in milliseconds.
 ##
 ## [b]Nothing in dot-net writes an RTT sample, and it needs one.[/b]
@@ -636,6 +657,56 @@ func receive_request(peer_id: int, payload: PackedByteArray) -> DotResult:
 		return DotResult.fail(DotError.CODE_STATE, "No manager.")
 
 	return net.receive(payload, peer_id)
+
+
+## A relayed voice frame arrived. Client side.
+##
+## [b]Deliberately NOT routed through [DotNetManager].[/b] dot-net's `receive` decodes
+## a bit-packed message against a sealed schema and applies the payload cap and the
+## rate limit that go with it; a voice frame is an opaque blob from a codec and has
+## nothing to do with the replication wire. Putting it through would mean either a
+## message type per codec or a schema that changes when the codec does — and the
+## schema hash is what both ends check to agree they are speaking the same game.
+##
+## Handled by whatever the host set [member voice_in_fn] to, which on a client is
+## `DotVoiceManager.receive`.
+func receive_voice(payload: PackedByteArray) -> DotResult:
+	if not voice_in_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "Nothing here plays voice.")
+
+	voice_in_fn.call(payload)
+	return DotResult.success(payload.size())
+
+
+## A client's captured audio arrived. Server side.
+##
+## The speaker is [param peer_id], which the transport reported. It is never read out
+## of the payload: a client that could name its own speaker id could put words in
+## anybody's mouth, and the only symptom is words coming out of the wrong player.
+func receive_voice_frame(peer_id: int, payload: PackedByteArray) -> DotResult:
+	if not voice_relay_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "This end does not relay voice.")
+
+	voice_relay_fn.call(peer_id, payload)
+	return DotResult.success(payload.size())
+
+
+## A dot-map announcement arrived. Client side.
+func receive_map(payload: Dictionary) -> DotResult:
+	if not map_in_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "This end does not follow maps.")
+
+	map_in_fn.call(payload)
+	return DotResult.success(payload.size())
+
+
+## A client's map progress or readiness arrived. Server side.
+func receive_map_report(peer_id: int, payload: Dictionary) -> DotResult:
+	if not map_report_fn.is_valid():
+		return DotResult.fail(DotError.CODE_STATE, "This end does not host maps.")
+
+	map_report_fn.call(peer_id, payload)
+	return DotResult.success(payload.size())
 
 
 func _on_event(message: DotNetMessage) -> void:

@@ -19,6 +19,10 @@ extends DotModule
 
 const CHANNEL := "arena.module"
 
+## dot-platform's own module, loaded beside this one. A path, because that is what
+## [code]DotModuleHost.load_module[/code] takes — see [method _build_identity].
+const PLATFORM_MODULE_PATH := "res://addons/dot_platform/dot_platform_module.gd"
+
 var game: ArenaGame = null
 
 ## The netcode. Owned here rather than by the game, because a headless match and a
@@ -26,6 +30,18 @@ var game: ArenaGame = null
 ## replicates.
 var net: DotNetManager = null
 var bridge: ArenaNetBridge = null
+
+## Chat, voice and moderation. See [ArenaServices] for why it is not this file.
+var services: ArenaServices = null
+
+## Content, profiles, avatars and admission.
+var identity: ArenaIdentity = null
+
+## Maps as content: a catalogue, a rotation, a clock and a change that reaches clients.
+var maps: ArenaMapDirector = null
+
+## What plays next, decided by the players.
+var vote: ArenaVote = null
 
 ## dot-server session id -> whether we have put them in the match.
 var _joined: Dictionary = {}
@@ -111,6 +127,29 @@ func _module_load() -> DotResult:
 	if not netted.ok:
 		return netted.wrap("The arena netcode could not start")
 
+	# Everything below this line is optional in the sense that the game runs without
+	# it. None of it is optional in the sense that matters: a server with no chat, no
+	# rotation and no vote is a server nobody stays on.
+	#
+	# [b]Each one logs and continues rather than refusing to load.[/b] A module that
+	# would not load because a punishment file was unreadable is a module that takes
+	# the whole game down over a permissions mistake, and the game is what the players
+	# came for.
+	var identified: DotResult = await _build_identity()
+	DotLog.result(CHANNEL, "the identity layer", identified)
+
+	var serviced: DotResult = await _build_services()
+	DotLog.result(CHANNEL, "chat, voice and moderation", serviced)
+
+	var mapped := _build_maps()
+	DotLog.result(CHANNEL, "the map director", mapped)
+
+	if mapped.ok:
+		var voted := _build_vote()
+		DotLog.result(CHANNEL, "the vote", voted)
+
+	_add_extra_commands()
+	_build_query_provider()
 	_register_game()
 
 	log_info("arena loaded", {"map": game.map.display_name})
@@ -173,13 +212,152 @@ func _build_netcode() -> DotResult:
 	return net.start()
 
 
+# --- The rest of the server ------------------------------------------------
+
+## Content, profiles, avatars and admission.
+##
+## Loaded as a SECOND module rather than wired in here, because dot-platform ships one
+## and it is the right shape: everything it registers is removed again when it unloads,
+## and a server that wants a different admission flow replaces one module instead of
+## editing this one.
+func _build_identity() -> DotResult:
+	identity = ArenaIdentity.new()
+	identity.name = "Identity"
+	add_child(identity)
+
+	var ready: DotResult = await identity.setup()
+
+	if not ready.ok:
+		remove_child(identity)
+		identity.queue_free()
+		identity = null
+		return ready
+
+	# [b]Loaded by PATH, not by instance, and the hub is found through the
+	# registry.[/b] `DotModuleHost.load_module` takes a path and constructs the module
+	# itself — it has to, because that is the shape that lets an operator name a module
+	# in a config file — so a pre-built instance with `platform` already assigned would
+	# be thrown away and a fresh one made with `platform` null.
+	#
+	# dot-platform's module falls back to `DotRegistry.get_service(DotPlatformHub.SERVICE)`
+	# for exactly this, which is why `ArenaIdentity` registers the hub.
+	if server.modules != null and not server.modules.has_module("platform"):
+		var loaded_module := server.modules.load_module(PLATFORM_MODULE_PATH)
+
+		if not loaded_module.ok:
+			return loaded_module.wrap("The platform module would not load")
+
+	return DotResult.success(identity)
+
+
+func _build_services() -> DotResult:
+	services = ArenaServices.new()
+	services.name = "Services"
+	add_child(services)
+
+	var ready: DotResult = await services.setup(server, game, bridge.link)
+
+	if not ready.ok:
+		remove_child(services)
+		services.queue_free()
+		services = null
+		return ready
+
+	# Voice arrives on the link, is relayed by the router, and goes back out on the
+	# link. The bridge is the only file that names both ends, which is why the callable
+	# is set here rather than either of them knowing about the other.
+	if services.voice != null:
+		bridge.voice_relay_fn = services.relay_voice
+
+	services.command_entered.connect(_on_chat_command)
+
+	return DotResult.success(services)
+
+
+func _build_maps() -> DotResult:
+	maps = ArenaMapDirector.new()
+	maps.name = "Maps"
+	maps.game = game
+	# A dedicated server draws nothing, so there is no world node to put meshes in.
+	# `ArenaGame.change_map` has already replaced everything that decides the game.
+	maps.world_ref = null
+	add_child(maps)
+
+	var ready := maps.setup()
+
+	if not ready.ok:
+		remove_child(maps)
+		maps.queue_free()
+		maps = null
+		return ready
+
+	# The transport. dot-map is deliberately transport-agnostic — it depends on nothing
+	# but dot-core — so the host says where a payload goes, one peer at a time.
+	maps.sync.send_fn = func(peer: int, payload: Dictionary) -> void:
+		if bridge != null and bridge.link != null:
+			bridge.link.send_map(peer, payload)
+
+	bridge.map_report_fn = func(peer: int, payload: Dictionary) -> void:
+		if maps != null:
+			maps.handle(peer, payload)
+
+	maps.map_changed.connect(_on_map_changed)
+	maps.map_over.connect(_on_map_over)
+
+	return DotResult.success(maps)
+
+
+func _build_vote() -> DotResult:
+	vote = ArenaVote.new()
+	vote.name = "Vote"
+	vote.game = game
+	vote.maps = maps
+	vote.authoritative = true
+	add_child(vote)
+
+	vote.announce_fn = func(line: String) -> void:
+		if services != null:
+			services.announce(line)
+		else:
+			server.broadcast_message(line)
+
+	vote.is_admin_fn = func(voter: StringName) -> bool:
+		var session := server.session_by_userid(String(voter).to_int())
+		return session != null and session.permissions.has(DotAdminFlags.CHANGEMAP)
+
+	var ready := vote.setup()
+
+	if not ready.ok:
+		remove_child(vote)
+		vote.queue_free()
+		vote = null
+		return ready
+
+	vote.change_due.connect(
+		func(id: StringName, _choice: DotVoteChoice) -> void:
+			log_info("a vote decided what plays next", {"choice": String(id)})
+	)
+
+	return DotResult.success(vote)
+
+
 ## One authoritative tick.
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if not loaded or bridge == null:
 		return
 
 	_tick += 1
 	bridge.server_tick(_tick)
+
+	# The map clock and the vote clock, from the SIMULATED tick rather than from the
+	# frame. Both addons make the same point and it is the same point: a server that
+	# stalls should not lose that time off its map, and a test must be able to run an
+	# hour of a map in a millisecond.
+	if maps != null:
+		maps.advance(delta)
+
+	if vote != null:
+		vote.advance(delta)
 
 	# The clock, once a second rather than once a state change.
 	#
@@ -199,6 +377,57 @@ func _physics_process(_delta: float) -> void:
 ## documented "you already have it" path — dot-server used to fall back to the server's
 ## own absolute path there, which `DotClientLink` correctly refuses, and the client
 ## then failed signon and timed out.
+## What a server browser is told about this game.
+##
+## [b]dot-browser is the client half of this and it has never asked a real
+## `DotServer` anything.[/b] dot-server answers A2S and its own richer protocol; what
+## a query returns about the GAME comes from providers like this one, and
+## `DotGameDescriptor` alone would say only that the game is called Arena.
+##
+## The numbers here are the ones a person filtering a server list actually filters on:
+## what is being played, on what, how far through it is, and whether it is worth
+## joining.
+func _build_query_provider() -> void:
+	var provider := ArenaQueryProvider.new()
+	provider.module = self
+	add_query_provider(provider)
+
+
+## A [DotQueryProvider] over this module. An inner class because it is one method and
+## a reference, and a file for it would be a file about nothing else.
+class ArenaQueryProvider extends DotQueryProvider:
+	var module: ArenaModule = null
+
+	func _provider_name() -> String:
+		return "arena"
+
+	func _contribute(snapshot: DotQuerySnapshot) -> void:
+		if module == null or module.game == null:
+			return
+
+		var game := module.game
+		var values := {
+			"mode": String(game.mode.id) if game.mode != null else "ffa",
+			"mode_name": game.mode.display_name if game.mode != null else "",
+			"map": String(game.map.id) if game.map != null else "",
+			"score_limit": game.match_node.rules.score_limit,
+			"state": DotMatch.State.keys()[game.match_node.state],
+			"round": game.match_node.round_number,
+			"teams": game.mode.team_count if game.mode != null else 0,
+			"monsters": game.horde.count() if game.horde != null else 0,
+			"props": game.props.count() if game.props != null else 0,
+		}
+
+		if module.maps != null:
+			values["next_map"] = module.maps.next_map_hint()
+			values["time_left"] = int(module.maps.session.time_limit.remaining)
+
+		if module.vote != null:
+			values["voting"] = module.vote.is_voting()
+
+		snapshot.contribute_game(values)
+
+
 func _register_game() -> void:
 	if server.games == null or server.games.find_game("arena") != null:
 		return
@@ -207,7 +436,24 @@ func _register_game() -> void:
 	descriptor.game_id = "arena"
 	descriptor.display_name = "Arena"
 	descriptor.scene = "res://scenes/arena_server.tscn"
-	descriptor.module = "res://game/arena_module.gd"
+
+	# [b]`metadata["module"]`, not `descriptor.module`. There is no such property.[/b]
+	# This line read `descriptor.module = "res://game/arena_module.gd"` and Godot
+	# refuses a dynamic property on a Resource — so it pushed an error and set
+	# nothing, on every registration, and the game descriptor named no module at all.
+	#
+	# What that would have cost: `changegame arena` loads the scene and no module, and
+	# the server then reports "the game loaded but its module did not" — which is
+	# exactly the failure this family has already shipped once, from the other end,
+	# when a script under `scenes/` never reached a build.
+	#
+	# `metadata` is where a module path goes, and dot-server-setup-test's host reads
+	# it from precisely there.
+	descriptor.metadata = {
+		"module": "res://game/arena_module.gd",
+		"kind": "arena",
+	}
+
 	server.games.add_game(descriptor)
 
 
@@ -235,6 +481,13 @@ func _module_unload() -> void:
 
 	_joined.clear()
 
+	# The platform module is loaded by this one and has to go with it. Left behind, it
+	# holds admissions for a game that no longer exists and its commands answer about
+	# a hub nothing is feeding.
+	if server != null and server.modules != null and server.modules.has_module("platform"):
+		var unloaded := server.modules.unload_module("platform")
+		DotLog.result(CHANNEL, "unloading the platform module", unloaded)
+
 
 # --- Sessions --------------------------------------------------------------
 
@@ -257,6 +510,20 @@ func _on_client_spawn(event: DotEvent) -> void:
 
 	if session == null:
 		return
+
+	# dot-moderation's records, checked here rather than at connect.
+	#
+	# [b]dot-server has its own ban list and this is not it.[/b] Its mute is two
+	# booleans on a session object and a session dies with its connection, so a muted
+	# player reconnects and talks; dot-moderation's records are durable, expiring and
+	# scoped. Both are consulted — dot-server's own admission runs first and this is
+	# the second gate.
+	if services != null:
+		var admitted := services.check_admission(session)
+
+		if not admitted.ok:
+			server.kick(session, admitted.error.message)
+			return
 
 	_add(session)
 
@@ -287,6 +554,15 @@ func _add(session: DotClientSession) -> void:
 
 	_joined[session.userid] = true
 
+	# Chat, voice and map changes, all keyed on the PEER because all three are about a
+	# connection rather than about a person: a chat backlog goes to a socket, a voice
+	# frame is relayed to a socket, and a map change waits on a socket.
+	if services != null:
+		services.add_peer(session.peer_id)
+
+	if maps != null:
+		maps.add_peer(session.peer_id)
+
 	log_info("player joined the match", {
 		"userid": session.userid, "name": session.display_name
 	})
@@ -301,6 +577,21 @@ func _on_client_disconnected(session: DotClientSession, _reason: String) -> void
 	bridge.remove_peer(session.peer_id)
 	_joined.erase(session.userid)
 
+	if services != null:
+		services.remove_peer(session.peer_id)
+
+	if maps != null:
+		# Otherwise the next map change waits out its whole timeout for somebody who
+		# left — `swap_without_stragglers` saves it, but only after five minutes of
+		# everybody standing on a map the vote already replaced.
+		maps.remove_peer(session.peer_id)
+
+	if vote != null:
+		# Their rock-the-vote and their nominations. `rtv_forgets_leavers` is what
+		# decides whether the tally shrinks with them, and it cannot do its job if
+		# nothing tells it they went.
+		vote.forget_voter(StringName(str(session.userid)))
+
 
 func _on_player_killed(entry: DotKillFeed.Entry) -> void:
 	# The kill feed as chat is a placeholder for a real one, and it is deliberately
@@ -312,7 +603,257 @@ func _on_player_killed(entry: DotKillFeed.Entry) -> void:
 	server.broadcast_message(str(entry))
 
 
+# --- Events from the rest of the server -------------------------------------
+
+## A player typed `!something`.
+##
+## [b]Claimed, or it is broadcast as chat.[/b] dot-chat holds a command until somebody
+## says they handled it; an unclaimed one with `broadcast_unknown_commands` off is
+## simply dropped, which means a player typing `!rtv` on a server where the vote failed
+## to load gets silence rather than "there is no vote here".
+func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> void:
+	var session := server.session_of(peer)
+
+	if session == null:
+		return
+
+	var voter := StringName(str(session.userid))
+
+	match command:
+		"rtv":
+			_reply_chat(peer, _rtv_line(voter))
+			services.claim_command()
+		"nominate":
+			if args.is_empty():
+				_reply_chat(peer, "Usage: !nominate <map>")
+			elif vote == null:
+				_reply_chat(peer, "There is no vote on this server.")
+			else:
+				var res := vote.nominate(voter, StringName(args[0]))
+				_reply_chat(peer, "Nominated." if res.ok else res.error.message)
+			services.claim_command()
+		"vote":
+			if args.is_empty():
+				_reply_chat(peer, "Usage: !vote <choice>")
+			elif vote == null or not vote.is_voting():
+				_reply_chat(peer, "No vote is open.")
+			else:
+				var res := vote.cast_one(voter, StringName(args[0]))
+				_reply_chat(peer, "Counted." if res.ok else res.error.message)
+			services.claim_command()
+		"nextmap":
+			_reply_chat(
+				peer,
+				"Next: %s" % (maps.next_map_hint() if maps != null else "-")
+			)
+			services.claim_command()
+		"timeleft":
+			_reply_chat(peer, _timeleft_line())
+			services.claim_command()
+		"score":
+			for line in game.match_node.scoreboard.describe_lines():
+				_reply_chat(peer, line)
+			services.claim_command()
+		"stats":
+			for line in _stat_lines(session.userid):
+				_reply_chat(peer, line)
+			services.claim_command()
+
+
+func _rtv_line(voter: StringName) -> String:
+	if vote == null:
+		return "There is no vote on this server."
+
+	var res := vote.rock_the_vote(voter)
+	return "Rocked the vote." if res.ok else res.error.message
+
+
+func _timeleft_line() -> String:
+	if maps == null or maps.session == null:
+		return "This map has no time limit."
+
+	return maps.session.time_limit.timeleft_line()
+
+
+func _stat_lines(userid: int) -> PackedStringArray:
+	var out := PackedStringArray()
+
+	if game.progress == null:
+		out.append("This server keeps no statistics.")
+		return out
+
+	var values := game.progress.session_values(userid)
+
+	out.append("This session: %d kills, %d deaths, %.0f%% accuracy" % [
+		int(values.get_value(ArenaStats.KILLS, 0.0)),
+		int(values.get_value(ArenaStats.DEATHS, 0.0)),
+		ArenaStats.accuracy_of(values) * 100.0,
+	])
+	out.append("Achievement points: %d" % game.progress.points_of(userid))
+
+	return out
+
+
+func _reply_chat(peer: int, text: String) -> void:
+	if services != null:
+		services.notice(peer, text)
+		return
+
+	var session := server.session_of(peer)
+
+	if session != null and server.chat != null:
+		server.chat.send_system_to(session, text)
+
+
+## The map changed, whatever caused it — a vote, a rotation, or an admin typing it.
+##
+## [b]This is the one call site that tells the vote what is running, and having two is
+## the bug.[/b] `DotVoteDirector.begin_on_apply` is off precisely so that this signal
+## is the only source: it fires for an operator's `arena_map` as well as for a voted
+## change, and both firing means two entries in the play history for one play — a
+## "not in the last five" cooldown that is quietly a cooldown of two or three.
+func _on_map_changed(map: DotMapDef) -> void:
+	if vote != null:
+		vote.note_changed()
+
+	if services != null:
+		services.announce("Now playing %s." % map.name_or_id())
+
+	log_info("map changed", {"map": String(map.id)})
+
+
+## The map's clock ran out.
+##
+## The director deliberately does not act on it: on a server with a vote the answer is
+## "open the ballot" and on one without it is "next in rotation", and only this file
+## knows which of those this server is.
+func _on_map_over(_map: DotMapDef, reason: StringName) -> void:
+	if vote != null:
+		var opened := vote.director.open_vote(reason)
+
+		if opened.ok:
+			return
+
+		log_info("the map is over and a vote could not open", {
+			"why": opened.error.message
+		})
+
+	if maps != null:
+		var changed: DotResult = await maps.change_to_next(game.players().size())
+		DotLog.result(CHANNEL, "changing to the next map", changed)
+
+
 # --- Commands --------------------------------------------------------------
+
+## The commands that only exist once the optional halves loaded.
+##
+## Registered after them rather than beside the others, because a command that reports
+## on a subsystem that failed to load is a command whose only possible answer is "that
+## is not running" — and an operator reading the command list should see what this
+## server actually has.
+func _add_extra_commands() -> void:
+	if maps != null:
+		add_command(
+			"arena_map", _cmd_map,
+			"Change the map: arena_map <id>", DotAdminFlags.CHANGEMAP
+		)
+		add_command(
+			"arena_nextmap", _cmd_nextmap, "What plays next", ""
+		)
+
+	if vote != null:
+		add_command(
+			"arena_vote", _cmd_vote, "Open a vote now", DotAdminFlags.VOTE
+		)
+
+	if services != null:
+		add_command(
+			"arena_services", _cmd_services,
+			"Show chat, voice and moderation", DotAdminFlags.GENERIC
+		)
+
+	if identity != null:
+		add_command(
+			"arena_identity", _cmd_identity,
+			"Show the platform layer", DotAdminFlags.GENERIC
+		)
+
+	if game.progress != null:
+		add_command(
+			"arena_boards", _cmd_boards, "Show a leaderboard: arena_boards [id]", ""
+		)
+
+	if game.horde != null:
+		add_command(
+			"arena_horde", _cmd_horde,
+			"Show or clear the monsters: arena_horde [clear]", DotAdminFlags.GENERIC
+		)
+
+
+func _cmd_map(ctx: DotCmdContext) -> void:
+	if ctx.args.is_empty():
+		ctx.reply("Usage: arena_map <id>")
+		return
+
+	var changed: DotResult = await maps.change_to(StringName(ctx.args[0]))
+	ctx.reply("Changed." if changed.ok else changed.error.message)
+
+
+func _cmd_nextmap(ctx: DotCmdContext) -> void:
+	ctx.reply("Next: %s" % maps.next_map_hint())
+	ctx.reply(_timeleft_line())
+
+
+func _cmd_vote(ctx: DotCmdContext) -> void:
+	var opened := vote.director.open_vote(DotVoteClock.REASON_MANUAL)
+	ctx.reply("Vote opened." if opened.ok else opened.error.message)
+
+
+func _cmd_services(ctx: DotCmdContext) -> void:
+	for line in services.describe_lines():
+		ctx.reply(line)
+
+
+func _cmd_identity(ctx: DotCmdContext) -> void:
+	for line in identity.describe_lines():
+		ctx.reply(line)
+
+
+func _cmd_boards(ctx: DotCmdContext) -> void:
+	var board_id: StringName = (
+		StringName(ctx.args[0]) if not ctx.args.is_empty() else ArenaBoards.KILLS
+	)
+	var scope := ArenaBoards.scope_for(game.mode.id if game.mode != null else &"ffa")
+	var page := game.progress.boards.page(board_id, scope, 0, 10)
+
+	if not page.ok:
+		ctx.reply(page.error.message)
+		return
+
+	var board := game.progress.boards.board_for(board_id, scope)
+	var rank := 0
+
+	for entry in (page.value as Array):
+		rank += 1
+		ctx.reply("%2d. %-20s %s" % [
+			rank,
+			(entry as DotLeaderboardEntry).player_name,
+			board.format_value((entry as DotLeaderboardEntry).value),
+		])
+
+	if rank == 0:
+		ctx.reply("Nobody is on that board yet.")
+
+
+func _cmd_horde(ctx: DotCmdContext) -> void:
+	if not ctx.args.is_empty() and ctx.args[0] == "clear":
+		ctx.reply("Removed %d monster(s)." % game.horde.clear())
+		return
+
+	for line in game.horde.describe_lines():
+		ctx.reply(line)
+
+
 
 func _cmd_net(ctx: DotCmdContext) -> void:
 	if net == null:

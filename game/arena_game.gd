@@ -58,6 +58,25 @@ signal player_added(player: ArenaPlayer)
 
 signal match_state_changed(from: DotMatch.State, to: DotMatch.State)
 
+## A combat entity that is NOT a player was killed.
+##
+## [b]This exists because the scoreboard used to get a row for one.[/b] dot-combat
+## knows only entity ids; anything a game layer registers with it — a monster, a
+## breakable, a turret — arrives at `_on_entity_killed` looking exactly like a player.
+## The old handler passed the id to `DotMatch.report_kill` regardless, which creates a
+## scoreboard record keyed on a number no player has ever had, and it would have shown
+## up as a phantom name at the bottom of the board with a death against it.
+##
+## [ArenaHorde] is the listener. A game with no monsters connects nothing and nothing
+## is emitted.
+signal non_player_killed(entity_id: int, damage: DotDamage)
+
+## The world was replaced. After everything is rebuilt and every player is back in it.
+##
+## A client hangs its renderer off this: the meshes it was drawing belonged to the old
+## map and the nodes they came from are gone by the time this fires.
+signal map_changed(map: ArenaMap)
+
 @export_group("Simulation")
 
 @export_range(1, 240, 1) var tick_rate: int = 64
@@ -89,6 +108,17 @@ signal match_state_changed(from: DotMatch.State, to: DotMatch.State)
 ## Analytic geometry, or Godot physics. See [enum ArenaPlayer.Mode].
 @export var headless: bool = true
 
+@export_group("Progression")
+
+## Count statistics, award achievements and keep leaderboards.
+##
+## [b]Authority only, and the guard is not a saving.[/b] A mirroring client runs the
+## same [ArenaGame], sees the same kills replicated to it, and counting them there
+## would credit every player on the server a second time in a place the server never
+## reads — and, worse, would let a modified client award itself achievements. The
+## numbers belong to whoever decides who died.
+@export var track_progress: bool = true
+
 @export_group("Service")
 
 @export var register_service: bool = true
@@ -100,8 +130,32 @@ var match_node: DotMatch = null
 var combat: DotCombatManager = null
 var loadouts: DotLoadoutManager = null
 
+## Statistics, achievements and boards. Null when [member track_progress] is off or
+## this instance is not the authority.
+var progress: ArenaProgress = null
+
+## Monsters. Null unless the mode asks for them and this instance is the authority.
+##
+## [b]Authority only, and unpredicted.[/b] A brain runs a behaviour tree against a
+## blackboard with lifetimes on it, which is not something two machines reproduce from
+## the same inputs — dot-npc says so and dot-props says the same thing about rigid
+## bodies. A client sees monsters because they are replicated, never because it
+## simulated them.
+var horde: ArenaHorde = null
+
+## Physics props. Null unless the mode asks for them and this instance is the authority.
+var props: ArenaProps = null
+
 ## player id -> [ArenaPlayer].
 var _players: Dictionary = {}
+
+## The spawn points built from the map, so a map change can take them away again.
+##
+## Held rather than found by walking the children: this node's children are the match,
+## the combat manager, the loadouts, the progress node, every player AND every spawn
+## point, and a teardown that filtered them by type would free a spawn point a host
+## project had added itself.
+var _spawn_points: Array[DotSpawnPoint] = []
 
 var _tick: int = 0
 var _registered_name: StringName = &""
@@ -161,6 +215,16 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 
 	if not loadout_result.ok:
 		return loadout_result
+
+	var progress_result := _build_progress()
+
+	if not progress_result.ok:
+		return progress_result
+
+	# Last, and after the combat manager: a monster is a combat entity and a prop is a
+	# rigid body that has to land on the map. Both read `mode`, which is why neither is
+	# an export on this class — see `ArenaMode.horde`.
+	_build_world_layers()
 
 	if register_service:
 		_registered_name = (
@@ -279,6 +343,7 @@ func _build_match() -> DotResult:
 
 		add_child(point)
 		match_node.add_spawn_point(point)
+		_spawn_points.append(point)
 
 	# Where everyone is, so the spawn selector can put a player away from the fight.
 	# Without this it falls back to cooldowns alone and will happily spawn someone in
@@ -316,9 +381,239 @@ func _build_loadouts() -> DotResult:
 	return DotResult.success(null)
 
 
+## Statistics, achievements and boards, if this instance keeps any.
+##
+## [b]Built last, and after the match node exists.[/b] [method ArenaProgress.attach]
+## connects to the combat manager's shot and damage signals and to dot-match's round
+## and match signals; every one of those is created by the three builders above, and
+## attaching before them would connect to null with no error until the first kill.
+func _build_progress() -> DotResult:
+	if not track_progress or not is_authority:
+		return DotResult.success(null)
+
+	progress = ArenaProgress.new()
+	progress.name = "Progress"
+	add_child(progress)
+
+	var attached := progress.attach(self)
+
+	if not attached.ok:
+		# A game with no statistics is a game. A game that refuses to start because a
+		# leaderboard definition was rejected is not, and this is the same call
+		# `apply_loadout` makes about an unreachable store.
+		DotLog.warn(CHANNEL, "progression is off", {"why": attached.error.message})
+		remove_child(progress)
+		progress.queue_free()
+		progress = null
+
+	return DotResult.success(null)
+
+
+## The monsters and the props the mode asks for.
+##
+## [b]Neither is fatal and neither logs at warning level when it is simply off.[/b] A
+## mode with no monsters is the ordinary case; a mode that wanted them and could not
+## have them is worth a line, because the symptom is an empty arena in a game called
+## Siege and nothing to say why.
+func _build_world_layers() -> void:
+	if not is_authority or mode == null:
+		return
+
+	if mode.player_props or mode.scatter_props > 0:
+		props = ArenaProps.new()
+		props.name = "Props"
+		props.game = self
+		props.players_may_spawn = mode.player_props
+		props.scatter_count = mode.scatter_props
+		add_child(props)
+
+		var props_ready := props.setup()
+
+		if not props_ready.ok:
+			DotLog.warn(CHANNEL, "props are off", {"why": props_ready.error.message})
+			remove_child(props)
+			props.queue_free()
+			props = null
+
+	if not mode.horde:
+		return
+
+	horde = ArenaHorde.new()
+	horde.name = "Horde"
+	horde.game = self
+	add_child(horde)
+
+	var horde_ready := horde.setup()
+
+	if not horde_ready.ok:
+		DotLog.warn(CHANNEL, "the horde is off", {"why": horde_ready.error.message})
+		remove_child(horde)
+		horde.queue_free()
+		horde = null
+		return
+
+	horde.enabled = true
+
+
 func start(tick: int = 0) -> void:
 	_tick = tick
 	match_node.start(tick)
+
+
+# --- Changing the map ------------------------------------------------------
+
+## Replaces the world under the players who are standing in it.
+##
+## [b]This is what `ArenaGame.setup` could never be asked to do twice.[/b] setup builds
+## the combat trace, the match node and every spawn point as children in one pass and
+## is not re-entrant: calling it again leaves two matches, two combat managers and two
+## sets of spawns in one tree, all of them connected to the same signals, and the
+## second of each quietly wins. So the teardown is the feature, and it is the half that
+## has to be right — every one of the joins this game exists to test is a signal
+## connection, and a connection to a freed object is an error at the next emit rather
+## than at the disconnect that was skipped.
+##
+## What survives a change and what does not:
+##
+## - [b]The players do.[/b] Their nodes, their statistics and their loadouts are about
+##   a person on this server, not about a room. They are re-bodied against the new
+##   geometry and put back into the new match.
+## - [b]The match does not.[/b] A new map is a new match; scores from the last one
+##   belong to the last one. dot-stats' session totals are deliberately not reset,
+##   because a session is a visit to the server.
+## - [b]The combat manager does not[/b], because its trace is the map.
+##
+## [param new_mode] is optional; null keeps the mode that is running. A mode change is
+## the one thing that must happen HERE rather than afterwards — the match rules, the
+## team manager and the damage rules are all built from it, and assigning it after the
+## rebuild would leave every one of them describing the previous mode.
+func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
+	if new_map == null:
+		return DotResult.fail(DotError.CODE_INVALID, "There is no map to change to.")
+
+	if map == null or match_node == null:
+		return DotResult.fail(
+			DotError.CODE_STATE, "The game has not been set up, so there is nothing to change."
+		)
+
+	if new_mode != null:
+		var mode_res := new_mode.validate()
+
+		if not mode_res.ok:
+			return mode_res.wrap("The mode that map wanted is not usable")
+
+	# Read before the teardown: `_players` survives it, but the team a player was on
+	# belongs to the match that is about to be freed.
+	var roster: Array = []
+
+	for id in player_ids():
+		var player: ArenaPlayer = _players[id]
+		roster.append({"id": id, "name": player.display_name})
+
+	_teardown_world()
+
+	map = new_map
+
+	if new_mode != null:
+		mode = new_mode
+
+	var combat_result := _build_combat()
+
+	if not combat_result.ok:
+		return combat_result.wrap("The new map's combat could not be built")
+
+	var match_result := _build_match()
+
+	if not match_result.ok:
+		return match_result.wrap("The new map's match could not be built")
+
+	for row in roster:
+		var id := int(row["id"])
+		var player := player_for(id)
+
+		if player == null:
+			continue
+
+		# The body first. A player whose collision is still the old map's geometry is
+		# one standing inside a wall that no longer exists, and the first tick after
+		# the change would push them out of a room they are not in.
+		player.rebind_map(map)
+		player.join_combat(combat)
+
+		var added := match_node.add_player(str(id), String(row["name"]), _tick, 0)
+
+		if not added.ok:
+			DotLog.warn(CHANNEL, "a player could not rejoin after the map change", {
+				"player": id, "why": added.error.message
+			})
+			continue
+
+		player.team = team_of(id)
+
+	if progress != null:
+		progress.rebind_world()
+
+	# Whatever state the last match ended in, the new one starts from the beginning.
+	match_node.start(_tick)
+
+	DotLog.info(CHANNEL, "map changed", {
+		"map": map.display_name, "mode": String(mode.id), "players": _players.size()
+	})
+
+	map_changed.emit(map)
+
+	return DotResult.success(map)
+
+
+## Frees everything that belongs to the map, in the order the connections require.
+##
+## [b]Disconnect before free, and disconnect from the object that holds the
+## connection.[/b] Godot cleans up connections when a node is freed, so most of this
+## is belt and braces — but [ArenaProgress] outlives the teardown and is connected to
+## both the combat manager and the match node, and a node that is still connected to a
+## freed object when its own handler runs is the error that has no line number.
+func _teardown_world() -> void:
+	if progress != null:
+		progress.unbind_world()
+
+	for id in player_ids():
+		(_players[id] as ArenaPlayer).leave_combat()
+
+	if match_node != null and is_instance_valid(match_node):
+		if match_node.respawn_due.is_connected(_on_respawn_due):
+			match_node.respawn_due.disconnect(_on_respawn_due)
+
+		if match_node.state_changed.is_connected(_on_match_state_changed):
+			match_node.state_changed.disconnect(_on_match_state_changed)
+
+		# The position callable closes over this node and is read on every spawn
+		# selection. Cleared rather than left to the free, because a Callable held by
+		# a node being freed is exactly the sort of thing that runs once more.
+		match_node.position_fn = Callable()
+
+		remove_child(match_node)
+		match_node.queue_free()
+
+	match_node = null
+
+	if combat != null and is_instance_valid(combat):
+		if combat.entity_killed.is_connected(_on_entity_killed):
+			combat.entity_killed.disconnect(_on_entity_killed)
+
+		if combat.damage_applied.is_connected(_on_damage_applied):
+			combat.damage_applied.disconnect(_on_damage_applied)
+
+		remove_child(combat)
+		combat.queue_free()
+
+	combat = null
+
+	for point in _spawn_points:
+		if is_instance_valid(point):
+			remove_child(point)
+			point.queue_free()
+
+	_spawn_points.clear()
 
 
 # --- Players ---------------------------------------------------------------
@@ -358,6 +653,13 @@ func add_player(
 	# assigned by nothing since the class was written.
 	player.team = team_of(id)
 
+	if progress != null:
+		# Not awaited. An achievement store may be remote and a join may not wait on
+		# it; readings that arrive during the load are still counted, because
+		# `DotAchievementStatsLink` holds its baseline until the tracker has the
+		# player. See `ArenaProgress.begin`.
+		progress.begin(id, display_name)
+
 	# Last, and only once the player is fully in: a handler runs synchronously inside
 	# this and the first thing a client's does is hang a camera off them.
 	player_added.emit(player)
@@ -370,6 +672,17 @@ func remove_player(id: int) -> void:
 
 	if player == null:
 		return
+
+	if props != null:
+		# Before anything else: it drops whatever they were carrying, and a physics
+		# gun still holding a crate for a player who no longer exists holds it for
+		# ever — the prop is frozen mid-air and nothing owns it.
+		props.release_player(id)
+
+	if progress != null:
+		# Before the player leaves the match: `leave` files the session onto the
+		# boards and reads the display name off the player to do it.
+		progress.leave(id)
 
 	player.leave_combat()
 	match_node.remove_player(str(id))
@@ -441,8 +754,19 @@ func apply_loadout(id: int) -> void:
 ## `DotLoadoutKey.is_usable` has a minimum length, so a bare session id of "7" is
 ## refused before any store sees it. Padding here rather than loosening the check: the
 ## check exists so a malformed key can never reach a filesystem path.
-func _loadout_key(id: int) -> String:
+##
+## [b]One key for every store, and that is deliberate.[/b] Loadouts, achievement
+## progress and dot-stats' sessions are three subsystems that each want a durable
+## per-player id, and three formats would be three chances for one of them to file
+## under a name the others cannot find. It also refuses to be an account id: dot-stats'
+## reporter rejects anything with a `backbone:` prefix before it leaves the server, and
+## a key built from the session id can never carry one.
+static func storage_key(id: int) -> String:
 	return "arena-player-%08d" % id
+
+
+func _loadout_key(id: int) -> String:
+	return storage_key(id)
 
 
 # --- Simulation ------------------------------------------------------------
@@ -485,6 +809,17 @@ func tick(commands: Dictionary = {}) -> void:
 			# turns on with no other change.
 			combat.resolve_shot(shot)
 
+	# After the shots and before the match, and the position in the order is the
+	# reason this is not two lines somewhere else. A monster has to perceive where the
+	# players ended the tick, and a monster killed by a shot resolved above has to be
+	# reported dead before the match's win check runs — otherwise its death is counted
+	# on the following tick, which at a score limit is one round decided late.
+	if props != null:
+		props.tick(delta)
+
+	if horde != null:
+		horde.tick(delta)
+
 	match_node.tick(_tick)
 
 
@@ -497,8 +832,13 @@ func current_tick() -> int:
 func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 	var victim := player_for(entity_id)
 
-	if victim != null:
-		victim.make_dead()
+	if victim == null:
+		# Not a player. Something else registered with the combat manager, and the
+		# match must not hear about it — see `non_player_killed`.
+		non_player_killed.emit(entity_id, damage)
+		return
+
+	victim.make_dead()
 
 	# An attacker of 0 is world damage — a fall, the void — and dot-match reads an
 	# empty killer key as exactly that. Passing "0" instead would create a scoreboard
@@ -517,11 +857,18 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 
 
 func _on_damage_applied(damage: DotDamage) -> void:
-	match_node.report_damage(
-		"" if damage.attacker == 0 else str(damage.attacker),
-		str(damage.victim),
-		damage.health_lost
+	# Only players are on the scoreboard. Damage to or from anything else a game
+	# layer registered with dot-combat — a monster, a breakable — would otherwise
+	# create a record keyed on an id no player has, for the same reason
+	# `non_player_killed` exists.
+	if player_for(damage.victim) == null:
+		return
+
+	var attacker := (
+		str(damage.attacker) if player_for(damage.attacker) != null else ""
 	)
+
+	match_node.report_damage(attacker, str(damage.victim), damage.health_lost)
 
 
 func _on_respawn_due(key: String, spawn: DotSpawnPoint, tick: int) -> void:
@@ -574,6 +921,9 @@ func describe() -> Dictionary:
 		"players": _players.size(),
 		"match": match_node.describe() if match_node != null else {},
 		"combat": combat.describe() if combat != null else {},
+		"progress": progress.describe() if progress != null else {},
+		"horde": horde.describe() if horde != null else {},
+		"props": props.describe() if props != null else {},
 	}
 
 
@@ -582,4 +932,14 @@ func describe_lines() -> PackedStringArray:
 	out.append("arena    %s  tick %d" % [map.display_name if map != null else "?", _tick])
 	out.append_array(match_node.describe_lines())
 	out.append_array(combat.describe_lines())
+
+	if progress != null:
+		out.append_array(progress.describe_lines())
+
+	if horde != null:
+		out.append_array(horde.describe_lines())
+
+	if props != null:
+		out.append_array(props.describe_lines())
+
 	return out

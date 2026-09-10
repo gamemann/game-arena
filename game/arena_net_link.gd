@@ -33,6 +33,15 @@ const NODE_NAME := &"Arena"
 ## make a burst of snapshots delay a chat line, and a chat line delay a snapshot.
 const CHANNEL_STATE := 1
 
+## Voice rides its own channel, and that is not a nicety.
+##
+## A talk spurt is fifty frames a second per speaker relayed to every listener. On the
+## state channel it would sit in the same ordered queue as the snapshots, so somebody
+## holding the talk key would add a frame of latency to everybody's movement — and a
+## burst of snapshots would arrive as a gap in the audio, which is the one artefact a
+## jitter buffer cannot hide.
+const CHANNEL_VOICE := 2
+
 ## The bridge these calls are delivered to. Set by whoever creates this node.
 var bridge: ArenaNetBridge = null
 
@@ -52,6 +61,14 @@ var is_server: bool = false
 ## between them. Unset — which is every real deployment — every send goes out as an RPC.
 var loopback: Callable = Callable()
 
+## The [Dictionary]-carrying half of [member loopback].
+##
+## [b]A second callable rather than a wider signature on the first.[/b] `loopback`
+## takes a [PackedByteArray] and four call sites hand it one; widening it to a Variant
+## would make every one of those pass a byte array through a parameter that no longer
+## says so, and the map messages are the only thing on this link that is not bytes.
+var loopback_map: Callable = Callable()
+
 ## Counters, for `arena_net` and for the self-test.
 var snapshots_sent: int = 0
 var snapshots_received: int = 0
@@ -61,6 +78,10 @@ var inputs_sent: int = 0
 var inputs_received: int = 0
 var requests_sent: int = 0
 var requests_received: int = 0
+var voice_sent: int = 0
+var voice_received: int = 0
+var map_sent: int = 0
+var map_received: int = 0
 
 
 static func attached_to(
@@ -138,6 +159,78 @@ func send_request(payload: PackedByteArray) -> void:
 		_net_request.rpc_id(1, payload)
 
 
+## One encoded voice frame, server to one listener.
+##
+## [b]Never a broadcast, and the loop over listeners is deliberately not here.[/b]
+## [DotVoiceRouter] decides who hears a speaker — everybody, a team, or whoever is
+## within range — and a `send(bytes, 0)` convention here would quietly deliver a
+## proximity packet to the whole server. This family has shipped that exact bug once
+## already, through a bot registered as peer 0.
+func send_voice(peer_id: int, payload: PackedByteArray) -> void:
+	if not _live() or peer_id <= 0:
+		return
+
+	voice_sent += 1
+
+	if loopback.is_valid():
+		loopback.call(&"voice", peer_id, payload)
+	else:
+		_net_voice.rpc_id(peer_id, payload)
+
+
+
+## One captured voice frame, client to server.
+func send_voice_frame(payload: PackedByteArray) -> void:
+	if not _live():
+		return
+
+	voice_sent += 1
+
+	if loopback.is_valid():
+		loopback.call(&"voice_frame", 1, payload)
+	else:
+		_net_voice_frame.rpc_id(1, payload)
+
+
+## One dot-map protocol message, server to one peer.
+##
+## [b]A [Dictionary] rather than bytes, and it is the one thing on this link that is
+## not bit-packed.[/b] dot-map's messages are five kinds of announcement that happen a
+## few times an hour — a bit-packed wire for them would be a second schema to keep in
+## step with dot-map's own, for a saving of about forty bytes per map change. The
+## bit-packing exists for the snapshot, which is thirty-two of them a second.
+func send_map(peer_id: int, payload: Dictionary) -> void:
+	if not _live() or peer_id <= 0:
+		return
+
+	map_sent += 1
+
+	# [b]`loopback_map`, not `loopback` — and tested separately.[/b] A harness that set
+	# the byte loopback and not this one would otherwise call an invalid Callable, which
+	# is a crash in a test that was only trying not to open a socket. Falling through to
+	# the RPC is wrong too when there is no multiplayer peer, so the send is simply
+	# dropped and counted, which is what a lost packet looks like anyway.
+	if loopback.is_valid():
+		if loopback_map.is_valid():
+			loopback_map.call(&"map", peer_id, payload)
+	else:
+		_net_map.rpc_id(peer_id, payload)
+
+
+## A client's answer: how far through the download it is, or that it is ready.
+func send_map_report(payload: Dictionary) -> void:
+	if not _live():
+		return
+
+	map_sent += 1
+
+	if loopback.is_valid():
+		if loopback_map.is_valid():
+			loopback_map.call(&"map_report", 1, payload)
+	else:
+		_net_map_report.rpc_id(1, payload)
+
+
 # --- Receiving -------------------------------------------------------------
 
 ## State from the authority. Unreliable: a newer snapshot supersedes a lost one, and
@@ -180,6 +273,58 @@ func _net_request(payload: PackedByteArray) -> void:
 		bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
 
 
+## A relayed voice frame. Unreliable: a lost frame is 20 ms of silence a jitter buffer
+## conceals, and a resent one arrives after the frames either side of it have played.
+@rpc("authority", "unreliable", "call_remote", CHANNEL_VOICE)
+func _net_voice(payload: PackedByteArray) -> void:
+	voice_received += 1
+
+	if bridge != null:
+		bridge.receive_voice(payload)
+
+
+## A client's captured audio. The speaker is stamped by the server from the transport's
+## sender, never read out of the payload — a client that could name its own speaker id
+## could put words in anybody's mouth, and the only symptom is exactly that.
+@rpc("any_peer", "unreliable", "call_remote", CHANNEL_VOICE)
+func _net_voice_frame(payload: PackedByteArray) -> void:
+	voice_received += 1
+
+	if bridge != null:
+		bridge.receive_voice_frame(multiplayer.get_remote_sender_id(), payload)
+
+
+## A map-change announcement from the server.
+@rpc("authority", "reliable", "call_remote", CHANNEL_STATE)
+func _net_map(payload: Dictionary) -> void:
+	map_received += 1
+
+	if bridge != null:
+		bridge.receive_map(payload)
+
+
+## A client's progress or readiness. The peer comes from the transport.
+@rpc("any_peer", "reliable", "call_remote", CHANNEL_STATE)
+func _net_map_report(payload: Dictionary) -> void:
+	map_received += 1
+
+	if bridge != null:
+		bridge.receive_map_report(multiplayer.get_remote_sender_id(), payload)
+
+
+## Hands a [Dictionary] payload to this end as though it had arrived over the wire.
+func deliver_map(method: StringName, from_peer_id: int, payload: Dictionary) -> void:
+	if bridge == null:
+		return
+
+	map_received += 1
+
+	if method == &"map":
+		bridge.receive_map(payload)
+	else:
+		bridge.receive_map_report(from_peer_id, payload)
+
+
 ## Hands a payload to this end as though it had arrived over the wire.
 ##
 ## What the other end's [member loopback] calls. It goes through the same counters and
@@ -202,6 +347,12 @@ func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) ->
 		&"request":
 			requests_received += 1
 			bridge.receive_request(from_peer_id, payload)
+		&"voice":
+			voice_received += 1
+			bridge.receive_voice(payload)
+		&"voice_frame":
+			voice_received += 1
+			bridge.receive_voice_frame(from_peer_id, payload)
 
 
 func describe() -> Dictionary:
@@ -211,4 +362,6 @@ func describe() -> Dictionary:
 		"events": [events_sent, events_received],
 		"inputs": [inputs_sent, inputs_received],
 		"requests": [requests_sent, requests_received],
+		"voice": [voice_sent, voice_received],
+		"map": [map_sent, map_received],
 	}

@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://props/arena_prop_body.gd" id="1_prop"]
+
+[node name="Pallet" type="RigidBody3D"]
+script = ExtResource("1_prop")
+half_size = Vector3(0.90, 0.10, 0.70)
+rounded = false
+tint = Color(0.55, 0.45, 0.30, 1)

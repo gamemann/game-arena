@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://npcs/arena_npc_body.gd" id="1_body"]
+
+[node name="Stalker" type="Node3D"]
+script = ExtResource("1_body")
+body_radius = 0.32
+body_height = 1.35
+tint = Color(0.25, 0.70, 0.60, 1)

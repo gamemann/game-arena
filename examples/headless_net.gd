@@ -55,6 +55,8 @@ func _run() -> void:
 	_test_owner_only()
 	_test_ready_gate()
 	_test_predicted_node_is_not_moved()
+	await _test_map_sync_wire()
+	_test_voice_wire()
 	_test_disconnect()
 
 	print("")
@@ -474,6 +476,214 @@ func _test_owner_only() -> void:
 	# next piece of work here; see this project's CLAUDE.md.
 	_check(other.net_health > 0, "while an opponent's health does arrive",
 		str(other.net_health))
+
+
+# --- Maps and voice over the link -------------------------------------------
+
+## dot-map's announce/ready/load protocol, over this game's own link.
+##
+## [b]dot-map's own suite runs this over a loopback `send_fn` and never over
+## dot-net.[/b] Its notes say so, and they say what follows from it: the seam between
+## a map sync host and a real game's transport is the one nothing has run. This is
+## that seam — two [ArenaNetLink]s, a real [DotMapSyncHost] and a real
+## [DotMapSyncClient], with the payloads going through the same `send_map` a socket
+## would use.
+func _test_map_sync_wire() -> void:
+	print("")
+	print("[map sync over the link]")
+
+	var server_link := ArenaNetLink.attached_to(self, _server_bridge, true)
+	server_link.name = "MapServerLink"
+
+	var client_entry: Dictionary = _clients[_clients.keys()[0]]
+	var client_bridge: ArenaNetBridge = client_entry["bridge"]
+	var client_link := ArenaNetLink.attached_to(self, client_bridge, false)
+	client_link.name = "MapClientLink"
+
+	# Both loopbacks, crossed. `send_map` refuses to fall through to an RPC when the
+	# byte loopback is set, so a harness that wired one and not the other would get a
+	# silent no-op rather than a crash — which is why the counters are asserted below
+	# rather than only the outcome.
+	server_link.loopback = func(_m: StringName, _p: int, _b: PackedByteArray) -> void: pass
+	client_link.loopback = func(_m: StringName, _p: int, _b: PackedByteArray) -> void: pass
+
+	server_link.loopback_map = func(m: StringName, peer: int, payload: Dictionary) -> void:
+		client_link.deliver_map(m, peer, payload)
+
+	client_link.loopback_map = func(m: StringName, _peer: int, payload: Dictionary) -> void:
+		server_link.deliver_map(m, 2, payload)
+
+	var catalogue := ArenaMaps.catalogue()
+
+	var session := ArenaMapSession.new()
+	session.name = "MapSession"
+	session.game = _server_game
+	session.catalogue = catalogue
+	add_child(session)
+
+	var host := DotMapSyncHost.new()
+	host.name = "MapHost"
+	host.session = session
+	host.sync_timeout_sec = 5.0
+	host.send_fn = func(peer: int, payload: Dictionary) -> void:
+		server_link.send_map(peer, payload)
+	add_child(host)
+
+	# The FOLLOWER needs a catalogue too, and leaving it out looks exactly like a
+	# trust refusal: `DotMapSyncClient` accepts an announced map only if it is in its
+	# own catalogue at the same version, or is delivered content. With no session it
+	# has no catalogue, so every one of this game's maps was refused with "a host may
+	# not send a map that is not delivered content" — which is the correct answer to
+	# the question it was actually being asked.
+	var client_game: ArenaGame = client_entry["game"]
+
+	var follower_session := ArenaMapSession.new()
+	follower_session.name = "FollowerSession"
+	follower_session.game = client_game
+	follower_session.catalogue = ArenaMaps.catalogue()
+	add_child(follower_session)
+
+	var follower := DotMapSyncClient.new()
+	follower.name = "MapFollower"
+	follower.session = follower_session
+	follower.accept_unknown_maps = true
+	follower.send_fn = func(payload: Dictionary) -> void:
+		client_link.send_map_report(payload)
+	add_child(follower)
+
+	# One argument. `DotMapSyncClient.changed` carries the map and nothing else, unlike
+	# `DotMapSession.changed`, which carries the world as well.
+	var loads: Array[StringName] = []
+	follower.changed.connect(func(map: DotMapDef) -> void: loads.append(map.id))
+
+	_server_bridge.map_report_fn = func(peer: int, payload: Dictionary) -> void:
+		host.handle(peer, payload)
+
+	client_bridge.map_in_fn = func(payload: Dictionary) -> void:
+		follower.handle(payload)
+
+	host.add_peer(2)
+
+	var target: StringName = &"dm_atrium" if _server_game.map.id == &"dm_box" else &"dm_box"
+	var changed: DotResult = await host.change_to(target)
+
+	_check(changed.ok, "the server changes map with a peer following", str(changed.error))
+	_check(
+		server_link.map_sent > 0,
+		"announcements went out on the link",
+		"%d" % server_link.map_sent
+	)
+	_check(
+		client_link.map_received > 0,
+		"and the client received them",
+		"%d" % client_link.map_received
+	)
+
+	# The report going back is the half that makes the wait mean anything. Without it
+	# the host waits out its whole timeout and swaps without the client — which
+	# `swap_without_stragglers` permits, so the change would still "work" and the peer
+	# would still be on the old map.
+	_check(
+		server_link.map_received > 0,
+		"the client reported back, so the host did not wait out its timeout",
+		"%d" % server_link.map_received
+	)
+
+	_check(loads.has(target), "and the client was told to load the new map")
+	_check(_server_game.map.id == target, "the server is on it")
+	_check(
+		client_game.map.id == target,
+		"and so is the client, having rebuilt the world itself",
+		String(client_game.map.id)
+	)
+
+	host.queue_free()
+	follower.queue_free()
+	follower_session.queue_free()
+	remove_child(follower_session)
+	session.queue_free()
+	server_link.queue_free()
+	client_link.queue_free()
+	remove_child(host)
+	remove_child(follower)
+	remove_child(session)
+	remove_child(server_link)
+	remove_child(client_link)
+
+
+## A voice frame, client to server to another client.
+##
+## [b]Deliberately not through [DotNetManager].[/b] dot-net decodes a bit-packed
+## message against a sealed schema; a voice frame is an opaque blob from a codec and
+## putting it through would mean a message type per codec — or a schema that changes
+## when the codec does, and the schema hash is what both ends check to agree they are
+## speaking the same game.
+func _test_voice_wire() -> void:
+	print("")
+	print("[voice over the link]")
+
+	var relayed: Array[Dictionary] = []
+	var heard: Array[PackedByteArray] = []
+
+	var server_link := ArenaNetLink.attached_to(self, _server_bridge, true)
+	server_link.name = "VoiceServerLink"
+
+	var client_entry: Dictionary = _clients[_clients.keys()[0]]
+	var client_bridge: ArenaNetBridge = client_entry["bridge"]
+	var client_link := ArenaNetLink.attached_to(self, client_bridge, false)
+	client_link.name = "VoiceClientLink"
+
+	client_link.loopback = func(m: StringName, peer: int, payload: PackedByteArray) -> void:
+		server_link.deliver(m, 2, payload)
+
+	server_link.loopback = func(m: StringName, peer: int, payload: PackedByteArray) -> void:
+		client_link.deliver(m, peer, payload)
+
+	_server_bridge.voice_relay_fn = func(speaker: int, bytes: PackedByteArray) -> void:
+		relayed.append({"speaker": speaker, "bytes": bytes})
+		# Straight back out, which is what DotVoiceRouter does after it has decided
+		# who hears it. The router itself is checked on a real server in `dedicated`.
+		server_link.send_voice(2, bytes)
+
+	client_bridge.voice_in_fn = func(bytes: PackedByteArray) -> void:
+		heard.append(bytes)
+
+	var frame := PackedByteArray([1, 2, 3, 4, 5, 6, 7, 8])
+	client_link.send_voice_frame(frame)
+
+	_check(relayed.size() == 1, "a captured frame reaches the server")
+
+	if not relayed.is_empty():
+		# [b]The speaker is stamped from the transport, never read out of the
+		# payload.[/b] A client that could name its own speaker id could put words in
+		# anybody's mouth, and the only symptom is words coming out of the wrong
+		# player — which nobody would report as a security problem.
+		_check(
+			int(relayed[0]["speaker"]) == 2,
+			"stamped with the peer the transport reported",
+			str(relayed[0]["speaker"])
+		)
+		_check(
+			(relayed[0]["bytes"] as PackedByteArray) == frame,
+			"and the bytes are unchanged"
+		)
+
+	_check(heard.size() == 1, "and the relay reaches a listener")
+
+	# Never a broadcast. `send(bytes, 0)` is how this family last delivered a private
+	# message to every client at once, and a proximity voice packet sent to peer 0
+	# would be exactly that bug with audio in it.
+	var before := server_link.voice_sent
+	server_link.send_voice(0, frame)
+	_check(
+		server_link.voice_sent == before,
+		"and a voice frame addressed to peer 0 is refused rather than broadcast"
+	)
+
+	server_link.queue_free()
+	client_link.queue_free()
+	remove_child(server_link)
+	remove_child(client_link)
 
 
 func _test_disconnect() -> void:

@@ -66,8 +66,19 @@ func _run() -> void:
 	_test_players_exist()
 	await _play()
 	_test_outcome()
+	await _test_progression()
 	_test_geometry_held()
 	_test_interface()
+
+	await _test_horde()
+	await _test_siege()
+
+	# Last, and it has to be. It replaces the combat manager, the match node and the
+	# map, so everything above that reads any of them — the kill feed a HUD catches
+	# up on, the geometry the shot-blocking check traces against — must already have
+	# run. Putting it earlier failed exactly one assertion, four sections later, about
+	# a HUD that was working perfectly.
+	await _test_map_change()
 
 	if _game != null:
 		_game.queue_free()
@@ -739,6 +750,857 @@ func _test_interface() -> void:
 	remove_child(hud)
 	stack.queue_free()
 	remove_child(stack)
+
+
+# --- Progression -----------------------------------------------------------
+
+## dot-stats, dot-achievements and dot-leaderboard, over the match that just ran.
+##
+## [b]Every check here is against a number the match PRODUCED, not one this test
+## filed.[/b] That is the whole point: a progression suite that records its own
+## readings and then reads them back is testing dot-stats, which dot-stats already
+## does. What is untested anywhere else is whether a kill in this game reaches those
+## three addons at all, and the family's own list is full of values produced correctly
+## and consumed by nobody.
+func _test_progression() -> void:
+	_group("progression")
+
+	var progress := _game.progress
+
+	if not _check(progress != null, "the game keeps progress"):
+		return
+
+	_check(
+		progress.stats != null and progress.achievements != null
+			and progress.boards != null,
+		"stats, achievements and boards are all up"
+	)
+
+	# The catalogue's own validator is what refuses one stat read with two merge
+	# rules — a running total and a personal best cannot be one number — and it is
+	# checked here rather than trusted because the symptom otherwise is one
+	# achievement that never unlocks, for one player, with nothing erroring.
+	var catalogue_ok := progress.achievements.catalogue.validate()
+	_check(catalogue_ok.ok, "the achievement catalogue validates", str(catalogue_ok.error))
+
+	var schema_ok := progress.stats.schema.validate()
+	_check(schema_ok.ok, "the stats schema validates", str(schema_ok.error))
+
+	# Every stat an achievement reads must be a stat the schema declares. Nothing in
+	# either addon can check this: dot-achievements does not know the schema exists,
+	# and dot-stats does not know the catalogue does. It is exactly the "two ends of
+	# one serialisation that never met" shape, and it is one loop.
+	var undeclared := PackedStringArray()
+
+	for stat in progress.achievements.catalogue.watched_stats():
+		if not progress.stats.schema.has(stat):
+			undeclared.append(String(stat))
+
+	_check(
+		undeclared.is_empty(),
+		"every stat an achievement watches is one the schema declares",
+		", ".join(undeclared)
+	)
+
+	# --- What the match actually filed -----------------------------------
+
+	var total_kills := 0.0
+	var total_fired := 0.0
+	var total_hit := 0.0
+	var any_deaths := false
+	var best_streak := 0.0
+
+	for player in _game.players():
+		var values := progress.session_values(player.player_id)
+		total_kills += values.get_value(ArenaStats.KILLS, 0.0)
+		total_fired += values.get_value(ArenaStats.SHOTS_FIRED, 0.0)
+		total_hit += values.get_value(ArenaStats.SHOTS_HIT, 0.0)
+		best_streak = maxf(best_streak, values.get_value(ArenaStats.BEST_STREAK, 0.0))
+
+		if values.get_value(ArenaStats.DEATHS, 0.0) > 0.0:
+			any_deaths = true
+
+	# The kill feed is the independent witness. Suicides carry no killer, so the
+	# stat total is the feed's count minus those — asserting equality against the
+	# raw feed size would fail the moment a bot rocket-jumped into a wall.
+	var credited := 0
+
+	for entry in _kills:
+		if entry.killer_key != "" and not entry.suicide:
+			credited += 1
+
+	_check(
+		total_kills == float(credited),
+		"every credited kill reached dot-stats",
+		"feed %d, stats %d" % [credited, int(total_kills)]
+	)
+
+	_check(any_deaths, "deaths were counted too")
+
+	_check(
+		total_fired > 0.0,
+		"shots fired were counted",
+		"%d" % int(total_fired)
+	)
+
+	# One shot is one shot whatever it fired. If this counted damage events instead,
+	# a shotgun's nine pellets would make hits exceed shots and a shotgun player nine
+	# times as accurate as a rifle player.
+	_check(
+		total_hit <= total_fired,
+		"shots landed never exceed shots fired",
+		"%d hit of %d fired" % [int(total_hit), int(total_fired)]
+	)
+
+	_check(
+		best_streak >= 1.0,
+		"a best streak was filed as a best rather than a sum",
+		"%d" % int(best_streak)
+	)
+
+	# --- Achievements ----------------------------------------------------
+	#
+	# First Blood is one kill, and the match above produced six. If the link between
+	# dot-stats and dot-achievements were wired straight through — the bug
+	# DotAchievementStatsLink exists to prevent — this would still pass; what it
+	# proves is that the two are connected at all.
+	var unlocked_any := false
+
+	for player in _game.players():
+		if progress.achievements.is_unlocked(
+			ArenaGame.storage_key(player.player_id), &"arena.first_blood"
+		):
+			unlocked_any = true
+
+	_check(unlocked_any, "somebody unlocked First Blood")
+
+	# The differencing itself. A player with N session kills must hold N lifetime
+	# kills, not the running sum 1+2+...+N that a direct signal connection produces —
+	# which for six kills is twenty-one and for a hundred is five thousand.
+	var mismatched := PackedStringArray()
+
+	for player in _game.players():
+		var key := ArenaGame.storage_key(player.player_id)
+		var held := progress.achievements.progress_of(key)
+
+		if held == null:
+			continue
+
+		var session := progress.session_values(player.player_id).get_value(
+			ArenaStats.KILLS, 0.0
+		)
+
+		if absf(held.value_of(ArenaStats.KILLS) - session) > 0.001:
+			mismatched.append("%s: lifetime %.0f, session %.0f" % [
+				key, held.value_of(ArenaStats.KILLS), session
+			])
+
+	_check(
+		mismatched.is_empty(),
+		"lifetime kills equal session kills, so the link differences rather than sums",
+		", ".join(mismatched)
+	)
+
+	# --- Boards ----------------------------------------------------------
+	#
+	# Filed when a player leaves, so this removes one. It is also the only place
+	# `leave` is exercised, and it is a coroutine — the achievement store may be
+	# remote — so it is awaited here where a disconnect handler would not.
+	var leaver := _game.players()[0]
+	var leaver_key := StringName(ArenaGame.storage_key(leaver.player_id))
+	var leaver_kills := progress.session_values(leaver.player_id).get_value(
+		ArenaStats.KILLS, 0.0
+	)
+
+	await progress.leave(leaver.player_id)
+
+	var scope := ArenaBoards.scope_for(_game.mode.id)
+	var entry := progress.boards.entry_for(ArenaBoards.KILLS, scope, leaver_key)
+
+	if leaver_kills > 0.0:
+		_check(
+			entry.ok and entry.value is DotLeaderboardEntry,
+			"a player who leaves lands on the kills board"
+		)
+
+		if entry.ok and entry.value is DotLeaderboardEntry:
+			_check(
+				absf((entry.value as DotLeaderboardEntry).value - leaver_kills) < 0.001,
+				"with the number they actually scored",
+				"board %s, session %d" % [
+					str((entry.value as DotLeaderboardEntry).value), int(leaver_kills)
+				]
+			)
+	else:
+		# A zero is deliberately NOT filed: a SCORE board of zeroes is noise and a
+		# zero on the PENALTY board would hold first place for ever.
+		_check(
+			not (entry.ok and entry.value is DotLeaderboardEntry),
+			"a player who scored nothing is not put on a board"
+		)
+
+	# Every board this game defines has to be one the manager will accept. A
+	# definition rejected at boot is a board that silently holds nothing.
+	var defined := progress.boards.definitions().size()
+	_check(
+		defined == ArenaBoards.definitions().size(),
+		"every board definition was accepted",
+		"%d of %d" % [defined, ArenaBoards.definitions().size()]
+	)
+
+
+# --- Changing the map ------------------------------------------------------
+
+## dot-map, over the game that is already running, with players standing in it.
+##
+## [b]This is the deployment shape that did not exist.[/b] Every check in dot-map's own
+## suite runs a [DotMapSession] whose maps are scenes, and every check in this one used
+## to run a game whose map was chosen at boot. What is untested anywhere else is the
+## join: a catalogue built from code-made maps, a session that builds rather than loads,
+## and an [ArenaGame] that has to tear down a combat manager and a match node it did not
+## expect to lose.
+func _test_map_change() -> void:
+	_group("changing the map")
+
+	var catalogue := ArenaMaps.catalogue()
+
+	_check(
+		catalogue.size() == ArenaMap.ids().size(),
+		"every map ArenaMap can build is in the catalogue",
+		"%d of %d" % [catalogue.size(), ArenaMap.ids().size()]
+	)
+
+	var problems := catalogue.problems()
+	_check(problems.is_empty(), "and every entry validates", ", ".join(problems))
+
+	# A map def whose scene path does not exist is a def that fails at the change
+	# rather than at the boot, which is the whole reason the path is a real file
+	# rather than a `code://` sentinel.
+	var missing := PackedStringArray()
+
+	for def in catalogue.maps:
+		if not ResourceLoader.exists(def.scene_path) and not FileAccess.file_exists(def.scene_path):
+			missing.append("%s -> %s" % [String(def.id), def.scene_path])
+
+	_check(
+		missing.is_empty(),
+		"and every one points at a file that exists",
+		", ".join(missing)
+	)
+
+	var director := ArenaMapDirector.new()
+	director.name = "Maps"
+	director.game = _game
+	director.map_seconds = 0.0
+	director.rotation_cooldown = 8
+	add_child(director)
+
+	var ready := director.setup()
+
+	if not _check(ready.ok, "the map director sets up", str(ready.error)):
+		return
+
+	# Eight was asked for over a two-map catalogue, which would be a rotation that can
+	# never offer anything. dot-map's `on_cooldown` takes a pool size for this reason
+	# and the director clamps rather than letting the value silently mean "never".
+	_check(
+		director.session.rotation.cooldown <= maxi(catalogue.size() - 1, 0),
+		"a cooldown larger than the catalogue is reduced to fit",
+		"%d over %d maps" % [director.session.rotation.cooldown, catalogue.size()]
+	)
+
+	_check(
+		director.current != null and director.current.id == _game.map.id,
+		"it adopts the map already running rather than changing to it"
+	)
+
+	# --- The change itself ------------------------------------------------
+
+	var before_id := _game.map.id
+	var before_players := _game.players().size()
+	var target: StringName = &"dm_atrium" if before_id == &"dm_box" else &"dm_box"
+
+	var kills_before := 0.0
+
+	for player in _game.players():
+		kills_before += _game.progress.session_values(player.player_id).get_value(
+			ArenaStats.KILLS, 0.0
+		)
+
+	var changed_to: Array[StringName] = []
+	_game.map_changed.connect(func(m: ArenaMap) -> void: changed_to.append(m.id))
+
+	var changed: DotResult = await director.change_to(target)
+
+	_check(changed.ok, "the map changes under the players", str(changed.error))
+	_check(_game.map.id == target, "and the game is on the new one")
+	_check(changed_to.has(target), "and map_changed fired for it")
+
+	_check(
+		_game.players().size() == before_players,
+		"every player survived the change",
+		"%d of %d" % [_game.players().size(), before_players]
+	)
+
+	# --- What has to have been rebuilt ------------------------------------
+
+	_check(
+		_game.combat != null and _game.match_node != null,
+		"the combat manager and the match node were rebuilt"
+	)
+
+	var registered := 0
+
+	for player in _game.players():
+		if _game.combat.hitboxes_of(player.player_id) != null:
+			registered += 1
+
+	_check(
+		registered == _game.players().size(),
+		"and every player is shootable in the new one",
+		"%d of %d" % [registered, _game.players().size()]
+	)
+
+	var expected_spawns := ArenaMap.by_id(target).spawns.size()
+	_check(
+		_game.match_node.spawn_points().size() == expected_spawns,
+		"the spawn points are the new map's",
+		"%d, expected %d" % [_game.match_node.spawn_points().size(), expected_spawns]
+	)
+
+	# The trace is the map. Rebuilding the manager and forgetting the trace would
+	# leave every shot resolving against the geometry of a room nobody is in — and
+	# nothing would error, because a trace that hits nothing is a legitimate answer.
+	var new_map := ArenaMap.by_id(target)
+	var outward := _game.combat.trace.ray(
+		Vector3(0.0, 2.0, 0.0), Vector3.RIGHT, new_map.extent * 4.0
+	)
+	_check(
+		outward.ok() and outward.blocked
+			and outward.distance < new_map.extent + 3.0,
+		"and a shot at the new perimeter stops at it",
+		"%.1f m, extent %.1f" % [outward.distance, new_map.extent]
+	)
+
+	_check(
+		_game.combat.trace is DotTraceFlat
+			and (_game.combat.trace as DotTraceFlat).boxes.size() == new_map.boxes.size(),
+		"the trace holds the new map's boxes and not the old one's",
+		"%d, expected %d" % [
+			(_game.combat.trace as DotTraceFlat).boxes.size(), new_map.boxes.size()
+		]
+	)
+
+	# --- Progression across a change --------------------------------------
+	#
+	# `ArenaProgress` is connected to the combat manager and the match node, both of
+	# which were just freed. If `rebind_world` had not run it would still be listening
+	# to two dead objects and counting nothing — silently, because a signal that is
+	# never emitted looks exactly like a quiet game.
+	var alive := _game.players()
+
+	if alive.size() >= 2:
+		var shooter := alive[0]
+		var victim := alive[1]
+
+		# Put the victim back in the world first. The match that just ended left
+		# everybody dead, and damage to a dead entity is correctly refused — so a
+		# probe that skipped this would report "nothing was counted" for a reason that
+		# has nothing to do with what it is testing.
+		victim.hitboxes.enabled = true
+		victim.spawn(
+			Transform3D(Basis.IDENTITY, Vector3(0.0, new_map.floor_y + 1.0, 0.0)),
+			_game.current_tick(),
+			0
+		)
+
+		var before := _game.progress.session_values(shooter.player_id).get_value(
+			ArenaStats.DAMAGE_DEALT, 0.0
+		)
+
+		var damage := _game.combat.apply_damage(DotDamage.make(
+			shooter.player_id, victim.player_id, 10.0,
+			_game.combat.damage_type(ArenaContent.DAMAGE_BULLET)
+		))
+
+		var after := _game.progress.session_values(shooter.player_id).get_value(
+			ArenaStats.DAMAGE_DEALT, 0.0
+		)
+
+		_check(
+			damage.health_lost > 0.0,
+			"a rebuilt combat manager still applies damage",
+			"lost %.1f" % damage.health_lost
+		)
+		_check(
+			after > before,
+			"progress is still counting after the world was replaced",
+			"%.0f -> %.0f, damage %.1f" % [before, after, damage.health_lost]
+		)
+
+	var kills_after := 0.0
+
+	for player in _game.players():
+		kills_after += _game.progress.session_values(player.player_id).get_value(
+			ArenaStats.KILLS, 0.0
+		)
+
+	# A session is a visit to the server, not a visit to a room. Resetting here would
+	# mean a player's numbers restart every time the map does.
+	_check(
+		kills_after >= kills_before,
+		"and session totals survived the change",
+		"%d before, %d after" % [int(kills_before), int(kills_after)]
+	)
+
+	# --- Players can still move -------------------------------------------
+	#
+	# The motor holds a reference to the body it was built with, so a player handed
+	# new geometry without a rebuilt motor keeps colliding against the level they are
+	# no longer in. The symptom is a player wedged in mid-air with every property
+	# reading correctly, which no assertion about a property can see.
+	for tick in range(32):
+		_game.tick(_commands_for_tick(1000 + tick))
+
+	var below := 0
+
+	for player in _game.players():
+		if player.controller.state.position.y < new_map.floor_y - 1.0:
+			below += 1
+
+	_check(
+		below == 0,
+		"nobody fell through the new floor",
+		"%d below it" % below
+	)
+
+	director.queue_free()
+	remove_child(director)
+
+
+# --- Monsters --------------------------------------------------------------
+
+## dot-npc, dot-npc-ai and dot-npc-ai-director, over this game's own geometry.
+##
+## [b]Every one of the three passes its own suite with the other two absent, and with
+## no combat layer at all.[/b] What is untested anywhere else is the joins: navigation
+## generated from a map that is a list of boxes rather than a scene, a brain reaching
+## the game through the registry because it was loaded from a path and could not be
+## handed anything, and a monster registered with dot-combat in an id space it must
+## never share with a player.
+func _test_horde() -> void:
+	_group("monsters")
+
+	var catalogue := ArenaNpcs.catalogue()
+	_check(catalogue.size() == 3, "three monsters are catalogued")
+
+	var bad := PackedStringArray()
+
+	for def in catalogue.npcs:
+		var valid := def.validate()
+
+		if not valid.ok:
+			bad.append("%s: %s" % [String(def.id), valid.error.message])
+		elif not ResourceLoader.exists(def.scene_path):
+			bad.append("%s has no scene" % String(def.id))
+		elif not ResourceLoader.exists(def.brain_script_path):
+			bad.append("%s has no brain" % String(def.id))
+
+	_check(bad.is_empty(), "and every one has a scene and a brain that exist", ", ".join(bad))
+
+	# --- Navigation -------------------------------------------------------
+
+	var nav := ArenaNpcs.nav_for(_game.map)
+	var nav_ok := nav.validate()
+	_check(nav_ok.ok, "navigation generates from the map's boxes", str(nav_ok.error))
+	_check(nav.point_count() > 32, "with a usable number of points", "%d" % nav.point_count())
+	_check(nav.edge_count() > 0, "and edges between them", "%d" % nav.edge_count())
+
+	# The digest is what tells "a graph for this map" from "a graph for a map with the
+	# same name". A graph that matched a map whose geometry moved is a graph whose
+	# monsters walk through the walls somebody added since.
+	_check(
+		nav.matches(ArenaNpcs.digest_of(_game.map)),
+		"and it matches the geometry it was built from"
+	)
+
+	var other := ArenaMap.by_id(&"dm_atrium" if _game.map.id == &"dm_box" else &"dm_box")
+	_check(
+		not nav.matches(ArenaNpcs.digest_of(other)),
+		"and does not match a different map's"
+	)
+
+	# No graph point may have a monster standing in a solid. A generator that put them
+	# there would produce paths straight through the pillars, and an NPC walking into
+	# a wall is indistinguishable from an NPC with no path at all.
+	#
+	# [b]Measured half a metre above the point, not at the box's mid-height.[/b] The
+	# first version of this check flattened every point to the middle of each box and
+	# reported 108 failures — every one of them a perfectly good floor point UNDER one
+	# of dm_box's two ledges, which sit at y = 3. Walking beneath a ledge is not
+	# walking through it, and a test that cannot tell the difference fails the
+	# generator for being right.
+	var inside := 0
+
+	for index in nav.point_count():
+		var shins := nav.points[index] + Vector3(0.0, 0.5, 0.0)
+
+		for box in _game.map.boxes:
+			if box.has_point(shins):
+				inside += 1
+				break
+
+	_check(inside == 0, "no navigation point stands inside the level", "%d do" % inside)
+
+	# --- The horde itself -------------------------------------------------
+
+	var horde := ArenaHorde.new()
+	horde.name = "Horde"
+	horde.game = _game
+	add_child(horde)
+
+	var built := horde.setup()
+
+	if not _check(built.ok, "the horde sets up", str(built.error)):
+		horde.queue_free()
+		remove_child(horde)
+		return
+
+	# Off by default. A deathmatch is a deathmatch; monsters are a mode.
+	_check(not horde.enabled, "and spawns nothing until it is turned on")
+
+	horde.tick(1.0 / float(TICK_RATE))
+	_check(horde.count() == 0, "which is exactly what a tick with it off does")
+
+	# --- Spawning by hand -------------------------------------------------
+
+	var somewhere := nav.points[nav.point_count() / 2]
+	var monster := horde.spawn_one(ArenaNpcs.GRUNT, somewhere)
+
+	if not _check(monster != null, "a monster can be placed"):
+		horde.queue_free()
+		remove_child(horde)
+		return
+
+	_check(monster.brain != null, "and it got its brain from a path")
+	_check(
+		monster.brain is DotNpcAiBrain and (monster.brain as DotNpcAiBrain).tree != null,
+		"which built a behaviour tree"
+	)
+
+	# The character is per NPC, seeded from the instance. Twenty monsters sharing one
+	# preset's seed all take the same shot with the same error at the same moment,
+	# which reads as a firing squad rather than as a fight.
+	var brain := monster.brain as DotNpcAiBrain
+	_check(
+		brain.character != null and brain.character.seed_value == monster.instance_id,
+		"and a character seeded from its own instance"
+	)
+
+	# --- The id space -----------------------------------------------------
+
+	var entity := ArenaHorde.entity_id_for(monster)
+	_check(
+		ArenaHorde.is_npc_entity(entity),
+		"a monster's combat entity id is in the monster range",
+		"%d" % entity
+	)
+
+	var clashes := PackedStringArray()
+
+	for player in _game.players():
+		if ArenaHorde.is_npc_entity(player.player_id):
+			clashes.append(str(player.player_id))
+
+	_check(
+		clashes.is_empty(),
+		"and no player id is in it",
+		", ".join(clashes)
+	)
+
+	_check(
+		_game.combat.hitboxes_of(entity) != null
+			and _game.combat.health_of(entity) != null,
+		"a monster is both shootable and damageable"
+	)
+
+	# --- Killing one ------------------------------------------------------
+	#
+	# Through dot-combat, which is the only way a monster is supposed to die here: the
+	# resolver owns armour, the damage type and spawn protection, and a hit that went
+	# straight to DotHealth would skip all three.
+	var killed: Array[int] = []
+	horde.npc_killed.connect(
+		func(_npc: DotNpcInstance, killer: int) -> void: killed.append(killer)
+	)
+
+	var shooter_id := _game.players()[0].player_id if not _game.players().is_empty() else 0
+	var before_npc_kills := (
+		_game.progress.session_values(shooter_id).get_value(ArenaStats.NPC_KILLS, 0.0)
+		if shooter_id > 0 else 0.0
+	)
+
+	# Twice the grunt's health, so one blow is fatal whatever the falloff does.
+	_game.combat.apply_damage(DotDamage.make(
+		shooter_id, entity, 500.0,
+		_game.combat.damage_type(ArenaContent.DAMAGE_BULLET)
+	))
+
+	_check(killed.size() == 1, "shooting a monster kills it", "%d deaths" % killed.size())
+
+	if not killed.is_empty():
+		_check(killed[0] == shooter_id, "and credits whoever shot it")
+
+	# The scoreboard must NOT have heard about it. A monster is not a player, and the
+	# handler used to hand its entity id straight to `DotMatch.report_kill` — which
+	# creates a record keyed on a number no player has ever had.
+	_check(
+		not _game.match_node.scoreboard.has(str(entity)),
+		"and the scoreboard has no row for a monster"
+	)
+
+	if shooter_id > 0:
+		var after_npc_kills := _game.progress.session_values(shooter_id).get_value(
+			ArenaStats.NPC_KILLS, 0.0
+		)
+		_check(
+			after_npc_kills == before_npc_kills + 1.0,
+			"and the kill is counted as a monster kill rather than a player kill",
+			"%d -> %d" % [int(before_npc_kills), int(after_npc_kills)]
+		)
+
+	# A tick, so the spawner actually frees what it reported dead.
+	horde.tick(1.0 / float(TICK_RATE))
+	await get_tree().process_frame
+
+	_check(
+		_game.combat.hitboxes_of(entity) == null,
+		"and dot-combat forgot it when it went"
+	)
+
+	# --- The director -----------------------------------------------------
+
+	horde.enabled = true
+
+	var waves: Array[int] = []
+	horde.wave_spawned.connect(
+		func(_at: Vector3, count: int) -> void: waves.append(count)
+	)
+
+	# Two seconds of simulated time. The director's build-up phase spawns per player
+	# and there are four bots reporting positions, so this is comfortably enough.
+	for step in range(TICK_RATE * 2):
+		horde.tick(1.0 / float(TICK_RATE))
+
+	_check(
+		horde.count() > 0,
+		"the director populates the arena when it is on",
+		"%d monsters, %d waves" % [horde.count(), waves.size()]
+	)
+
+	_check(
+		horde.count() <= ArenaNpcs.limits().world_budget,
+		"and never past the world budget",
+		"%d of %d" % [horde.count(), ArenaNpcs.limits().world_budget]
+	)
+
+	# Every monster must be somewhere a monster can be. `place()` snaps to the graph
+	# and refuses a spawn it cannot snap, so a monster outside the room means the
+	# refusal is not working — and dot-npc's own notes name that exact bug: `snap()`
+	# returns the point it was handed when nothing is near it, so a spawn two hundred
+	# metres off the graph measures as perfect.
+	var stray := 0
+
+	for npc in horde.spawner.all_npcs():
+		var at := npc.position()
+
+		if absf(at.x) > _game.map.extent + 2.0 or absf(at.z) > _game.map.extent + 2.0:
+			stray += 1
+
+	_check(stray == 0, "and every one of them is inside the map", "%d outside" % stray)
+
+	horde.clear()
+	_check(horde.count() == 0, "and the whole horde can be cleared")
+
+	horde.queue_free()
+	remove_child(horde)
+
+
+# --- Siege -----------------------------------------------------------------
+
+## The mode where every addon in this game is live at once.
+##
+## [b]This is the deployment shape the project exists for, one level up.[/b]
+## `headless_match` above runs dot-fps-controller, dot-combat, dot-loadout, dot-match
+## and dot-core together; this adds dot-npc, dot-npc-ai, dot-npc-ai-director,
+## dot-props, dot-stats, dot-achievements and dot-leaderboard on top and plays it. Every
+## one of those passes its own suite with the others absent.
+##
+## A second [ArenaGame] rather than reconfiguring the first: `setup` builds the mode's
+## match rules, teams, damage rules, monsters and props in one pass, and the mode is
+## what decides all five.
+func _test_siege() -> void:
+	_group("siege")
+
+	var mode := ArenaModes.by_id(&"siege")
+
+	if not _check(mode != null, "there is a siege mode"):
+		return
+
+	var valid := mode.validate()
+	_check(valid.ok, "and it validates", str(valid.error))
+	_check(mode.horde and mode.player_props, "and it asks for monsters and props")
+
+	var game := ArenaGame.new()
+	game.name = "Siege"
+	game.tick_rate = TICK_RATE
+	game.score_limit = 3
+	game.time_limit_sec = 0.0
+	game.headless = true
+	game.is_authority = true
+	game.register_service = false
+	game.mode_id = &"siege"
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_box())
+
+	if not _check(ready.ok, "a siege game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.match_node.rules.warmup_sec = 0.0
+	game.match_node.rules.countdown_sec = 0.0
+	game.match_node.rules.respawn_delay_sec = 1.0
+
+	_check(game.horde != null and game.horde.enabled, "the horde is live")
+	_check(game.props != null, "and so are the props")
+
+	# The map's own furniture, owned by nobody. It is placed at setup, so it is there
+	# before a single player joins — which is the point of the distinction between it
+	# and what a player spawns.
+	if game.props != null:
+		_check(
+			game.props.count() == mode.scatter_props,
+			"the map scattered its cover",
+			"%d of %d" % [game.props.count(), mode.scatter_props]
+		)
+
+	for index in range(2):
+		var added := game.add_player(index + 1, "Siege %d" % (index + 1))
+		_check(added.ok, "siege player %d joins" % (index + 1), str(added.error))
+
+	game.start(0)
+	game.tick({})
+	await get_tree().process_frame
+
+	# --- Playing it ------------------------------------------------------
+
+	var monsters_seen := 0
+
+	for tick in range(TICK_RATE * 6):
+		game.tick(_commands_for(game, tick))
+		monsters_seen = maxi(monsters_seen, game.horde.count())
+
+		if tick % 64 == 0:
+			await get_tree().process_frame
+
+	_check(
+		monsters_seen > 0,
+		"monsters arrive while the match is played",
+		"%d at most" % monsters_seen
+	)
+
+	# The one thing a mode with both halves can get wrong that neither half can: a
+	# monster is a combat entity, and if it were on the scoreboard the score limit
+	# would be reached by something nobody killed.
+	var rows := game.match_node.scoreboard.players().size()
+	_check(
+		rows <= 2,
+		"and none of them is on the scoreboard",
+		"%d rows for 2 players" % rows
+	)
+
+	# --- Props a player spawns -------------------------------------------
+
+	var before := game.props.count()
+	var made := game.props.spawn_for(
+		1, ArenaProps.CRATE, Vector3(0.0, game.map.floor_y + 2.0, 4.0)
+	)
+
+	_check(made != null, "a player can spawn a prop in this mode")
+	_check(game.props.count() == before + 1, "and it is in the world")
+
+	if made != null:
+		# The catalogue's mass, on the body. dot-props puts it there at spawn rather
+		# than leaving it to whatever the scene was saved with — the bug being that
+		# `mass` is otherwise read in exactly one place, against the grab limit, so a
+		# prop is refused for being heavy and then thrown like a beach ball.
+		var body := made.body()
+		_check(
+			body != null and absf(body.mass - ArenaProps.catalogue().get_prop(
+				ArenaProps.CRATE
+			).mass) < 0.01,
+			"with the catalogue's mass rather than the scene's",
+			"%.1f kg" % (body.mass if body != null else -1.0)
+		)
+
+	# The budget. Twelve is the per-player limit and the interval is three quarters of
+	# a second, so this asks for far more than either allows and checks that neither
+	# gave way — a budget nothing enforces is the shape this family's own sweep for
+	# "settings nothing reads" was built to find.
+	for attempt in range(40):
+		game.props.tick(1.0)
+		game.props.spawn_for(1, ArenaProps.CRATE, Vector3(2.0, 3.0, 2.0))
+
+	var mine := game.props.spawner.player_count(&"1")
+	_check(
+		mine <= 12,
+		"and the per-player budget holds",
+		"%d props for one player" % mine
+	)
+
+	_check(game.props.undo(1), "undo takes one back")
+
+	# --- Leaving ---------------------------------------------------------
+
+	game.remove_player(1)
+	_check(
+		game.props.spawner.player_count(&"1") == 0,
+		"and a player who leaves takes their props with them"
+	)
+
+	game.queue_free()
+	remove_child(game)
+
+
+## Bot commands for an arbitrary game. The same aim-and-hold as `_commands_for_tick`,
+## which is bound to `_game`.
+func _commands_for(game: ArenaGame, tick: int) -> Dictionary:
+	var commands := {}
+
+	for player in game.players():
+		if not player.is_alive():
+			continue
+
+		var move := DotFpsCommand.new()
+		move.move = Vector2(
+			sin(float(tick) * 0.07 + float(player.player_id)),
+			cos(float(tick) * 0.05)
+		)
+		move.yaw = fmod(float(tick) * 1.7 + float(player.player_id) * 90.0, 360.0)
+		move.pitch = 0.0
+
+		var fire := DotCombatCommand.new()
+		fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+		fire.yaw = move.yaw
+		fire.pitch = move.pitch
+
+		move.sanitise()
+		fire.sanitise()
+		commands[player.player_id] = [move, fire]
+
+	return commands
 
 
 func _test_geometry_held() -> void:

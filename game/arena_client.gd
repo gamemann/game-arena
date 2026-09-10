@@ -36,6 +36,14 @@ var net: DotNetManager = null
 var bridge: ArenaNetBridge = null
 var link: Node = null
 
+## Chat, voice and map changes: the client halves of what [ArenaServices] and
+## [ArenaMapDirector] run on the server.
+##
+## [b]Null offline, deliberately.[/b] All three are about a server that is telling this
+## client something, and an offline game has nobody to be told by. Building them anyway
+## would open a microphone in a single-player match.
+var extras: ArenaClientExtras = null
+
 ## Play alone even when a link is available. `--offline`.
 @export var force_offline: bool = false
 
@@ -78,6 +86,9 @@ var _bots: Dictionary = {}
 
 ## The settings and bindings the menus are generated from.
 var _ui_config: DotUiConfig = null
+
+## The meshes of the map currently drawn. Replaced on a map change.
+var _level: Node3D = null
 
 
 func _ready() -> void:
@@ -131,8 +142,10 @@ func _ready() -> void:
 		DotLog.result(CHANNEL, "the arena could not be built", built)
 		return
 
-	# The world, which the server does not need and a player cannot do without.
-	add_child(game.map.to_scene())
+	# The world, which the server does not need and a player cannot do without. Held,
+	# because a map change has to take it away again — see `_on_map_changed`.
+	_level = game.map.to_scene()
+	add_child(_level)
 	_light()
 
 	_sampler = DotFpsSampler.new(ArenaPlayer.arena_tunables())
@@ -254,6 +267,19 @@ func _build_netcode() -> DotResult:
 	bridge.open_link(link)
 	net.messages.seal()
 
+	# The client halves. Built here rather than in `_ready` because every one of them
+	# needs the bridge, and there is no bridge offline.
+	extras = ArenaClientExtras.new()
+	extras.name = "Extras"
+	add_child(extras)
+
+	var extra := extras.attach(bridge, game)
+	DotLog.result(CHANNEL, "the client's chat, voice and map layers", extra)
+
+	extras.line_received.connect(_on_chat_line)
+	extras.map_changing.connect(_on_map_changing)
+	extras.map_changed.connect(_on_map_changed)
+
 	bridge.hello_received.connect(_on_hello)
 	bridge.notice_received.connect(_on_notice)
 	bridge.kill_received.connect(_on_kill)
@@ -280,6 +306,42 @@ func _build_netcode() -> DotResult:
 func _say_ready() -> void:
 	if bridge != null:
 		bridge.send_request(ArenaEvents.Ask.READY)
+
+
+## A chat line, on the HUD's notice line.
+##
+## The HUD is the whole chat window this game has, which is a level of ambition rather
+## than an oversight: a scrolling window with an input field is a screen, and a screen
+## is [DotScreenStack]'s. [DotChatClient] is holding the history the moment somebody
+## writes one.
+func _on_chat_line(text: String) -> void:
+	if hud != null:
+		hud.notice(text)
+
+
+func _on_map_changing(map: DotMapDef) -> void:
+	if hud != null:
+		hud.notice("Changing map to %s…" % map.name_or_id())
+
+
+## The world was replaced under this client.
+##
+## [b]The meshes have to go with it, and nothing else does that.[/b]
+## `ArenaGame.change_map` replaces the collision, the trace and the match; the level a
+## player can SEE is a scene this client added, and a client that rebuilt one and not
+## the other would walk through walls it can see and stop at walls it cannot.
+func _on_map_changed(map: DotMapDef) -> void:
+	if _level != null and is_instance_valid(_level):
+		remove_child(_level)
+		# free(), not queue_free(): the new one goes in on this line and a deferred
+		# free would leave two levels drawn over each other for a frame.
+		_level.free()
+
+	_level = game.map.to_scene()
+	add_child(_level)
+
+	if hud != null:
+		hud.notice("Now playing %s." % map.name_or_id())
 
 
 func _on_hello(info: Dictionary) -> void:
@@ -490,6 +552,13 @@ func _process(delta: float) -> void:
 		# this runs. Remote players otherwise step at the snapshot rate.
 		net.interpolate_frame()
 
+	# Where every speaker is, so a proximity voice comes from the player who said it.
+	# The server already decided who hears whom by distance; playing the result from
+	# nowhere in particular throws away the only thing that made the distance worth
+	# computing.
+	if extras != null:
+		extras.pump_voice(delta)
+
 	# A position report, once a second, for as long as the client has a player.
 	#
 	# [b]There is no other way to see where a browser client thinks it is.[/b] Every
@@ -600,7 +669,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			_sampler.handle_event(event)
 		return
 
-	if not (event is InputEventKey) or not event.is_pressed() or event.is_echo():
+	if not (event is InputEventKey) or event.is_echo():
+		return
+
+	# Push to talk, and it is handled BEFORE the "is this a press" filter above,
+	# because a talk key needs the release as much as the press: a key whose release
+	# nobody reads is a microphone that never closes.
+	if (event as InputEventKey).physical_keycode == KEY_V:
+		if extras != null:
+			extras.set_talking(event.is_pressed())
+
+		return
+
+	if not event.is_pressed():
 		return
 
 	match (event as InputEventKey).physical_keycode:

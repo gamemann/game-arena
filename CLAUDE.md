@@ -5,14 +5,28 @@ is what is specific to using them together.
 
 ## Why this project exists
 
-Nine addons each pass their own suite, and **every one of those suites runs one addon
+Every addon passes its own suite, and **every one of those suites runs one addon
 with the others absent**. dot-platform makes the point in its own notes and it is the
 lesson of every bug this family has found: *a code path only one deployment shape
 reaches is a code path nothing has run.*
 
-game-arena is the deployment shape where dot-fps-controller, dot-combat, dot-loadout,
-dot-match and dot-ui are all present at once. It is a game, and it is also the only
-test of the joins between them.
+game-arena is the deployment shape where **twenty-six addons** are present at once. It
+is a game, and it is also the only test of the joins between them.
+
+```
+the fight        dot-fps-controller  dot-combat  dot-loadout  dot-match
+what you keep    dot-stats  dot-achievements  dot-leaderboard
+the world        dot-map  dot-props  dot-npc  dot-npc-ai  dot-npc-ai-director
+what plays next  dot-vote
+who you are      dot-auth  dot-user  dot-user-avatar  dot-platform  dot-cloud
+the server       dot-server  dot-net  dot-chat  dot-voice  dot-moderation
+                 dot-browser (its query half)
+the screen       dot-ui
+everything       dot-core
+```
+
+**Each of those is a few lines, and each is a few lines *because* the addons refuse to
+know about each other.** The list of joins is under "Where the seams are".
 
 ## One description, three representations
 
@@ -79,7 +93,18 @@ addons refuse to know about each other:
 | match → loadout | `ArenaGame._on_respawn_due` → `_apply_loadout_deferred` |
 | movement → combat | `arsenal.movement/airborne/crouched` pushed from `DotFpsState` |
 | match → ui | `ArenaHud._on_kill`, a `DotKillFeed.Entry` → coloured fragments |
-| game → server | `ArenaModule`, the only file that names dot-server |
+| game → server | `ArenaModule`, one of the two files that name dot-server |
+| combat → stats | `ArenaProgress._on_shot_resolved` / `_on_killed`, a kill feed entry to four counters |
+| stats → achievements | `DotAchievementStatsLink`, which **differences** rather than connecting |
+| stats → leaderboard | `ArenaBoards.submit_session`, once per session rather than per kill |
+| map → game | `ArenaMapSession.change_to_map` → `ArenaGame.change_map` |
+| map → clients | `DotMapSyncHost.send_fn` → `ArenaNetLink.send_map` |
+| vote → map | `ArenaVoteSource.apply`, routed on a `map:` / `mode:` prefix |
+| npc → combat | `ArenaHorde._register_combat`, hitboxes and health under one entity id |
+| npc → game | the brain reaches `ArenaHorde` through `DotRegistry`, never by name |
+| chat → server | `ArenaServices._on_player_chat`, which **cancels** dot-server's own |
+| voice → wire | `ArenaNetLink.send_voice`, on a channel of its own |
+| moderation → everything | two registry names nobody imports: `dot_mute_source`, `dot_ban_source` |
 
 `_on_entity_killed` passes `""` for a world death rather than `"0"`. dot-match reads an
 empty killer key as "the world"; `"0"` would create a scoreboard record for a player
@@ -253,6 +278,146 @@ non-existent resource", the module refuses to load because no game registered it
 and the server reports "the game loaded but its module did not". Every other game in
 the family already keeps its server scene's script in `game/`.
 
+## Progression, and the one line that is not a signal connection
+
+`ArenaStats` declares the numbers, `ArenaAwards` is a document of rules over them,
+`ArenaBoards` orders them, and `ArenaProgress` is the node that joins all three to the
+game. The ids are the contract and there is exactly one copy of them.
+
+**The link between dot-stats and dot-achievements is not `stats.recorded.connect(...)`,
+and writing it that way compiles, runs, and is wrong.** dot-stats' `recorded` carries
+the player's *session* total — its whole design is that a session is what a server
+counts and a delta is what it reports — and an achievement is about a lifetime. Wired
+straight through, the running total is added to the lifetime total on every kill: two
+after the second, five after the third, nine after the fourth, and 5,050 after a
+hundred. `DotAchievementStatsLink` exists for exactly that and is what is used;
+`headless_match` asserts that a player's lifetime kills equal their session kills,
+which is the smallest check that can tell the two wirings apart.
+
+Two other decisions worth naming:
+
+- **A board is written when a player leaves, not when they score.** A submission reads
+  the store, compares, writes and re-sorts; six of those per kill on a sixteen-player
+  server is a sort per kill per board for a number nobody is looking at. A session is
+  also the natural unit, because it is when a player's totals stop moving.
+- **Accuracy and kill/death are derived, never stored.** A stored quotient is a third
+  number that can disagree with the two it came from, and this family has shipped that
+  disagreement often enough to know the price.
+
+## Changing the map, which used to be impossible here
+
+`ArenaGame.setup` builds the combat trace, the match node and every spawn point as
+children in one pass and **is not re-entrant** — calling it twice leaves two matches,
+two combat managers and two sets of spawns in one tree, all connected to the same
+signals, with the second of each quietly winning. So the map was chosen at boot with
+`-- --map <id>` and `arena_maps` listed what could be typed.
+
+`ArenaGame.change_map` is the half that makes a change possible: **the teardown is the
+feature.** Every join this game exists to test is a signal connection, and a connection
+to a freed object is an error at the next emit rather than at the disconnect that was
+skipped — which is why `ArenaProgress` has `unbind_world` / `bind_world` rather than one
+`attach`.
+
+What survives a change and what does not:
+
+- **The players do.** Their nodes, their statistics and their loadouts are about a
+  person on this server, not about a room. They are re-bodied against the new geometry
+  — `ArenaPlayer.rebind_map`, and **assigning the body is not enough**, because
+  `DotFpsMotor` holds a reference to the one it was built with.
+- **The match does not.** A new map is a new match.
+- **The combat manager does not**, because its trace *is* the map.
+
+`ArenaMapDirector` is the half that makes it reach the players: a catalogue, a rotation
+with a cooldown, a map clock with warnings and rtv, and `DotMapSyncHost` — announce,
+wait for every peer, swap, tell them to load. Without the last of those a `changelevel`
+is a change in one process and every client carries on playing a world that no longer
+exists, which dot-map's own notes call "the structural one".
+
+**Two bugs came out of wiring the client half, and both looked like something else.**
+`DotMapSyncClient` accepts an announced map only if it is in *its own* catalogue at the
+same version, or is delivered content whose scene resolves inside its own mount. Built
+with no session it has no catalogue, so every arena map was refused with "a host may not
+send a map that is not delivered content" — which is the correct answer to the question
+it was being asked. And `DotMapSyncClient.changed` carries one argument where
+`DotMapSession.changed` carries two, which is a runtime error on the first map change
+and on no other occasion.
+
+## Maps are content, and this game's maps are code
+
+`ArenaMaps.catalogue()` builds a `DotMapCatalogue` from `ArenaMap.ids()` — **not from a
+second list**, which is this tree's most repeated bug and has now happened to four
+files. `DotMapDef.scene_path` names `arena_map.gd`, the script that actually produces
+the map, and `meta.builder` says so out loud.
+
+That is not a workaround. Everything dot-map does with a map def — rotation, cooldowns,
+nominations, ballots, the sync protocol — works on the id and the version and never
+opens the scene. The only thing that reads `scene_path` is `DotMapLoader`, and
+`ArenaMapSession` overrides the load for a built-in map and falls through to `super` for
+a delivered one. The path is a real file rather than a `code://` sentinel so a
+validator can check it.
+
+## Monsters, and a fourth id space
+
+`siege` is the mode where dot-npc, dot-npc-ai, dot-npc-ai-director and dot-props are all
+live at once. It is a real game — monsters make the middle of the map expensive to hold,
+and movable cover is the only answer a player can build — and it is also the only place
+the four run together.
+
+**A monster's combat entity id is its instance id plus `ArenaHorde.ENTITY_BASE`.**
+`ArenaPlayer` uses the dot-server session id as its entity id, which is a small integer;
+a monster using its own would eventually collide with one, and the symptom of that
+collision is a shot at a monster killing a player. That is the fourth id space in this
+project and the only one that is not the player id, which is why it is a constant.
+
+Two things fell out of putting a non-player entity into dot-combat, and both were bugs
+that had been latent since the combat manager was wired:
+
+- **`_on_entity_killed` handed any entity id to `DotMatch.report_kill`**, which creates
+  a scoreboard record keyed on a number no player has ever had. `non_player_killed` is
+  the signal now, and `ArenaHorde` is what listens to it.
+- **`_on_damage_applied` did the same to `report_damage`**, and `ArenaProgress` would
+  have filed a stats session, a lifetime progress row and eventually a leaderboard entry
+  against a monster.
+
+Three more the suite found, all in the wiring rather than in the addons:
+
+- **`DotNpcAiBrain._npc_ready` seeds the character and puts it on the context *before*
+  calling `_build`.** A brain that assigns `character` inside `_build` gets neither:
+  every monster of a kind shares its preset's seed, so all of them roll the same aim
+  error at the same moment — the firing squad dot-npc-ai warns about — and
+  `ctx.character` stays null for every node in the tree. Nothing errors.
+- **`DotNpcSpawner._ready` builds its own `DotNpcSenses` when it finds none**, so
+  assigning one after `add_child` leaves it configured and read by nobody.
+- **The map's furniture shares a player's budget.** `may_spawn` checks
+  `per_player_budget` against whatever owner it is given and the empty owner is an
+  owner like any other, so eight props costing fourteen against a budget of twelve
+  placed seven and refused the eighth silently.
+
+## Chat, voice and moderation
+
+`ArenaServices` is **the second file that names dot-server**, and the rule is now "two
+files do, and here is what each is for": `ArenaModule` bridges a game to a server;
+`ArenaServices` bridges a server to three addons that are not about the game at all.
+
+**dot-chat and dot-server's own chat are not two chat systems here**, because exactly
+one of them delivers a line. The `player_chat` event is hooked and *cancelled*, the text
+goes to `DotChatRouter`, and the router's `send_fn` hands each recipient's line back to
+dot-server's manager to put on the wire. What that buys is a radius channel, a whisper,
+markup and invisible-character stripping, per-channel history, a backlog for a joining
+player, and `!` commands the game can claim.
+
+**Moderation is built first, and the order is load-bearing.** It publishes
+`dot_mute_source` on `_ready`, and both routers look that name up when they start — a
+chat router that started first would find nothing, warn once, and enforce no gag for the
+life of the server.
+
+**Voice has its own channel on the link.** A talk spurt is fifty frames a second per
+speaker relayed to every listener; on the state channel it would sit in the same ordered
+queue as the snapshots, so somebody holding the talk key would add a frame of latency to
+everybody's movement. The speaker id is stamped from the transport's sender and never
+read out of the payload — a client that could name its own could put words in anybody's
+mouth, and the only symptom is words coming out of the wrong player.
+
 ## Two examples, two deployment shapes
 
 **`headless_match`** drives an `ArenaGame` directly. No socket, no netcode, no
@@ -298,7 +463,13 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-84 + 104 + 26 checks.
+186 + 116 + 65 checks.
+
+**Filter `--check-only` for the lines that mean a parse failed, not against the lines
+that do not.** `tools/check.sh` elsewhere in this family subtracts shutdown noise by
+exact wording and went stale the moment 4.7 reworded "ObjectDB instances leaked at
+exit" — a guard that cries wolf about correct files is a guard people stop reading.
+Grep for `SCRIPT ERROR`, `Parse Error` and `Failed to load script` instead.
 
 `tools/screenshot.sh <map>` renders a map from three angles into `screenshots/`
 (gitignored). It needs `xvfb-run`, because it needs a real rendering context — under
@@ -329,10 +500,14 @@ and cost two timed-out runs before the log was read.
   generates its sound rather than shipping any, and is the shape this would take.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
-- **A hot `changelevel`.** There are two maps now (`dm_box`, `dm_atrium`) and
-  `ArenaMap.by_id` / `ids()` address them, but `ArenaGame.setup` builds the combat
-  trace, the match node and every spawn point as children in one pass and is not
-  re-entrant — calling it twice would leave two matches and two sets of spawns in one
-  tree. So the map is chosen at boot with `-- --map <id>` and `arena_maps` lists what
-  can be typed. Changing it under live players means tearing that down and telling
-  every client, which is dot-map's `DotMapSyncHost` job rather than a line here.
+- **A chat window.** `DotChatClient` holds the history, the channels and the unread
+  counts on the client the moment anybody writes one; what the player gets today is
+  the HUD's notice line. A scrolling window with an input field is a `DotScreen`, and
+  nobody has written it.
+- **A server browser screen.** dot-browser's client half — sources, filters,
+  favourites, history — is not wired into `ArenaClient`. The *server* half is:
+  `ArenaModule` contributes a query provider so a browser has something to read, and
+  `dedicated` asserts what it says. Nothing has yet asked a real `DotServer` for it.
+- **A viewmodel, and sound.** `ArenaClient` has the camera rig, the input sampling, the
+  renderer, the HUD and the menus. It has no audio whatsoever beyond voice chat, and
+  nothing is drawn for the weapon in your own hands.

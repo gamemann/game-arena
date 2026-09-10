@@ -1,0 +1,186 @@
+class_name ArenaAvatars
+extends RefCounted
+
+## What a player looks like, as a document a server can check without loading a mesh.
+##
+## [b]The point of dot-user-avatar is that an avatar is data, not a model.[/b] A server
+## validates "body: trooper, head: boxy, crest: fin, tinted these three colours"
+## against a schema and a set of entitlements, and never opens a scene to do it — which
+## is what lets a headless dedicated server refuse a cosmetic a player is not entitled
+## to without shipping the cosmetic.
+##
+## [b]One schema, two sources of parts.[/b] The six parts here ship in this build under
+## `res://avatars/`; a delivered part names dot-cloud content instead, and
+## [DotAvatarBuilder] does not care which it got. A player with none of their own gets
+## [method stock_avatar], which is a real document over the same schema rather than a
+## special case — so a server that has never spoken to a backbone draws everybody, and
+## the day it does, nothing about how a player is drawn changes.
+##
+## [b]The tint is an instance shader parameter, and that is the whole reason
+## `arena_tint.gdshader` exists.[/b] A [StandardMaterial3D] is a resource, so two
+## players wearing the same part share it — recolouring one recolours the other, and
+## the symptom is a team going the wrong colour when somebody joins.
+
+const SCHEMA_ID := &"arena_stock"
+
+const SLOT_BODY := &"body"
+const SLOT_HEAD := &"head"
+const SLOT_CREST := &"crest"
+
+const BODIES: Array[StringName] = [&"arena_body_trooper", &"arena_body_scout"]
+const HEADS: Array[StringName] = [&"arena_head_round", &"arena_head_boxy"]
+const CRESTS: Array[StringName] = [&"arena_crest_fin", &"arena_crest_ring"]
+
+## Colours a stock character gets, chosen by hashing the player id.
+##
+## Hashed rather than random, so a player is the same colour on every machine and
+## every visit. A colour that changed per session reads as "that is a different
+## person", which is the one thing an avatar exists to prevent.
+const PALETTE: Array[Color] = [
+	Color(0.85, 0.30, 0.25), Color(0.25, 0.60, 0.90), Color(0.35, 0.75, 0.40),
+	Color(0.90, 0.70, 0.20), Color(0.70, 0.40, 0.85), Color(0.90, 0.50, 0.65),
+	Color(0.30, 0.80, 0.80), Color(0.80, 0.55, 0.30),
+]
+
+
+static func schema() -> DotAvatarSchema:
+	var out := DotAvatarSchema.new()
+	out.id = SCHEMA_ID
+	out.version = 1
+
+	var body := DotAvatarSlot.new()
+	body.id = SLOT_BODY
+	body.display_name = "Body"
+	body.required = true
+	body.default_part = BODIES[0]
+	body.layer = 10
+	out.slots.append(body)
+
+	var head := DotAvatarSlot.new()
+	head.id = SLOT_HEAD
+	head.display_name = "Head"
+	head.required = true
+	head.default_part = HEADS[0]
+	head.layer = 20
+	out.slots.append(head)
+
+	# Not required. A slot that every avatar must fill is a slot with no "none"
+	# option, and a crowd where everybody has a crest looks like a uniform rather than
+	# like a set of people.
+	var crest := DotAvatarSlot.new()
+	crest.id = SLOT_CREST
+	crest.display_name = "Crest"
+	crest.required = false
+	crest.layer = 30
+	out.slots.append(crest)
+
+	for id in BODIES:
+		out.parts.append(_part(id, SLOT_BODY))
+
+	for id in HEADS:
+		out.parts.append(_part(id, SLOT_HEAD))
+
+	for id in CRESTS:
+		out.parts.append(_part(id, SLOT_CREST))
+
+	return out
+
+
+static func _part(id: StringName, slot: StringName) -> DotAvatarPart:
+	var out := DotAvatarPart.new()
+	out.id = id
+	out.slot = slot
+	out.display_name = String(id).replace("arena_", "").capitalize()
+	out.colour_channels = 1
+	# Free and shipped in this build: no content id, so the catalogue resolves it
+	# straight to res://avatars/<id>.tscn without asking dot-cloud for anything.
+	out.free = true
+	return out
+
+
+static func catalogue() -> DotAvatarCatalogue:
+	var out := DotAvatarCatalogue.new()
+	out.builtin_prefix = "res://avatars/"
+	out.builtin_suffix = ".tscn"
+	return out
+
+
+## An avatar for a player who has none. Deterministic in the id.
+static func stock_avatar(player_key: StringName) -> DotAvatar:
+	var seed_value := absi(hash(String(player_key)))
+	var avatar := DotAvatar.make(SCHEMA_ID)
+
+	avatar.set_part(SLOT_BODY, BODIES[seed_value % BODIES.size()])
+	avatar.set_part(SLOT_HEAD, HEADS[(seed_value / 7) % HEADS.size()])
+
+	if seed_value % 3 == 0:
+		avatar.set_part(SLOT_CREST, CRESTS[(seed_value / 13) % CRESTS.size()])
+
+	var body_colour := PALETTE[seed_value % PALETTE.size()]
+
+	avatar.set_colour(SLOT_BODY, 0, body_colour)
+	avatar.set_colour(SLOT_HEAD, 0, body_colour.lightened(0.3))
+
+	if avatar.has_slot(SLOT_CREST):
+		avatar.set_colour(
+			SLOT_CREST, 0, PALETTE[(seed_value / 3) % PALETTE.size()]
+		)
+
+	return avatar
+
+
+## Draws an avatar onto a rig. Returns how it went.
+##
+## [b]`conform` edits the document in place, so it is run on a copy.[/b] Otherwise a
+## server that could not draw one part would quietly rewrite a player's own saved
+## avatar to the version it could draw — and the player would find their hat gone the
+## next time they logged in, having changed nothing.
+##
+## A part from a newer client is dropped rather than refused: nobody is invisible
+## because their crest is from the future.
+static func apply(
+	avatar: DotAvatar,
+	rig: Node3D,
+	p_schema: DotAvatarSchema,
+	p_catalogue: DotAvatarCatalogue
+) -> DotResult:
+	if avatar == null or rig == null or p_schema == null:
+		return DotResult.fail(DotError.CODE_INVALID, "Nothing to build.")
+
+	var document := avatar.duplicate_avatar()
+	var conformed := p_schema.conform(document, null)
+
+	if not conformed.ok:
+		return conformed.wrap("The avatar could not be conformed to the schema.")
+
+	var steps := DotAvatarBuilder.plan(document, p_schema, p_catalogue)
+
+	return DotAvatarBuilder.apply(steps, rig, null)
+
+
+## The attachment nodes an avatar is built into, one per slot.
+##
+## [b]Named for the slots, because that is the whole contract between a schema and a
+## rig.[/b] [DotAvatarBuilder] looks for a child named after each slot and puts the
+## part there; a rig with a node called `Head` and a schema with a slot called `head`
+## is a rig that draws bodies and nothing else, silently.
+static func make_rig() -> Node3D:
+	var rig := Node3D.new()
+	rig.name = "Rig"
+
+	var body := Node3D.new()
+	body.name = String(SLOT_BODY)
+	body.position = Vector3(0.0, 0.65, 0.0)
+	rig.add_child(body)
+
+	var head := Node3D.new()
+	head.name = String(SLOT_HEAD)
+	head.position = Vector3(0.0, 1.45, 0.0)
+	rig.add_child(head)
+
+	var crest := Node3D.new()
+	crest.name = String(SLOT_CREST)
+	crest.position = Vector3(0.0, 1.72, 0.0)
+	rig.add_child(crest)
+
+	return rig

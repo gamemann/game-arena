@@ -49,6 +49,9 @@ func _run() -> void:
 	if built:
 		_test_module_loaded()
 		_test_client_spawn()
+		await _test_services()
+		_test_maps_and_vote()
+		_test_query()
 		_test_commands()
 		_test_unload()
 
@@ -178,6 +181,256 @@ func _test_module_loaded() -> void:
 
 	_check(
 		_server.console.find_cvar("arena_scorelimit") != null, "and its cvar"
+	)
+
+
+# --- The rest of the server -------------------------------------------------
+
+## Chat, voice, moderation and the identity chain, on a real server.
+##
+## [b]Every one of these five addons passes its own suite with a stub host.[/b] What is
+## untested anywhere else is that they can all be brought up in one process against one
+## [DotServer] — and specifically that dot-moderation is up before the two routers that
+## look up its `dot_mute_source`, because a router that starts first finds nothing,
+## warns once, and then enforces no gag for the life of the server.
+func _test_services() -> void:
+	print("")
+	print("chat, voice and moderation")
+
+	var module := _server.modules.get_module("arena") as ArenaModule
+
+	if not _check(module != null and module.services != null, "the services layer is up"):
+		return
+
+	var services := module.services
+
+	_check(services.chat != null, "chat is running")
+	_check(services.voice != null, "voice is running")
+	_check(services.moderation != null, "moderation is running")
+
+	# The registry names, which are how the three reach each other without importing
+	# one another. dot-moderation publishes both; dot-chat's router and dot-voice's
+	# router each look one of them up.
+	_check(
+		DotRegistry.get_service(DotModerationManager.MUTE_SERVICE) != null,
+		"and it published a mute source for the two routers to find"
+	)
+	_check(
+		DotRegistry.get_service(DotModerationManager.BAN_SERVICE) != null,
+		"and a ban source for the admission check"
+	)
+
+	# Four channels, and the one that matters is the radius channel: it is the only
+	# one whose audience the players can change by moving.
+	var ids := services.chat.channel_ids()
+	_check(
+		ids.size() == 4,
+		"four chat channels are installed",
+		", ".join(PackedStringArray(ids.map(func(x: StringName) -> String: return String(x))))
+	)
+	_check(
+		services.chat.has_channel(ArenaServices.CH_NEAR),
+		"including a radius channel"
+	)
+
+	var near := services.chat.channel(ArenaServices.CH_NEAR)
+	_check(
+		near != null and near.scope == DotChatChannel.Scope.RADIUS,
+		"which really is scoped by distance"
+	)
+
+	# The rules. Markup escaping is not cosmetic: a chat line is drawn by a client
+	# that may render BBCode, so a player who can write markup can write something
+	# that looks like a server announcement.
+	_check(services.chat.rules.escape_markup, "markup is escaped")
+	_check(services.chat.rules.strip_invisible, "and invisible characters stripped")
+
+	var dirty := DotChatFilter.sanitise(
+		"[color=red]server[/color]: free stuff", services.chat.rules
+	)
+	_check(
+		dirty.ok and not String(dirty.value).contains("[color=red]"),
+		"and a player cannot write a colour tag",
+		str(dirty.value)
+	)
+
+	# --- Moderation, which is the whole reason it is not dot-server's mute ---
+	#
+	# dot-server's mute is two booleans on a session object and a session dies with
+	# its connection, so a muted player reconnects and talks. A punishment is a record.
+	var subject := DotPunishmentSubject.for_uid("4242")
+
+	# Awaited, and typed. A punishment store may be a shared database behind a
+	# community's four servers — the whole reason both halves of the interface are
+	# allowed to be coroutines — and an un-awaited one returns at its first suspension.
+	var issued: DotResult = await services.moderation.issue(
+		DotPunishment.Kind.GAG, subject, "testing", "suite", 3600
+	)
+
+	_check(issued.ok, "a gag can be issued", str(issued.error))
+	_check(
+		services.moderation.is_gagged_key(subject),
+		"and it is held against the person rather than the connection"
+	)
+
+	# The unconfigured scope is the case a one-server community always has, and it is
+	# the one dot-moderation once had silently enforcing nothing.
+	_check(
+		services.server_scope == "",
+		"this server has no scope, which is the case that has to work"
+	)
+
+	# Revoked by ID, not by subject: one person may hold a gag, a mute and a ban at
+	# once, and "lift the punishment on this person" is not a question with one answer.
+	var record: DotPunishment = issued.value if issued.ok else null
+	var lifted: DotResult = (
+		await services.moderation.revoke(record.id, "suite", "over")
+		if record != null
+		else DotResult.fail(DotError.CODE_STATE, "nothing was issued")
+	)
+	_check(lifted.ok, "and it can be lifted again", str(lifted.error))
+	_check(
+		not services.moderation.is_gagged_key(subject),
+		"leaving nothing behind"
+	)
+
+	# --- Identity ---------------------------------------------------------
+
+	if _check(module.identity != null, "the identity layer is up"):
+		_check(module.identity.platform != null, "with a platform hub")
+		_check(
+			DotRegistry.get_node_service(DotPlatformHub.SERVICE) != null,
+			"registered, which is how dot-platform's module finds it"
+		)
+		_check(
+			_server.modules.has_module("platform"),
+			"and dot-platform's own module is loaded beside this one"
+		)
+
+		# Never null, for anybody. A caller that had to branch on "did this player
+		# have an avatar" is a caller that draws nothing for a guest.
+		var stock := module.identity.avatar_for("arena-player-00000007")
+		_check(stock != null, "every player has an avatar, their own or a stock one")
+
+		var conformed := ArenaAvatars.schema().conform(stock, null)
+		_check(
+			conformed.ok,
+			"and a stock avatar conforms to the schema it was built from",
+			str(conformed.error)
+		)
+
+
+## dot-map and dot-vote, on a server with a rotation and a ballot.
+func _test_maps_and_vote() -> void:
+	print("")
+	print("maps and the vote")
+
+	var module := _server.modules.get_module("arena") as ArenaModule
+
+	if not _check(module != null and module.maps != null, "the map director is up"):
+		return
+
+	_check(
+		module.maps.current != null and module.maps.current.id == _game.map.id,
+		"and it adopted the map the server booted on"
+	)
+
+	# The sync host has a transport. Without one it announces a change to nobody and
+	# every client carries on playing a map that no longer exists — which is the
+	# absence dot-map's own notes call "the structural one".
+	_check(
+		module.maps.sync != null and module.maps.sync.send_fn.is_valid(),
+		"the map sync host has somewhere to send its announcements"
+	)
+
+	if not _check(module.vote != null, "the vote is up"):
+		return
+
+	var options := module.vote.source.choices()
+	_check(options.size() > 0, "and there is something to vote for", "%d" % options.size())
+
+	# Every choice id says what kind of change it is. A bare id would have to be
+	# looked up in the map catalogue and then in the mode catalogue, which is a lookup
+	# that silently does the wrong thing the day somebody names a mode after a map.
+	var unprefixed := PackedStringArray()
+
+	for choice in options:
+		var text := String(choice.id)
+
+		if not text.begins_with(ArenaVoteSource.MAP_PREFIX) 				and not text.begins_with(ArenaVoteSource.MODE_PREFIX):
+			unprefixed.append(text)
+
+	_check(
+		unprefixed.is_empty(),
+		"and every choice says whether it is a map or a mode",
+		", ".join(unprefixed)
+	)
+
+	# A player types `dm_atrium`, not `map:dm_atrium`. The qualifier resolves against
+	# the ballot's own options rather than guessing.
+	_check(
+		module.vote.director.source.has(StringName("map:dm_atrium")),
+		"dm_atrium is on the ballot"
+	)
+
+	# The cooldown. Two maps ship, so "not in the last five" would leave nothing to
+	# offer — dot-vote caps it against the pool at runtime and the rules ask for one.
+	_check(
+		module.vote.director.rules.cooldown <= 1,
+		"the cooldown fits a two-map catalogue",
+		"%d" % module.vote.director.rules.cooldown
+	)
+
+	# `begin_on_apply` off is what stops one play being counted twice. Two entries in
+	# the history for one play is a "last five" cooldown that is quietly two or three.
+	_check(
+		not module.vote.director.begin_on_apply,
+		"and the director does not announce a change the host already announces"
+	)
+
+	# Opening one. With one player the quorum and `min_players_to_vote` decide whether
+	# it can, so the assertion is that it answers rather than that it succeeds — a
+	# refusal is a legitimate answer and the point is that the clock did not latch.
+	var opened := module.vote.director.open_vote(DotVoteClock.REASON_MANUAL)
+	_check(
+		opened.ok or opened.error != null,
+		"a vote can be asked for and answers either way",
+		"" if opened.ok else opened.error.message
+	)
+
+	if opened.ok:
+		_check(module.vote.is_voting(), "and the ballot is open")
+		module.vote.director.close_vote()
+		_check(not module.vote.is_voting(), "and closes again")
+
+
+## What a server browser is told.
+##
+## [b]dot-browser is the client half of this and it has never asked a real DotServer
+## anything.[/b] This is the server half: a query provider contributing the numbers a
+## person filtering a list actually filters on. Without one, a query says only that the
+## game is called Arena.
+func _test_query() -> void:
+	print("")
+	print("the server browser's half")
+
+	var module := _server.modules.get_module("arena") as ArenaModule
+
+	if module == null:
+		return
+
+	var snapshot := DotQuerySnapshot.new()
+
+	for provider in module._query_providers:
+		provider.call("_contribute", snapshot)
+
+	_check(snapshot.game.has("mode"), "the query says what mode is being played")
+	_check(snapshot.game.has("map"), "and on what map")
+	_check(snapshot.game.has("state"), "and how far through it is")
+	_check(
+		String(snapshot.game.get("map", "")) == String(_game.map.id),
+		"and the map it names is the one that is running",
+		str(snapshot.game.get("map", ""))
 	)
 
 

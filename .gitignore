@@ -13,6 +13,24 @@
 /addons/dot_loadout
 /addons/dot_match
 /addons/dot_ui
+/addons/dot_map
+/addons/dot_leaderboard
+/addons/dot_stats
+/addons/dot_achievements
+/addons/dot_vote
+/addons/dot_props
+/addons/dot_npc
+/addons/dot_npc_ai
+/addons/dot_npc_ai_director
+/addons/dot_auth
+/addons/dot_browser
+/addons/dot_chat
+/addons/dot_cloud
+/addons/dot_moderation
+/addons/dot_platform
+/addons/dot_user
+/addons/dot_user_avatar
+/addons/dot_voice
 
 # Exports
 build/

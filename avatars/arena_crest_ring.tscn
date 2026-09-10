@@ -1,0 +1,14 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Shader" path="res://avatars/arena_tint.gdshader" id="1_shader"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_1"]
+shader = ExtResource("1_shader")
+
+[sub_resource type="TorusMesh" id="Mesh_1"]
+inner_radius = 0.18
+outer_radius = 0.24
+material = SubResource("ShaderMaterial_1")
+
+[node name="arena_crest_ring" type="MeshInstance3D"]
+mesh = SubResource("Mesh_1")

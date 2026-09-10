@@ -59,6 +59,27 @@ extends Resource
 ## launcher over the rifle.
 @export var self_damage: bool = true
 
+@export_group("World")
+
+## Whether monsters spawn and hunt the players.
+##
+## [b]A mode field rather than a server cvar, and that is the whole argument for
+## [ArenaMode] being a resource.[/b] "Are there monsters" is not a setting an operator
+## turns on top of a deathmatch — it changes what the match is, what a kill is worth
+## and where you want to stand. A mode that has them and a mode that does not are two
+## games, and two games are two resources.
+@export var horde: bool = false
+
+## Whether players may spawn physics props.
+##
+## Off in every shipped mode. A player who can wall themselves in is a player nobody
+## can fight, and the props the map places are level furniture rather than a sandbox —
+## see [ArenaProps].
+@export var player_props: bool = false
+
+## How many props the map scatters as cover, owned by nobody.
+@export_range(0, 64, 1) var scatter_props: int = 0
+
 @export_group("Map")
 
 ## The map this mode is played on if nothing else says. Empty means "whatever is loaded".
@@ -86,6 +107,47 @@ static func free_for_all(limit: int = 25) -> ArenaMode:
 	rules.warmup_sec = 10.0
 	rules.countdown_sec = 3.0
 	rules.min_players = 2
+	rules.intermission_sec = 8.0
+	rules.match_end_sec = 15.0
+	rules.suicide_points = -1
+	mode.rules = rules
+
+	return mode
+
+
+## Siege: a free-for-all with monsters in it, and cover you can move.
+##
+## [b]The mode that exists to run the joins.[/b] It is the only shipped configuration
+## where dot-npc, dot-npc-ai, dot-npc-ai-director and dot-props are all live at once
+## alongside the five this game already ran — and by this family's own repeated lesson,
+## that is where the bugs are rather than in any one of them.
+##
+## It is also a real game rather than a test fixture. Monsters make the middle of the
+## map expensive to hold, and movable cover is the only answer to that a player can
+## build themselves — which is the trade the raised centre of `dm_box` has always
+## wanted and never had.
+static func siege(limit: int = 20) -> ArenaMode:
+	var mode := ArenaMode.new()
+	mode.id = &"siege"
+	mode.display_name = "Siege"
+	mode.description = "Everybody for themselves, and the arena is not empty."
+	mode.team_count = 0
+	mode.friendly_fire = false
+	mode.self_damage = true
+	mode.horde = true
+	mode.player_props = true
+	mode.scatter_props = 8
+	mode.preferred_map = &"dm_box"
+
+	var rules := DotMatchRules.deathmatch(limit)
+	rules.display_name = "Siege"
+	# Shorter than free-for-all's. Dying to a monster is not the same as losing a
+	# duel, and a long wait after one is a punishment for the wrong thing.
+	rules.respawn_delay_sec = 1.5
+	rules.spawn_protection_sec = 2.5
+	rules.warmup_sec = 10.0
+	rules.countdown_sec = 3.0
+	rules.min_players = 1
 	rules.intermission_sec = 8.0
 	rules.match_end_sec = 15.0
 	rules.suicide_points = -1
@@ -185,6 +247,9 @@ func describe() -> Dictionary:
 		"friendly_fire": friendly_fire,
 		"self_damage": self_damage,
 		"preferred_map": preferred_map,
+		"horde": horde,
+		"player_props": player_props,
+		"scatter_props": scatter_props,
 		"score_limit": rules.score_limit if rules != null else 0,
 		"team_based": rules.team_based if rules != null else false,
 	}

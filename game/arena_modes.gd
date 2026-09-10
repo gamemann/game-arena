@@ -20,6 +20,7 @@ static func all() -> Array[ArenaMode]:
 	return [
 		ArenaMode.free_for_all(),
 		ArenaMode.team_deathmatch(),
+		ArenaMode.siege(),
 	]
 
 
