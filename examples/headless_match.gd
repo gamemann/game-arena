@@ -59,6 +59,8 @@ func _run() -> void:
 	_test_content()
 	_test_map()
 	await _test_atrium()
+	_test_modes()
+	await _test_team_deathmatch()
 
 	await _build()
 	_test_players_exist()
@@ -78,6 +80,157 @@ func _run() -> void:
 		print("  FAIL  %s" % line)
 
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+# --- Modes -----------------------------------------------------------------
+
+## The catalogue, and the one disagreement a mode can have with itself.
+func _test_modes() -> void:
+	print("modes")
+
+	var ids := ArenaModes.ids()
+	_check(ids.size() >= 2, "the catalogue has modes", str(ids))
+
+	for mode in ArenaModes.all():
+		_check(mode.validate().ok, "%s validates" % mode.id, str(mode.validate().error))
+
+	# Every call must build a fresh resource. If the catalogue handed out one shared
+	# object, a server that raised a score limit would have edited the mode every later
+	# match reads -- the Resource-is-a-reference aliasing this tree has shipped four
+	# times, and the reason ArenaGame duplicates the rules as well.
+	var first := ArenaModes.by_id(&"ffa")
+	var second := ArenaModes.by_id(&"ffa")
+	first.rules.score_limit = 999
+	_check(
+		second.rules.score_limit != 999,
+		"two lookups are not the same object",
+		"second read %d" % second.rules.score_limit
+	)
+
+	_check(ArenaModes.by_id(&"nonsense") == null, "an unknown id is null")
+	_check(
+		ArenaModes.by_id_or_default(&"nonsense").id == &"ffa",
+		"and falls back rather than failing to boot"
+	)
+
+	# team_count and rules.team_based are two statements of one fact, and validate()
+	# exists to catch them disagreeing. A mode claiming two sides over free-for-all
+	# rules puts nobody on a team and scores everyone individually while calling itself
+	# Team Deathmatch -- correct at every point inside dot-match, and wrong.
+	var broken := ArenaMode.team_deathmatch()
+	broken.rules.team_based = false
+	_check(not broken.validate().ok, "a mode that disagrees with its rules is refused")
+
+
+## Two sides, tagged spawns, and a friendly-fire rule that protects somebody.
+func _test_team_deathmatch() -> void:
+	print("")
+	print("team deathmatch")
+
+	var game := ArenaGame.new()
+	game.name = "TeamGame"
+	game.tick_rate = 64
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.team_deathmatch()
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	_check(ready.ok, "a team game sets up", str(ready.error))
+
+	if not ready.ok:
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+
+	_check(game.teams().size() == 2, "with two sides", str(game.teams().size()))
+
+	# The tags are what send a side to its own end. Without them dot-match falls back
+	# to the shared pool and both sides spawn out of one -- which on a symmetric map
+	# means spawning in the enemy base about half the time, and reads as a
+	# spawn-selection bug rather than as a map nobody tagged.
+	var tagged := 0
+
+	for point in game.match_node.spawn_points():
+		if point.tags.size() > 0:
+			tagged += 1
+
+	_check(tagged > 0, "the map's spawns carry team tags", "%d tagged" % tagged)
+
+	# Six players, and dot-match decides the sides. Asserting the COUNTS rather than
+	# any one assignment: `DotTeamManager.assign` balances, so which side a given
+	# player lands on is its business and not a thing to pin.
+	var counts := {}
+
+	for index in range(6):
+		var added := game.add_player(200 + index, "Team %d" % index)
+		_check(added.ok, "player %d joins" % index, str(added.error))
+
+		var side := game.team_of(200 + index)
+		counts[side] = int(counts.get(side, 0)) + 1
+
+	_check(not counts.has(0), "everybody got a side", str(counts))
+	_check(counts.size() == 2, "spread across both", str(counts))
+
+	var sizes: Array[int] = []
+
+	for side in counts:
+		sizes.append(int(counts[side]))
+
+	_check(
+		abs(sizes[0] - sizes[1]) <= 1,
+		"and the sides are balanced",
+		"%d vs %d" % [sizes[0], sizes[1]]
+	)
+
+	# ArenaPlayer.team was declared and assigned by NOTHING since the class was
+	# written, so the scoreboard, the renderer and the friendly-fire check all read a
+	# zero. This is the check that says it is wired.
+	var mirrored := 0
+
+	for index in range(6):
+		var player := game.player_for(200 + index)
+
+		if player != null and player.team == game.team_of(200 + index):
+			mirrored += 1
+
+	_check(mirrored == 6, "the player carries the side it was given", "%d of 6" % mirrored)
+
+	# And the reason any of that matters: dot-combat asks a callable for two entity
+	# ids and compares the answers. Unwired, every pair looks like strangers and
+	# friendly_fire = false protects nobody.
+	var resolver := game.combat.resolver
+	_check(resolver.team_of.is_valid(), "combat can ask who is on whose side")
+
+	if resolver.team_of.is_valid():
+		var a := 200
+		var b := _first_team_mate(game, a)
+		_check(b > 0, "two players share a side", "%d and %d" % [a, b])
+
+		if b > 0:
+			_check(
+				int(resolver.team_of.call(a)) == int(resolver.team_of.call(b)),
+				"and combat agrees they do"
+			)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+
+
+## Another id on the same side as [param id], or 0.
+func _first_team_mate(game: ArenaGame, id: int) -> int:
+	var side := game.team_of(id)
+
+	for index in range(6):
+		var other := 200 + index
+
+		if other != id and game.team_of(other) == side:
+			return other
+
+	return 0
 
 
 # --- Assertions ------------------------------------------------------------

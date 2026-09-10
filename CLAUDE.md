@@ -194,6 +194,51 @@ stage correctly, and draws sky in every direction with a HUD reading zero. No er
 anywhere, because there is no error. `headless_net._test_config_agreement` asserts the
 two ends agree on the extent, the tick rate and the schema hash.
 
+## Modes are data
+
+`ArenaMode` is a `Resource`: an id, a `DotMatchRules`, a team count, and what damage
+does. Free-for-all and team deathmatch differ only in what is written in one, so
+adding a mode is writing a resource rather than writing a file — which is what makes
+"configurable" true rather than aspirational. `ArenaModes` is the catalogue, shaped
+exactly like `ArenaMap.by_id` / `ids` so a console command or a `DotVoteListSource`
+can be handed `ids()` without knowing what a mode is.
+
+**The line where data stops being enough is real.** A mode that changes what *happens*
+on an event, rather than what an event is *worth*, needs code — gun game, where a kill
+replaces your weapon, is the first, and it subclasses `DotMatchRules` and hangs it on
+the mode. Everything short of that is the resource.
+
+Four things in the wiring that are not obvious:
+
+- **`team_count` and `rules.team_based` are two statements of one fact**, and
+  `validate()` refuses a mode where they disagree. `team_based` is what dot-match reads
+  to decide whether to assign anybody a side at all, so a mode claiming two teams over
+  free-for-all rules puts everyone on no team and scores them individually *while
+  calling itself Team Deathmatch* — correct at every point inside dot-match, and wrong.
+- **The rules resource is duplicated before use.** A `Resource` is a reference, so
+  handing dot-match the catalogue's own object means a server that raised a score limit
+  at runtime has edited the mode every later match reads. This family has shipped that
+  aliasing four times; the suite asserts two lookups are not the same object.
+- **The team manager is built before `add_child(match_node)`**, because that is what
+  runs `DotMatch._ready` and therefore `setup`, and setup only makes one when it finds
+  none. Left to dot-match it makes an untagged `standard_pair()`, and untagged is the
+  whole problem — `DotTeam.spawn_tag` is what sends a side to its own end of the map.
+  Without it both sides draw from one pool, which on a symmetric map means spawning in
+  the enemy base about half the time and reads as a spawn-selection bug.
+- **`combat.resolver.team_of` is the entire friendly-fire seam**, and it is assigned
+  *after* `add_child(combat)` because the resolver is built in `setup`. dot-combat has
+  no idea what a team is: it asks a callable for two entity ids and compares the
+  answers, treating 0 as "no team" so a free-for-all still works. Unwired,
+  `friendly_fire = false` protects nobody, because every pair looks like strangers.
+
+`ArenaPlayer.team` had been declared and assigned by **nothing** since the class was
+written — the family's most repeated shape, at the size of a whole feature. It is what
+the scoreboard, the renderer and the friendly-fire check all read.
+
+`ArenaMap.spawns` gained a parallel `spawn_tags`, and `add_spawn(at, tag)` is the only
+way to append: two parallel arrays that can be written independently are two lists that
+will disagree, and the helper is the only reason they cannot.
+
 ## Where it runs besides here
 
 `dot-server-setup-test` vendors it — `setup.sh` copies `game/`, `scenes/*.tscn` and

@@ -36,6 +36,18 @@ var wall_height: float = 8.0
 ## Where players appear. Fed into [DotMatch]'s spawn points.
 var spawns: Array[Transform3D] = []
 
+## What each spawn belongs to, parallel to [member spawns].
+##
+## Empty means every spawn is untagged and any player may use any of them, which is
+## what a free-for-all wants. Otherwise it is EXACTLY as long as [member spawns] and
+## `spawn_tags[i]` is the tag of `spawns[i]` — `DotTeam.spawn_tag` matches against it,
+## which is what sends a side to its own end of the map.
+##
+## [b]Always append through [method add_spawn].[/b] Two parallel arrays that can be
+## written independently are two lists that will disagree, which is this tree's most
+## repeated bug; the helper is the only reason they cannot.
+var spawn_tags: PackedStringArray = PackedStringArray()
+
 var display_name: String = "dm_box"
 
 
@@ -69,11 +81,14 @@ static func dm_box() -> ArenaMap:
 	# Eight spawns around the outside, facing the middle. Enough that a full server is
 	# not spawning two people on one point, and far enough apart that the
 	# furthest-from-danger rule has something to choose between.
+	# Tagged by hemisphere rather than alternately, so a team mode starts the two
+	# sides at opposite ends rather than interleaved around one circle.
 	for index in range(8):
 		var angle := TAU * float(index) / 8.0
 		var at := Vector3(cos(angle) * 18.0, 0.1, sin(angle) * 18.0)
-		map.spawns.append(
-			Transform3D(Basis.looking_at(-at.normalized(), Vector3.UP), at)
+		map.add_spawn(
+			Transform3D(Basis.looking_at(-at.normalized(), Vector3.UP), at),
+			&"red" if index < 4 else &"blue"
 		)
 
 	return map
@@ -212,8 +227,19 @@ static func dm_atrium() -> ArenaMap:
 		if to_centre.length_squared() < 0.001:
 			to_centre = Vector3.FORWARD
 
-		map.spawns.append(
-			Transform3D(Basis.looking_at(to_centre.normalized(), Vector3.UP), at)
+		# By the sign of z, which on this map is the long axis: the two sides start at
+		# opposite ends of the atrium with the building between them. A point sitting on
+		# the axis is untagged, so it stays a shared fallback rather than being given
+		# arbitrarily to one side.
+		var tag := &""
+
+		if at.z < -0.5:
+			tag = &"red"
+		elif at.z > 0.5:
+			tag = &"blue"
+
+		map.add_spawn(
+			Transform3D(Basis.looking_at(to_centre.normalized(), Vector3.UP), at), tag
 		)
 
 	return map
@@ -242,6 +268,26 @@ static func by_id(id: StringName) -> ArenaMap:
 ## cannot be loaded, and `headless_match` checks the two agree.
 static func ids() -> Array[StringName]:
 	return [&"dm_box", &"dm_atrium"]
+
+
+## Adds a spawn and its tag together, which is the only way to add one.
+##
+## An empty tag means "any team". Tagging SOME spawns and not others is legal and
+## useful: the untagged ones are a shared pool both sides can fall back to when their
+## own are all on cooldown, which `DotSpawnSelector._fallback` will do rather than
+## refuse to spawn anybody.
+func add_spawn(at: Transform3D, tag: StringName = &"") -> ArenaMap:
+	spawns.append(at)
+	spawn_tags.append(String(tag))
+	return self
+
+
+## The tag of spawn [param index], or empty.
+func spawn_tag(index: int) -> StringName:
+	if index < 0 or index >= spawn_tags.size():
+		return &""
+
+	return StringName(spawn_tags[index])
 
 
 func add_box(box: AABB) -> ArenaMap:
@@ -393,5 +439,6 @@ func describe() -> Dictionary:
 		"name": display_name,
 		"boxes": boxes.size(),
 		"spawns": spawns.size(),
+		"tagged_spawns": spawn_tags.size() - Array(spawn_tags).count(""),
 		"extent": extent,
 	}

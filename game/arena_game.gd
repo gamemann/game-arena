@@ -71,6 +71,15 @@ signal match_state_changed(from: DotMatch.State, to: DotMatch.State)
 
 @export_group("Mode")
 
+## What is being played. Null means [member mode_id] decides.
+##
+## [b]Assign before [method setup].[/b] It builds the match rules, the teams and the
+## damage rules, and none of them is re-read afterwards.
+@export var mode: ArenaMode = null
+
+## Which mode to use when [member mode] is null. See [ArenaModes].
+@export var mode_id: StringName = &"ffa"
+
 ## Whether this instance decides who dies.
 ##
 ## A client runs the same [ArenaGame] with this off: it simulates, it traces for
@@ -106,7 +115,37 @@ func _exit_tree() -> void:
 
 ## Builds everything. Call after adding to the tree.
 func setup(p_map: ArenaMap = null) -> DotResult:
-	map = p_map if p_map != null else ArenaMap.dm_box()
+	# The mode first: the map default, the damage rules and the match rules all come
+	# out of it, so resolving it after any of them would build them from the old one.
+	if mode == null:
+		mode = ArenaModes.by_id_or_default(mode_id)
+
+	var mode_res := mode.validate()
+
+	if not mode_res.ok:
+		return mode_res
+
+	map = (
+		p_map if p_map != null
+		else (
+			ArenaMap.by_id(mode.preferred_map) if mode.preferred_map != &""
+			else null
+		)
+	)
+
+	if map == null:
+		map = ArenaMap.dm_box()
+
+	if mode.is_team_mode() and Array(map.spawn_tags).count("") == map.spawns.size():
+		# Not fatal: dot-match falls back to the shared pool and everyone still spawns.
+		# It is worth a line anyway, because the symptom of playing a team mode on an
+		# untagged map is "the sides keep spawning in each other's base", which reads
+		# as a spawn-selection bug rather than as a map that was never tagged.
+		DotLog.warn(
+			CHANNEL,
+			"a team mode on a map with no tagged spawns; both sides share one pool",
+			{"mode": str(mode.id), "map": map.display_name}
+		)
 
 	var combat_result := _build_combat()
 
@@ -142,11 +181,12 @@ func _build_combat() -> DotResult:
 	combat.trace = map.to_trace()
 
 	var rules := DotDamageRules.new()
-	# A free-for-all: no teams, so friendly fire never applies. Self damage on, because
-	# rocket jumping is a movement option and taking it away removes the only reason
-	# the rocket launcher is interesting to hold.
-	rules.friendly_fire = false
-	rules.self_damage = true
+	# Both from the mode. friendly_fire is meaningless without teams and harmless to
+	# set either way; self damage is on in every mode this ships, because rocket
+	# jumping is a movement option and taking it away removes the only reason the
+	# rocket launcher is interesting to hold.
+	rules.friendly_fire = mode.friendly_fire
+	rules.self_damage = mode.self_damage
 	rules.hit_groups = true
 	rules.falloff = true
 	rules.maximum = 400.0
@@ -160,6 +200,18 @@ func _build_combat() -> DotResult:
 
 	add_child(combat)
 
+	# AFTER add_child: `DotCombatManager.setup` runs from `_ready` and that is what
+	# builds the resolver, so assigning this beforehand writes to nothing.
+	#
+	# This is the entire friendly-fire seam. dot-combat has no idea what a team is; it
+	# asks this callable for two entity ids and compares the answers, and treats team 0
+	# as "no team" so two unassigned players in a free-for-all can always hurt each
+	# other. Without it `rules.friendly_fire = false` protects nobody, because every
+	# pair looks like strangers.
+	combat.resolver.team_of = func(entity_id: int) -> int:
+		var player := player_for(entity_id)
+		return player.team if player != null else 0
+
 	for type in ArenaContent.damage_types():
 		combat.register_damage_type(type)
 
@@ -170,22 +222,36 @@ func _build_combat() -> DotResult:
 
 
 func _build_match() -> DotResult:
-	var rules := DotMatchRules.deathmatch(score_limit)
-	rules.display_name = "Deathmatch"
-	rules.time_limit_sec = time_limit_sec
-	rules.respawn_delay_sec = 2.0
-	rules.spawn_protection_sec = 1.5
-	rules.warmup_sec = 10.0
-	rules.countdown_sec = 3.0
-	rules.min_players = 2
-	rules.intermission_sec = 8.0
-	rules.match_end_sec = 15.0
-	rules.suicide_points = -1
+	# DUPLICATED, not used directly. A Resource is a reference in GDScript, so handing
+	# dot-match the catalogue's own rules would mean a server that raised a score limit
+	# at runtime had edited the mode every later match reads.
+	var rules: DotMatchRules = mode.rules.duplicate()
+
+	# The exports override the mode when they are set, so a server can keep the mode
+	# and change the numbers. Zero means "whatever the mode said".
+	if score_limit > 0:
+		rules.score_limit = score_limit
+
+	if time_limit_sec > 0.0:
+		rules.time_limit_sec = time_limit_sec
 
 	match_node = DotMatch.new()
 	match_node.name = "Match"
 	match_node.rules = rules
 	match_node.register_service = false
+
+	# Built here rather than left to dot-match, which would otherwise make an untagged
+	# `DotTeam.standard_pair()`. The tags are the whole point — see `ArenaMode.teams`.
+	#
+	# It has to be assigned AND parented before `add_child(match_node)`, because that
+	# is what runs `DotMatch._ready` and therefore `setup`, and setup only creates a
+	# manager when it finds none.
+	if mode.is_team_mode():
+		var manager := DotTeamManager.new()
+		manager.name = "Teams"
+		manager.teams = mode.teams()
+		match_node.teams = manager
+		match_node.add_child(manager)
 
 	var config := DotMatchConfig.new()
 	config.tick_rate = tick_rate
@@ -198,11 +264,19 @@ func _build_match() -> DotResult:
 	# Spawn points come from the map, not from the scene: a headless server never
 	# instantiates the level's nodes, and a match with no spawn points is a match
 	# nobody ever appears in.
-	for at in map.spawns:
+	for index in range(map.spawns.size()):
 		var point := DotSpawnPoint.new()
 		point.name = "Spawn%02d" % match_node.spawn_points().size()
-		point.transform = at
+		point.transform = map.spawns[index]
 		point.cooldown_ticks = int(2.0 * float(tick_rate))
+
+		# The map's tag, which is what a team's `spawn_tag` matches against. An
+		# untagged point stays available to everybody.
+		var tag := map.spawn_tag(index)
+
+		if tag != &"":
+			point.tags.append(tag)
+
 		add_child(point)
 		match_node.add_spawn_point(point)
 
@@ -250,7 +324,9 @@ func start(tick: int = 0) -> void:
 # --- Players ---------------------------------------------------------------
 
 ## Adds a player, builds their body, and puts them in the match.
-func add_player(id: int, display_name: String) -> DotResult:
+func add_player(
+	id: int, display_name: String, wanted_team: int = 0
+) -> DotResult:
 	if _players.has(id):
 		return DotResult.fail(DotError.CODE_STATE, "Player %d is already here." % id)
 
@@ -266,11 +342,21 @@ func add_player(id: int, display_name: String) -> DotResult:
 	player.join_combat(combat)
 	_players[id] = player
 
-	var added := match_node.add_player(str(id), display_name, _tick)
+	var added := match_node.add_player(str(id), display_name, _tick, wanted_team)
 
 	if not added.ok:
 		remove_player(id)
 		return added
+
+	# The side dot-match actually put them on, which is not necessarily the one they
+	# asked for: `DotTeamManager.assign` refuses a full team and balances an uneven one.
+	# Reading it back rather than assuming is the difference between a scoreboard that
+	# matches the game and one that matches the request.
+	#
+	# It is set on the player because that is what dot-combat's friendly-fire check and
+	# the renderer's colour both read, and `ArenaPlayer.team` had been declared and
+	# assigned by nothing since the class was written.
+	player.team = team_of(id)
 
 	# Last, and only once the player is fully in: a handler runs synchronously inside
 	# this and the first thing a client's does is hang a camera off them.
@@ -291,6 +377,22 @@ func remove_player(id: int) -> void:
 	_players.erase(id)
 	remove_child(player)
 	player.queue_free()
+
+
+## Which side a player is on, or 0 in a free-for-all.
+func team_of(id: int) -> int:
+	if match_node == null or match_node.teams == null:
+		return 0
+
+	return match_node.teams.team_of(str(id))
+
+
+## The sides in play, empty in a free-for-all.
+func teams() -> Array[DotTeam]:
+	if match_node == null or match_node.teams == null:
+		return []
+
+	return match_node.teams.teams
 
 
 func player_for(id: int) -> ArenaPlayer:
