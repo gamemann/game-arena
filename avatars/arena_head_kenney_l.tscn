@@ -1,0 +1,48 @@
+[gd_scene format=4]
+
+[ext_resource type="Texture2D" path="res://avatars/kenney/Textures/texture-l.png" id="1_ljjlq"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ksj5t"]
+resource_name = "texture-l"
+shading_mode = 0
+albedo_texture = ExtResource("1_ljjlq")
+texture_filter = 1
+metadata/_gltf_primary_texture_coord = 0
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_eeyxs"]
+_surfaces = [{
+"aabb": AABB(-4, 0, -4, 8, 8, 8),
+"format": 34896613377,
+"index_count": 36,
+"index_data": PackedByteArray("AAABAAIAAQAAAAMAAwAEAAEAAgABAAQABQADAAAABAADAAUAAgAGAAAAAAAGAAUABQAGAAIABAAHAAIAAgAHAAUABQAHAAQA"),
+"name": "texture-l",
+"primitive": 3,
+"uv_scale": Vector4(0, 0, 0, 0),
+"vertex_count": 8,
+"vertex_data": PackedByteArray("AAAAAP//AAAAAAAAAAAAAAAA//8AAAAA//8AAP//AAD//wAAAAAAAP///////wAAAAD/////AAD/////AAAAAA==")
+}]
+blend_shape_mode = 0
+
+[sub_resource type="ArrayMesh" id="ArrayMesh_suhej"]
+resource_name = "character-l_head"
+_surfaces = [{
+"aabb": AABB(-4, 0, -4, 8, 8, 8),
+"attribute_data": PackedByteArray("O6KQ9KOEkPSjhNnpO6LZ6bqhQd5Sv0HeUr/36Lqh9+hnv9jp/9zY6f/cjvRnv470fr/a6eahkPTmodrp///X6f//jfRm4o30ZuLX6TS/SPU0v///nKH//5yhSPU="),
+"format": 34896613399,
+"index_count": 36,
+"index_data": PackedByteArray("AAABAAIAAgADAAAABAAFAAYABgAHAAQACAAJAAoACgALAAgADAALAA0ADQAOAAwADwAQABEAEQASAA8AEwAUABUAFQAWABMA"),
+"material": SubResource("StandardMaterial3D_ksj5t"),
+"name": "texture-l",
+"primitive": 3,
+"uv_scale": Vector4(0.9886052, 2.7311711, 0, 0),
+"vertex_count": 23,
+"vertex_data": PackedByteArray("AAAAAP///58AAAAAAAD/vwAA//8AAP+/AAD/////lrEAAP//AAD/v/////8AAP+/////////P6gAAP////8/qP///////5ax/////wAA/7///wAAAAD/v///AAD///+f////////P6gAAAAA////nwAA/////z+oAAD//wAA//8AAAAAAAD/////AAAAAP///////wAA/////wAA////v///AAAAAP+/AAAAAAAA/78AAAAA////v/9/////f////3////CXzLn///9/////f2K95VDk0JzCMcbxF/9/AAD/fwAA/38AAGK95VD/f///5NCcwv9/////f////3////9///8AAP9/AAD/fwAA/38AAP9/")
+}]
+blend_shape_mode = 0
+shadow_mesh = SubResource("ArrayMesh_eeyxs")
+
+[node name="arena_head_kenney_l" type="Node3D" unique_id=2110204542]
+
+[node name="head" type="MeshInstance3D" parent="." unique_id=1271769493]
+transform = Transform3D(0.06666666, 0, 0, 0, 0.06666666, 0, 0, 0, 0.06666666, 0, -0.2666667, 0)
+mesh = SubResource("ArrayMesh_suhej")
