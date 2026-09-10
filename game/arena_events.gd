@@ -43,7 +43,32 @@ enum Ask {
 	RESPAWN,
 	## My display name, if the client wants one the server did not already know.
 	NAME,
+	## Do something with a prop: grab, release, freeze or punt.
+	##
+	## [b]An intent, not an action, and the whole reason dot-props needs one.[/b] A
+	## rigid body's contact solver is not reproducible across machines, so props are
+	## server-authoritative and unpredicted — a client that moved one locally would be
+	## corrected on the next snapshot, every snapshot. The body carries what the
+	## player did and where they were aiming; the server decides whether it happened.
+	PROP_TOOL,
 }
+
+## What a [constant Ask.PROP_TOOL] asks for.
+enum PropAct {
+	## Hold what I am looking at, and keep holding it.
+	GRAB,
+	## Let go.
+	RELEASE,
+	## Freeze what I am holding where it is.
+	FREEZE,
+	## Punt what I am looking at away from me.
+	PUNT,
+	## Pull what I am looking at towards me.
+	PULL,
+}
+
+## Bits a prop action occupies. Three, which is eight — twice what there are.
+const PROP_ACT_BITS := 3
 
 const NAME_BYTES := 64
 const MAP_BYTES := 64
@@ -114,6 +139,41 @@ static func write_leave(session_id: int) -> PackedByteArray:
 
 static func read_leave(reader: DotNetReader) -> Dictionary:
 	var out := {"session_id": reader.read_varint()}
+	out["ok"] = reader.ok()
+	return out
+
+
+# --- PROP_TOOL -------------------------------------------------------------
+
+## What a player did with a prop tool, and where they were looking when they did it.
+##
+## [b]The aim is on the wire and the position is not.[/b] The server already knows
+## where a player is — it simulated them — and a client that could name its own origin
+## could grab a prop from across the map. The direction it cannot know, because a
+## player's view between two ticks is theirs; so the direction is a claim, the origin
+## is a fact, and `DotPropTool.target` is handed one of each.
+##
+## The direction is quantised the same way an aim is everywhere else here: two angles
+## rather than three components, because a unit vector sent as three floats is three
+## numbers that can fail to be a unit vector.
+static func write_prop_act(act: int, yaw: float, pitch: float) -> PackedByteArray:
+	var writer := _w()
+	writer.write_uint(act, PROP_ACT_BITS)
+	# Twelve bits: about a tenth of a degree, which at a twenty-metre grab range is a
+	# couple of centimetres at the far end. Nine — the default a view angle uses — is
+	# 0.7 degrees and would be a quarter of a metre out there, which is the difference
+	# between grabbing the crate and grabbing the one behind it.
+	writer.write_angle(yaw, 12)
+	writer.write_angle(pitch, 12)
+	return writer.to_bytes()
+
+
+static func read_prop_act(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"act": reader.read_uint(PROP_ACT_BITS),
+		"yaw": reader.read_angle(12),
+		"pitch": reader.read_angle(12),
+	}
 	out["ok"] = reader.ok()
 	return out
 

@@ -494,15 +494,30 @@ func attach_camera(horizontal_fov_at_4_3: float = 100.0) -> Camera3D:
 	return camera
 
 
-## Something to see a remote player as. There is no art in this project by design, so
-## it is a capsule and a nose.
-func attach_body_mesh(colour: Color) -> void:
+## Something to see a remote player as.
+##
+## [b]An avatar when one is given, a capsule and a nose when one is not.[/b] The
+## fallback is not a lesser case: a server with no dot-platform hands out nothing, a
+## client that has not been told yet has nothing, and a player has to be visible in
+## both. [ArenaAvatars.stock_avatar] closes most of that gap — it is a real document
+## over the same schema, deterministic in the player id — so the capsule is what is
+## left when even the schema is absent.
+##
+## [b]The avatar is what makes dot-user-avatar do anything here.[/b] Before this,
+## `ArenaAvatars` built documents, `ArenaIdentity` resolved them and
+## `ArenaPlayer` drew a coloured capsule — a value produced correctly and consumed by
+## nobody, which is this family's most repeated shape and which the "a method whose
+## name occurs once" detector is what caught.
+func attach_body_mesh(colour: Color, avatar: DotAvatar = null) -> void:
 	if body_mesh != null:
 		return
 
 	body_mesh = Node3D.new()
 	body_mesh.name = "Body"
 	add_child(body_mesh)
+
+	if avatar != null and _wear(avatar):
+		return
 
 	var material := StandardMaterial3D.new()
 	material.albedo_color = colour
@@ -527,6 +542,31 @@ func attach_body_mesh(colour: Color) -> void:
 	nose.material_override = material
 	nose.position = Vector3(0.0, 1.5, -0.45)
 	body_mesh.add_child(nose)
+
+
+## Builds the avatar's rig under [member body_mesh]. Returns whether anything drew.
+##
+## [b]A failure here falls back to the capsule rather than leaving nothing.[/b] A
+## player who is invisible because their crest is from a newer build is worse than one
+## drawn as a capsule — and `conform` already drops a part it does not have, so
+## reaching this at all means the schema itself would not build.
+func _wear(avatar: DotAvatar) -> bool:
+	var rig := ArenaAvatars.make_rig()
+	body_mesh.add_child(rig)
+
+	var built := ArenaAvatars.apply(
+		avatar, rig, ArenaAvatars.schema(), ArenaAvatars.catalogue()
+	)
+
+	if not built.ok:
+		DotLog.debug(CHANNEL, "an avatar could not be drawn; using the capsule", {
+			"player": player_id, "why": built.error.message
+		})
+		body_mesh.remove_child(rig)
+		rig.queue_free()
+		return false
+
+	return true
 
 
 ## Where shots start: the eyes, not the feet.

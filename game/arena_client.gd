@@ -93,6 +93,15 @@ var _level: Node3D = null
 ## dot-browser's client half, and the screen over it.
 var browser: ArenaBrowser = null
 
+## Whether this client believes it is holding a prop.
+##
+## [b]A belief, not a fact, and the distinction is the whole reason props are not
+## predicted.[/b] The server decides whether a grab happened; this is only what the
+## next press of the same key should ask for. A rigid body's contact solver is not
+## reproducible across machines, so a client that tracked a held prop's position
+## locally would be corrected on every snapshot.
+var _holding: bool = false
+
 
 func _ready() -> void:
 	link = DotRegistry.get_node_service(LINK_SERVICE)
@@ -244,7 +253,14 @@ func _start_offline() -> void:
 
 		if bot.ok:
 			var body := bot.value as ArenaPlayer
-			body.attach_body_mesh(Color.from_hsv(float(i) / 6.0, 0.55, 0.85))
+			# A stock avatar, deterministic in the id, so an offline bot looks the
+			# same every launch and different from the bot beside it.
+			body.attach_body_mesh(
+				Color.from_hsv(float(i) / 6.0, 0.55, 0.85),
+				ArenaAvatars.stock_avatar(
+					StringName(ArenaGame.storage_key(body.player_id))
+				)
+			)
 			_bots[body.player_id] = body
 
 
@@ -301,6 +317,14 @@ func _build_netcode() -> DotResult:
 	DotLog.result(CHANNEL, "the client's chat, voice and map layers", extra)
 
 	extras.line_received.connect(_on_chat_line)
+
+	# [b]Where chat actually arrives.[/b] `ArenaServices` routes a line through
+	# dot-chat and then hands it to dot-server's manager to put on the wire, so on
+	# this end it lands on `DotClientLink.chat_received` — not on anything dot-chat
+	# owns. Without this connection the client's `DotChatClient` is a history nothing
+	# feeds: empty scrollback, zero unread, and chat working perfectly on screen.
+	if link != null and link.has_signal("chat_received"):
+		link.connect("chat_received", extras.receive_wire)
 	extras.map_changing.connect(_on_map_changing)
 	extras.map_changed.connect(_on_map_changed)
 
@@ -366,6 +390,25 @@ func _on_map_changed(map: DotMapDef) -> void:
 
 	if hud != null:
 		hud.notice("Now playing %s." % map.name_or_id())
+
+
+## Asks the server to do something with a prop.
+##
+## [b]An intent over the wire, and the aim is the only thing on it.[/b] The server
+## already knows where this player is — it simulated them — and a client that could
+## name its own origin could grab a prop from across the map. What it cannot know is
+## where they were looking between two ticks, so that is the claim, and
+## `DotPropTool.may_act_on` is what decides whether it reaches.
+func _ask_prop(action: int) -> void:
+	if _offline or bridge == null or player == null:
+		return
+
+	var state := player.controller.state
+
+	bridge.send_request(
+		ArenaEvents.Ask.PROP_TOOL,
+		ArenaEvents.write_prop_act(action, state.yaw, state.pitch)
+	)
 
 
 ## The player picked a server.
@@ -476,8 +519,15 @@ func _on_player_added(added: ArenaPlayer) -> void:
 		return
 
 	if added != player and added.body_mesh == null:
+		# A stock avatar until the server says otherwise. It is a real document over
+		# the same schema and deterministic in the player's storage key, so a remote
+		# player looks the same on every client that draws them — which is the whole
+		# reason `stock_avatar` hashes an id rather than picking at random.
 		added.attach_body_mesh(
-			Color.from_hsv(fmod(float(added.player_id) * 0.37, 1.0), 0.55, 0.85)
+			Color.from_hsv(fmod(float(added.player_id) * 0.37, 1.0), 0.55, 0.85),
+			ArenaAvatars.stock_avatar(
+				StringName(ArenaGame.storage_key(added.player_id))
+			)
 		)
 
 
@@ -728,6 +778,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	match (event as InputEventKey).physical_keycode:
+		KEY_E:
+			# Grab, or let go of what is already held. One key for both, because a
+			# player who has to remember which of two keys they pressed last is a
+			# player holding a crate they cannot put down.
+			_ask_prop(
+				ArenaEvents.PropAct.RELEASE if _holding
+				else ArenaEvents.PropAct.GRAB
+			)
+			_holding = not _holding
+		KEY_F:
+			_ask_prop(ArenaEvents.PropAct.FREEZE)
+		KEY_G:
+			_ask_prop(ArenaEvents.PropAct.PUNT)
+			_holding = false
 		KEY_1, KEY_2, KEY_3, KEY_4:
 			# Requested through the COMMAND, never by calling the arsenal directly.
 			# A client that switched its own weapon would be predicting a switch the

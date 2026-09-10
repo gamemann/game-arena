@@ -1562,6 +1562,74 @@ func _test_siege() -> void:
 
 	_check(game.props.undo(1), "undo takes one back")
 
+	# --- The tools, which is what makes dot-props reachable ---------------
+	#
+	# [b]A physics gun nothing can call is a physics gun that does not exist.[/b]
+	# `phys_gun()` and `grav_gun()` were built, documented and called by nobody until
+	# the family's own detector — a public method whose name occurs once in its
+	# repository — found them. `ArenaProps.act` is the one door, and it is reached
+	# from the wire by `ArenaEvents.Ask.PROP_TOOL`.
+	# [b]Two and a half metres up, not one.[/b] `dm_box`'s raised centre is a box from
+	# y = 0 to y = 1 spanning the middle twelve metres, and `ArenaProps` puts the whole
+	# map into the physics space so a prop has something to land on — so a ray cast at
+	# exactly y = 1 grazes the platform's top face, hits a StaticBody3D, and
+	# `prop_for_node` answers null. "Nothing there" for a crate three metres in front
+	# of you, which is the geometry being right and the probe being wrong.
+	var eye := game.map.floor_y + 2.5
+
+	var target := game.props.spawn_for(1, ArenaProps.CRATE, Vector3(0.0, eye, -3.0))
+
+	if target != null:
+		# A frame, so the body is in the physics space and can be raycast at.
+		await get_tree().physics_frame
+
+		var space: Variant = game.props._space()
+		_check(space != null, "the props layer has a physics space to trace in")
+
+		var aimed := game.props.phys_gun(1).grab(
+			space, Vector3(0.0, eye, 0.0), Vector3(0.0, 0.0, -1.0), Basis.IDENTITY
+		)
+
+		var reaching := aimed.ok
+		_check(reaching, "a player can grab a prop they are looking at", str(aimed.error))
+
+		if reaching:
+			_check(
+				game.props.phys_gun(1).held != null,
+				"and the gun is holding it"
+			)
+
+			# Held props move every tick, and a layer that only called `grab` would
+			# give a player a prop that stayed exactly where it was picked up — which
+			# reads as the physics gun not working rather than as a missing call.
+			var was_at := target.position()
+
+			for _step in range(8):
+				game.props.tick(1.0 / float(TICK_RATE))
+				await get_tree().physics_frame
+
+			_check(
+				target.position().distance_to(was_at) > 0.0,
+				"and carrying it moves it",
+				"%.3f m" % target.position().distance_to(was_at)
+			)
+
+			_check(
+				game.props.act(1, ArenaEvents.PropAct.RELEASE, Vector3.ZERO, Vector3.FORWARD),
+				"and it can be let go"
+			)
+			_check(game.props.phys_gun(1).held == null, "leaving nothing held")
+
+	# A grab needs somewhere to trace. A client mirroring this layer has no physics
+	# space, and a tool with nothing to trace against would act on whatever was last
+	# returned — so `act` refuses rather than guessing.
+	_check(
+		not game.props.act(
+			99, ArenaEvents.PropAct.GRAB, Vector3.ZERO, Vector3.FORWARD
+		),
+		"and a player with nothing in front of them grabs nothing"
+	)
+
 	# --- Leaving ---------------------------------------------------------
 
 	game.remove_player(1)

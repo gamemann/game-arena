@@ -116,10 +116,34 @@ func _build_chat() -> void:
 	)
 
 
-## Puts a line into the client's own history. What [ArenaClient] calls when the
-## server's chat manager hands it text.
-func receive_line(text: String) -> void:
-	line_received.emit(text)
+## Puts a line the server sent into the client's own history.
+##
+## [b]This is the entry point, and nothing called it.[/b] dot-chat's router decides who
+## hears a line and then hands it to dot-server's chat manager to put on the wire — so
+## on the client it arrives on `DotClientLink.chat_received`, not through anything
+## dot-chat owns. A `DotChatClient` that nothing feeds is a history that stays empty
+## and an unread count that stays zero, while chat works perfectly on screen.
+##
+## Found by the family's own detector: a public method whose name occurs once in its
+## repository is a method nothing calls.
+func receive_wire(payload: Dictionary) -> void:
+	if chat == null:
+		# No client-side history, but the line still has to be drawn. dot-server's
+		# manager sends `{text: ...}` and the game's HUD is the only reader.
+		line_received.emit(str(payload.get("text", "")))
+		return
+
+	var taken := chat.receive(payload)
+
+	if taken.ok:
+		# `message_received` fires from inside `receive`, so the line has already been
+		# emitted. Returning here is what stops it being drawn twice.
+		return
+
+	# Not a shape `DotChatClient` knows. dot-server's own chat manager sends a simpler
+	# payload than dot-chat's wire, and a server running WITHOUT dot-chat sends only
+	# that — so the fallback is not a failure path, it is the other deployment.
+	line_received.emit(str(payload.get("text", payload.get("message", ""))))
 
 
 # --- Voice -----------------------------------------------------------------

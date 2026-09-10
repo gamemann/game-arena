@@ -229,6 +229,8 @@ func tick(delta: float) -> void:
 	if spawner != null:
 		spawner.advance(delta)
 
+	_carry(delta)
+
 
 # --- Spawning --------------------------------------------------------------
 
@@ -325,6 +327,118 @@ func grav_gun(player_id: int) -> DotGravGun:
 		_grav_guns[player_id] = gun
 
 	return _grav_guns[player_id]
+
+
+## Does what a player asked with their tools. The one door for a prop intent.
+##
+## [b]Server side only, and every check is here rather than at the caller.[/b] A prop
+## is server-authoritative and unpredicted because a contact solver is not reproducible
+## across machines; the client sends what it wanted and this decides whether it
+## happened. `DotPropTool.may_act_on` is what enforces the range, the mass limit and
+## whose prop it is — none of which a client is asked about.
+func act(player_id: int, action: int, origin: Vector3, direction: Vector3) -> bool:
+	if spawner == null or not spawner.authoritative:
+		return false
+
+	# Typed, not inferred. `_space()` returns Variant — the tools take one so they
+	# compile outside a 3D scene — and `var x := f()` on a Variant is a parse ERROR
+	# under these projects' warning settings, not a warning.
+	var space: Variant = _space()
+
+	if space == null:
+		# No physics space to query. A dedicated server has one — `_rebuild_collision`
+		# put the level in it — but a client mirroring this layer does not, and a tool
+		# with nothing to trace against would grab whatever was last returned.
+		return false
+
+	# The player's view as a Basis, which `DotPhysGun` needs and the wire does not
+	# carry: it is derivable from the two angles it does carry, and a third
+	# representation of the same aim on the wire is a third thing that can disagree.
+	var view := Basis.looking_at(direction, Vector3.UP)
+
+	match action:
+		ArenaEvents.PropAct.GRAB:
+			return phys_gun(player_id).grab(space, origin, direction, view).ok
+		ArenaEvents.PropAct.RELEASE:
+			return phys_gun(player_id).release() != null
+		ArenaEvents.PropAct.FREEZE:
+			return phys_gun(player_id).freeze_held().ok
+		ArenaEvents.PropAct.PUNT:
+			return grav_gun(player_id).punt(space, origin, direction) != null
+		ArenaEvents.PropAct.PULL:
+			return grav_gun(player_id).pull(space, origin, direction).ok
+
+	return false
+
+
+## Keeps every held prop where its holder is looking. Once per tick.
+##
+## [b]Held props move every tick and a grab happens once.[/b] `DotPhysGun.hold` is what
+## carries one, and a layer that only called `grab` would give a player a prop that
+## stayed exactly where it was picked up — which reads as the physics gun not working
+## rather than as a missing call.
+##
+## `held` is checked rather than an `is_holding()`: `DotPhysGun` exposes the instance
+## and not a predicate, and a prop can be freed while it is held — an admin clearing
+## the world, a map change — so the aliveness test is the one that matters.
+func _carry(delta: float) -> void:
+	if game == null:
+		return
+
+	for id in _phys_guns.keys():
+		var gun: DotPhysGun = _phys_guns[id]
+
+		if gun.held == null or not gun.held.is_alive():
+			continue
+
+		var player := game.player_for(int(id))
+
+		if player == null or not player.is_alive():
+			gun.release()
+			continue
+
+		var aim := player.aim_direction()
+		gun.hold(
+			player.muzzle_position(),
+			aim,
+			Basis.looking_at(aim, Vector3.UP),
+			delta
+		)
+
+	for id in _grav_guns.keys():
+		var gun: DotGravGun = _grav_guns[id]
+
+		if not gun.is_carrying():
+			continue
+
+		var player := game.player_for(int(id))
+
+		if player == null or not player.is_alive():
+			gun.drop()
+			continue
+
+		gun.carry(player.muzzle_position(), player.aim_direction(), delta)
+
+
+## The physics space the tools trace in, or null when there is none.
+##
+## Typed [Variant] because `DotPropTool.target` takes one: the tools are written so
+## they compile in a project that is not in a 3D scene at all, which is how they are
+## tested headlessly.
+##
+## [b]Taken off the world node rather than off this one.[/b] `ArenaProps` is a plain
+## [Node] and `get_world_3d()` does not exist on one — dot-npc's own notes record the
+## same mistake, where a duck-typed `has_method` branch around it would not even
+## compile because GDScript cannot infer what such a branch returns.
+func _space() -> Variant:
+	if _world == null or not _world.is_inside_tree():
+		return null
+
+	# Typed explicitly. `var x := f()` where f returns Variant is a parse ERROR under
+	# these projects' warning settings, and `_world.get_world_3d()` on a Node3D
+	# reached through an untyped path is exactly that case.
+	var world: World3D = _world.get_world_3d()
+	return world.direct_space_state if world != null else null
 
 
 ## Drops whatever a player was holding and forgets their tools.

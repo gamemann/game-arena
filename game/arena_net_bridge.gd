@@ -767,8 +767,42 @@ func _on_request(message: DotNetMessage) -> void:
 			# Asked for, never taken. dot-match owns respawning and has its own
 			# timer; a client that could respawn itself could respawn instantly.
 			pass
+		ArenaEvents.Ask.PROP_TOOL:
+			_on_prop_act(peer_id, ArenaEvents.read_prop_act(request.reader()))
 		_:
 			pass
+
+
+## A client asked to do something with a prop.
+##
+## [b]The origin comes from the simulation and only the direction comes off the
+## wire.[/b] The server already knows where the player is — it moved them — and a
+## client that could name its own origin could grab a prop from anywhere on the map.
+## What it cannot know is where they were looking between two ticks, so that is the
+## one thing the payload carries and the one thing that is a claim.
+##
+## The tool itself decides whether it reaches: `DotPropTool.may_act_on` is what
+## enforces the range, the mass limit and whose prop it is.
+func _on_prop_act(peer_id: int, body: Dictionary) -> void:
+	if not bool(body.get("ok", false)) or game == null or game.props == null:
+		return
+
+	var session_id := session_for_peer(peer_id)
+
+	if session_id <= 0:
+		return
+
+	var player := game.player_for(session_id)
+
+	if player == null or not player.is_alive():
+		return
+
+	game.props.act(
+		session_id,
+		int(body["act"]),
+		player.muzzle_position(),
+		DotFpsMotor.aim_for(float(body["yaw"]), float(body["pitch"]))
+	)
 
 
 ## A peer has built its scene and may be sent things.

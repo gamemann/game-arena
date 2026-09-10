@@ -495,7 +495,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-186 + 116 + 77 checks.
+193 + 116 + 77 checks.
 
 **Filter `--check-only` for the lines that mean a parse failed, not against the lines
 that do not.** `tools/check.sh` elsewhere in this family subtracts shutdown noise by
@@ -516,6 +516,36 @@ than exiting — nothing reaches `get_tree().quit()`. That happened while writin
 and cost two timed-out runs before the log was read.
 
 **Run both examples after changing any dot-* addon.** That is what this project is for.
+
+## The detector, turned on this project's own new code
+
+The family's rule is that **an exported setting whose name occurs exactly once in its
+repository is a setting nothing reads**. The same grep over *methods* is worth as much
+and had never been run: a public method whose name occurs once is a method nothing
+calls. Turned on the twenty-six-addon pass, it found four, and three were real:
+
+- **`ArenaProps.phys_gun` and `grav_gun`.** dot-props' two tools were built, configured
+  per player and reachable from nothing. `ArenaProps.act` is the door now, and
+  `ArenaEvents.Ask.PROP_TOOL` is how a client reaches it — an *intent*, because a
+  rigid body's contact solver is not reproducible across machines, so the aim is a
+  claim the client makes and the origin is a fact the server already has.
+  `DotPhysGun.hold` also has to be called every tick: a layer that only called `grab`
+  gives a player a prop that stays exactly where it was picked up, which reads as the
+  physics gun not working rather than as a missing call.
+- **`ArenaAvatars.make_rig`.** dot-user-avatar built documents, `ArenaIdentity`
+  resolved them, and `ArenaPlayer` drew a coloured capsule — a value produced correctly
+  and consumed by nobody, at the size of a whole addon. Remote players wear their
+  avatar now, and fall back to the capsule when the schema itself will not build.
+- **`ArenaClientExtras.receive_line`.** The client's `DotChatClient` was a history
+  nothing fed. `ArenaServices` routes a line through dot-chat and then hands it to
+  dot-server's manager to put on the wire, so on the client it arrives on
+  `DotClientLink.chat_received` — not on anything dot-chat owns. Empty scrollback, zero
+  unread, and chat working perfectly on screen.
+
+The fourth was the detector's own bug and is worth as much as the three: **`addons/` is
+a symlink per addon and `grep -r` does not follow one**, so every override of an addon's
+virtual read as dead code. A guard reporting its healthy case while blind is the shape
+this family stopped reading `tools/check.sh` over; `find -L` is the fix.
 
 ## Things deliberately not here
 
