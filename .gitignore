@@ -42,3 +42,6 @@ Thumbs.db
 
 # Screenshots are evidence for a review, not assets.
 /screenshots/
+/addons/dot_objective
+/addons/dot_effects
+/addons/dot_spectate

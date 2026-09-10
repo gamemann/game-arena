@@ -589,6 +589,84 @@ own numbers — it is a genre-units game whose hull is 72 units, so the same kit
 0.508 there and 0.667 here. Duplicated rather than shared, per the family rule, and the
 two files have already diverged in exactly the place that matters.
 
+## Objectives, effects and spectating
+
+Three addons joined this game in one pass, and each answers something it had been
+missing since it was written.
+
+### Modes that are not about killing people
+
+`ffa`, `tdm` and `siege` are all scored on kills, which is why `DotMatch` alone had
+always been enough. **`koth` and `ctf` are not**, and the difference is not a score
+limit — it is a capture curve where the second player is worth half a player, a block
+that pauses rather than undoes, a partial capture that decays over a minute, and a
+king-of-the-hill clock that **freezes** rather than resetting when the point changes
+hands. That last one is the whole tension of the mode and it is what every hand-written
+version gets wrong. dot-objective has all four and this game has none of them.
+
+**The layout comes from the map's own numbers.** `ArenaMap` is constants — an extent, a
+floor height, a list of boxes — which is what lets a dedicated server that has never
+drawn the level still know where everything is. So `ArenaObjectives.build` puts the
+flags at the ends of the longest axis and the hill at the centre, derived rather than
+authored: a map added later gets a working layout without anybody remembering to place
+two more things in it. It is also why `ArenaMode.objective_layout` is an **id** rather
+than a list of definitions — a mode carrying definitions would carry `dm_atrium`'s flag
+positions into every map it was ever played on.
+
+### `resolver.adjust`, which nothing had ever filled
+
+dot-combat has offered that seam since it was written, documented as "the extension
+point for a game mode's own arithmetic: a damage boost pickup, a round-start immunity, a
+mode where the leader takes double". Nothing in this game had ever assigned it.
+`ArenaEffects` does, and that one line is the entire integration: an attacker's crit and
+a victim's resistance meet the damage at the one point every hit already goes through,
+after friendly fire and falloff and before the clamp.
+
+`ArenaEffects` owns no health value. dot-effects reports an amount and this applies it
+through `DotHealth`, which is what puts an afterburn tick through the same armour, the
+same rules and the same kill feed as a rifle round.
+
+**Spawn protection is an effect rather than `DotHealth.invulnerable`**, and the reason is
+one field: `no_capture`. A player standing untouchable on a control point is not a fight
+anybody can have, and `DotObjectivePresence.may_capture_fn` is where that is answered.
+
+### Where a dead player looks
+
+Until `ArenaSpectate` existed, the camera stayed where the body fell — the corpse is on
+the floor, so the view is on the floor, and the seconds before a respawn are spent
+looking at a wall from ankle height. The camera is four lines; the part that matters is
+that the **server** decides who may watch whom. A team mode gets `force_camera 1`, so a
+dead player cannot call out the other side's positions; a free-for-all has no sides to
+restrict to and gets `0`, because a restriction that means nothing is one an operator
+reading the log has to work out.
+
+The camera is driven once a **frame** rather than once a tick, for the reason this
+family measured at 47% in g2gfast: a camera moved on the tick timeline steps at the tick
+rate however smoothly the thing it is following is interpolated.
+
+### Two bugs the integration found
+
+- **A map change silently unhooked the effects layer.** `change_map` builds a *new*
+  `DotCombatManager` and a new resolver, so the `adjust` hook was left on an object about
+  to be freed. The layer kept running, kept expiring effects, kept reporting burn damage
+  — and stopped scaling a single hit, from the first `changelevel` onwards. This
+  family's most repeated shape exactly, and `ArenaEffects` now rebinds on `map_changed`
+  with a check that fails without it.
+
+- **`DotMatch` collected spawn points from the whole scene tree**, and this project had
+  never noticed because it had never had two games in one process. `DotMatch.setup` calls
+  `refresh_spawns`, which with no `spawns_ref` walks `get_tree().current_scene` — so a
+  second `ArenaGame` in the tree contributed ten spawn points to this one's match, and
+  players spawned in a map they were not in. Nothing errored: a spawn point is a spawn
+  point and dot-match had been handed exactly what it asked for. `_build_match` now
+  scopes the search to the game with a `DotNodeRef` in `PARENT` mode — **not** `SELF`,
+  which resolves against the match node rather than the game and finds only the team
+  manager.
+
+  The same fault reaches a `changelevel` on its own: `queue_free` is deferred, so the
+  outgoing map's points are still children for the rest of the frame in which the new
+  match calls `refresh_spawns`.
+
 ## Things deliberately not here
 
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and

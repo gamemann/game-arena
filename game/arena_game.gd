@@ -146,6 +146,19 @@ var horde: ArenaHorde = null
 ## Physics props. Null unless the mode asks for them and this instance is the authority.
 var props: ArenaProps = null
 
+## Status effects: burning, empowered, haste, spawn protection, slowed.
+##
+## Built in every mode, because spawn protection is one of them and every mode has
+## that. dot-effects' whole integration is one line — `resolver.adjust` — which
+## dot-combat has offered since it was written and nothing here had ever filled.
+var effects: ArenaEffects = null
+
+## What the round is about, in a mode that is about something. Null in a deathmatch.
+var objectives: ArenaObjectives = null
+
+## Where a dead player looks. Built in every mode, because every mode kills people.
+var spectate: ArenaSpectate = null
+
 ## player id -> [ArenaPlayer].
 var _players: Dictionary = {}
 
@@ -323,6 +336,25 @@ func _build_match() -> DotResult:
 	config.balance_between_rounds = false
 	match_node.config = config
 
+	# **Collect spawn points from THIS game and nowhere else.**
+	#
+	# `DotMatch.setup` calls `refresh_spawns`, which with no `spawns_ref` walks
+	# `get_tree().current_scene` — the whole tree. That is right for a game that is the
+	# scene and wrong for every other arrangement, and this project has two of them:
+	# a suite that builds several `ArenaGame`s in one process, and a `changelevel`,
+	# where the outgoing map's points are still children for the rest of the frame
+	# because `queue_free` is deferred.
+	#
+	# Measured: a second game in the tree contributed ten spawn points to this one's
+	# match, so players spawned in a map they were not in. Nothing errored — a spawn
+	# point is a spawn point, and dot-match had been handed exactly what it asked for.
+	# PARENT rather than SELF: `DotMatch` resolves the ref against ITSELF, so SELF is
+	# the match node, whose only child is the team manager. The spawn points are
+	# children of the game, which is the match node's parent.
+	var mine := DotNodeRef.new()
+	mine.mode = DotNodeRef.Mode.PARENT
+	match_node.spawns_ref = mine
+
 	add_child(match_node)
 
 	# Spawn points come from the map, not from the scene: a headless server never
@@ -418,6 +450,52 @@ func _build_progress() -> DotResult:
 func _build_world_layers() -> void:
 	if not is_authority or mode == null:
 		return
+
+	# Effects first, and the order matters: ArenaObjectives asks the effects layer
+	# whether a player may capture, and a layer that is not there yet answers "no
+	# layer", which is a legitimate answer and would silently let an invulnerable
+	# player take a point.
+	effects = ArenaEffects.new()
+	effects.name = "Effects"
+	effects.game = self
+	add_child(effects)
+
+	var effects_ready := effects.setup()
+
+	if not effects_ready.ok:
+		DotLog.warn(CHANNEL, "effects are off", {"why": effects_ready.error.message})
+		remove_child(effects)
+		effects.queue_free()
+		effects = null
+
+	spectate = ArenaSpectate.new()
+	spectate.name = "Spectate"
+	spectate.game = self
+	add_child(spectate)
+
+	var spectate_ready := spectate.setup()
+
+	if not spectate_ready.ok:
+		DotLog.warn(CHANNEL, "spectating is off", {"why": spectate_ready.error.message})
+		remove_child(spectate)
+		spectate.queue_free()
+		spectate = null
+
+	if mode.objective_layout != &"":
+		objectives = ArenaObjectives.new()
+		objectives.name = "Objectives"
+		objectives.game = self
+		add_child(objectives)
+
+		var objectives_ready := objectives.setup()
+
+		if not objectives_ready.ok:
+			DotLog.warn(
+				CHANNEL, "objectives are off", {"why": objectives_ready.error.message}
+			)
+			remove_child(objectives)
+			objectives.queue_free()
+			objectives = null
 
 	if mode.player_props or mode.scatter_props > 0:
 		props = ArenaProps.new()
@@ -819,6 +897,19 @@ func tick(commands: Dictionary = {}) -> void:
 
 	if horde != null:
 		horde.tick(delta)
+
+	# After the shots and before the match, for the same reason the two above are:
+	# a burn that kills somebody has to be reported dead before the win check runs, and
+	# an objective completed this tick has to be scored before it. An objective layer
+	# ticked after the match is one round decided late, every time.
+	if effects != null:
+		effects.tick(delta)
+
+	if objectives != null:
+		objectives.tick(delta)
+
+	if spectate != null:
+		spectate.tick(delta)
 
 	match_node.tick(_tick)
 

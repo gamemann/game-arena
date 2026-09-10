@@ -73,6 +73,11 @@ func _run() -> void:
 	await _test_horde()
 	await _test_siege()
 
+	await _test_effects()
+	await _test_spectating()
+	await _test_king_of_the_hill()
+	await _test_capture_the_flag()
+
 	# Last, and it has to be. It replaces the combat manager, the match node and the
 	# map, so everything above that reads any of them — the kill feed a HUD catches
 	# up on, the geometry the shot-blocking check traces against — must already have
@@ -242,6 +247,475 @@ func _first_team_mate(game: ArenaGame, id: int) -> int:
 			return other
 
 	return 0
+
+
+# --- Effects ---------------------------------------------------------------
+
+## dot-effects, and the one line that makes it count.
+##
+## [b]The check that matters is the damage one.[/b] Everything else here — that a burn
+## expires, that a slow slows — is dot-effects' own suite over again. What only this
+## project can test is whether `DotDamageResolver.adjust` is actually wired: dot-combat
+## has offered that seam since it was written, and a layer that computes multipliers
+## nothing multiplies by is this family's most repeated bug.
+func _test_effects() -> void:
+	_group("effects")
+
+	var game := ArenaGame.new()
+	game.name = "EffectGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.free_for_all(50)
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	if not _check(ready.ok, "an effects game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+	_check(game.effects != null, "every mode gets an effects layer")
+
+	var _a := game.add_player(700, "Att")
+	var _b := game.add_player(701, "Vic")
+	_go_live(game)
+
+	_check(
+		game.combat.resolver.adjust.is_valid(),
+		"dot-combat's per-hit hook is filled, which nothing in this game had ever done"
+	)
+
+	# The hit, with nothing on either end.
+	var plain := _hit(game, 700, 701, 40.0)
+	_check(
+		is_equal_approx(plain, 40.0),
+		"a plain hit lands unscaled", "%.1f" % plain
+	)
+
+	# The attacker empowered.
+	var _e := game.effects.apply(ArenaEffects.EMPOWERED, 700, 700)
+	var boosted := _hit(game, 700, 701, 40.0)
+	_check(
+		boosted > plain * 2.0,
+		"an empowered attacker hits harder", "%.1f against %.1f" % [boosted, plain]
+	)
+
+	# The victim untouchable.
+	var _p := game.effects.apply(ArenaEffects.PROTECTED, 701, 701)
+	var refused := _hit(game, 700, 701, 40.0)
+	_check(
+		refused == 0.0,
+		"and an invulnerable victim takes nothing at all", "%.1f" % refused
+	)
+	game.effects.remove(ArenaEffects.PROTECTED, 701)
+
+	# A burn reports damage and the game applies it, which is the whole seam.
+	var before: float = game.combat.health_of(701).health
+	var _burn := game.effects.apply(ArenaEffects.BURNING, 701, 700)
+	for t in range(TICK_RATE * 2):
+		game.tick({})
+	var after: float = game.combat.health_of(701).health
+	_check(
+		after < before,
+		"a burn takes health through DotHealth rather than by touching a number",
+		"%.1f -> %.1f" % [before, after]
+	)
+
+	# Movement, and the compounding trap.
+	var player := game.player_for(701)
+	var base := player.controller.tunables.max_speed
+	var _slow := game.effects.apply(ArenaEffects.SLOWED, 701, 700)
+	game.tick({})
+	var slowed := player.controller.tunables.max_speed
+	_check(slowed < base, "a slow slows", "%.2f from %.2f" % [slowed, base])
+
+	for t in range(30):
+		game.tick({})
+	_check(
+		is_equal_approx(player.controller.tunables.max_speed, slowed),
+		"and stays at ONE slow rather than compounding — scaling the live value each "
+		+ "tick reaches zero in a second and the player stops dead",
+		"%.4f" % player.controller.tunables.max_speed
+	)
+
+	game.effects.remove(ArenaEffects.SLOWED, 701)
+	game.tick({})
+	_check(
+		is_equal_approx(player.controller.tunables.max_speed, base),
+		"and goes back to the map's own speed when it ends",
+		"%.2f" % player.controller.tunables.max_speed
+	)
+
+	# Spawn protection, which is why PROTECTED exists as an effect rather than as
+	# DotHealth's own flag: it has to stop a capture as well.
+	game.effects.on_spawn(701)
+	_check(
+		game.effects.has(ArenaEffects.PROTECTED, 701),
+		"respawning grants spawn protection"
+	)
+	_check(
+		not game.effects.may_capture(701),
+		"and an untouchable player captures nothing, which is the whole reason "
+		+ "dot-objective asks a callable"
+	)
+
+	# And the seam a changelevel breaks.
+	var changed := game.change_map(ArenaMap.dm_box())
+	_check(changed.ok, "the map changes", str(changed.error))
+	_check(
+		game.combat.resolver.adjust.is_valid(),
+		"and the per-hit hook is back on the NEW resolver — a map change builds a new "
+		+ "combat manager, and without the rebind the effects layer keeps running and "
+		+ "stops scaling a single hit"
+	)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+
+
+## One resolved hit, returning what actually landed.
+func _hit(game: ArenaGame, attacker: int, victim: int, amount: float) -> float:
+	var type := game.combat.damage_type(&"bullet")
+	if type == null:
+		type = DotDamageType.new()
+		type.id = &"bullet"
+	var damage := DotDamage.make(attacker, victim, amount, type)
+	damage.tick = game.current_tick()
+	var out := game.combat.resolver.resolve(damage)
+	return 0.0 if out.refused else out.amount
+
+
+# --- Spectating ------------------------------------------------------------
+
+func _test_spectating() -> void:
+	_group("spectating")
+
+	var game := ArenaGame.new()
+	game.name = "SpectateGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.team_deathmatch(50)
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	if not _check(ready.ok, "a spectating game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+	_check(game.spectate != null, "every mode gets a spectate layer")
+
+	for index in range(4):
+		var _added := game.add_player(800 + index, "Watcher %d" % index)
+
+	# Nobody respawns during this section. A dead player who comes back is a dead
+	# player who correctly stops spectating, and the whole chain being tested here
+	# happens in the seconds before that — so a short respawn delay makes every check
+	# below measure "they respawned" rather than what it says it measures.
+	game.match_node.rules.respawn_delay_sec = 120.0
+	_go_live(game)
+
+	var victim := 800
+	var killer := _first_other_team(game, victim)
+	_check(killer > 0, "somebody is on the other side", str(killer))
+
+	_kill_through_combat(game, killer, victim)
+
+	_check(
+		game.spectate.is_spectating(victim),
+		"a dead player is watching something rather than lying on the floor"
+	)
+
+	var view := game.spectate.manager.view(str(victim))
+	_check(
+		view.mode == DotSpectatorView.Mode.DEATH_CAM,
+		"starting with the death camera", DotSpectatorView.Mode.keys()[view.mode]
+	)
+
+	# The whole chain, and the hand-over at the end of it.
+	for t in range(TICK_RATE * 5):
+		game.tick({})
+
+	_check(
+		view.mode == DotSpectatorView.Mode.FIRST_PERSON
+		or view.mode == DotSpectatorView.Mode.CHASE,
+		"and ending on somebody alive rather than on their killer",
+		DotSpectatorView.Mode.keys()[view.mode]
+	)
+	_check(view.target != "", "with a target", view.target)
+	_check(
+		game.team_of(int(view.target)) == game.team_of(victim),
+		"on their own side, because this is a team mode and the server decides",
+		"%d watching %s" % [victim, view.target]
+	)
+
+	var where := game.spectate.camera_for(victim)
+	_check(
+		where.origin.y > game.map.floor_y + 0.5,
+		"and the camera is off the floor rather than where the body fell",
+		"%.2f" % where.origin.y
+	)
+
+	var cycled := game.spectate.next_target(victim)
+	_check(cycled.ok, "the view can be cycled", str(cycled.error))
+
+	game.player_for(victim).spawn(game.map.spawns[0], game.current_tick())
+	game.spectate.manager.on_spawn(str(victim))
+	_check(
+		not game.spectate.is_spectating(victim),
+		"and respawning stops it"
+	)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+
+
+func _first_other_team(game: ArenaGame, id: int) -> int:
+	var side := game.team_of(id)
+	for index in range(4):
+		var other := 800 + index
+		if other != id and game.team_of(other) != side:
+			return other
+	return 0
+
+
+# --- Objectives ------------------------------------------------------------
+
+func _test_king_of_the_hill() -> void:
+	_group("king of the hill")
+
+	var game := ArenaGame.new()
+	game.name = "KothGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.king_of_the_hill()
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	if not _check(ready.ok, "a king-of-the-hill game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+	_check(game.objectives != null, "and has objectives")
+	_check(game.objectives.layout == &"koth", "the koth layout")
+
+	var hill := game.objectives.manager.objective(&"hill") as DotObjectiveCapture
+	var clock := game.objectives.manager.objective(&"koth_clock") as DotObjectiveHoldout
+	_check(hill != null and clock != null, "a point and a clock")
+	_check(clock.linked == hill, "and the clock reads the point's owner")
+
+	var _a := game.add_player(900, "Red")
+	var _b := game.add_player(901, "Blue")
+	var red_side := game.team_of(900)
+
+	# On the point, and not live: warmup is when everybody stands on everything.
+	_stand(game, 900, hill.def.area.centre)
+	for t in range(TICK_RATE):
+		game.tick({})
+	_check(
+		hill.owner_team == 0,
+		"nothing is captured during warmup", str(hill.owner_team)
+	)
+
+	_go_live(game)
+	_stand(game, 901, Vector3(1000.0, 0.0, 0.0))
+
+	var ticks := 0
+	while hill.owner_team == 0 and ticks < TICK_RATE * 30:
+		_stand(game, 900, hill.def.area.centre)
+		game.tick({})
+		ticks += 1
+
+	_check(
+		hill.owner_team == red_side,
+		"and a player standing on it takes it once the match is live",
+		"%d after %d ticks" % [hill.owner_team, ticks]
+	)
+
+	var left := clock.remaining_for(red_side)
+	for t in range(TICK_RATE):
+		_stand(game, 900, hill.def.area.centre)
+		game.tick({})
+	_check(
+		clock.remaining_for(red_side) < left,
+		"holding it runs their clock down",
+		"%d from %d" % [clock.remaining_for(red_side), left]
+	)
+
+	# The freeze, which is the whole tension of the mode.
+	#
+	# Sampled on the tick the point actually changes hands, not before it: red's clock
+	# legitimately keeps running for the seconds blue spends capturing, and a sample
+	# taken early measures that instead of the freeze.
+	_stand(game, 900, Vector3(1000.0, 0.0, 0.0))
+	var blue_side := game.team_of(901)
+	var frozen := -1
+	var flipped := 0
+	while hill.owner_team != blue_side and flipped < TICK_RATE * 30:
+		_stand(game, 901, hill.def.area.centre)
+		game.tick({})
+		flipped += 1
+		if hill.owner_team == blue_side:
+			frozen = clock.remaining_for(red_side)
+
+	_check(
+		hill.owner_team == blue_side,
+		"the other side can take it back", str(hill.owner_team)
+	)
+	for t in range(TICK_RATE):
+		_stand(game, 901, hill.def.area.centre)
+		game.tick({})
+	_check(
+		clock.remaining_for(red_side) == frozen,
+		"and the first side's clock is FROZEN where it stopped rather than reset",
+		"%d against %d" % [clock.remaining_for(red_side), frozen]
+	)
+	_check(
+		clock.remaining_for(blue_side) < clock.def.holdout_ticks,
+		"while the new owner's runs"
+	)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+
+
+func _test_capture_the_flag() -> void:
+	_group("capture the flag")
+
+	var game := ArenaGame.new()
+	game.name = "CtfGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.capture_the_flag(3)
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	if not _check(ready.ok, "a capture-the-flag game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+	var red_flag := game.objectives.manager.objective(&"red_flag") as DotObjectiveFlag
+	var blue_flag := game.objectives.manager.objective(&"blue_flag") as DotObjectiveFlag
+	_check(red_flag != null and blue_flag != null, "there are two flags")
+	_check(
+		red_flag.home_team() != blue_flag.home_team(),
+		"one for each side"
+	)
+
+	var _a := game.add_player(910, "One")
+	var _b := game.add_player(911, "Two")
+	_go_live(game)
+
+	# Whoever is NOT on red's side is the one who can take red's flag.
+	var thief := 910 if game.team_of(910) != red_flag.home_team() else 911
+	var defender := 911 if thief == 910 else 910
+
+	_stand(game, defender, Vector3(1000.0, 0.0, 0.0))
+	_stand(game, thief, red_flag.at)
+	game.tick({})
+
+	_check(
+		red_flag.carrier == str(thief),
+		"standing on the enemy flag takes it",
+		"carrier=%s" % red_flag.carrier
+	)
+
+	# The carrier's own flag is at home, so a capture is allowed.
+	var target := red_flag.capture_area().centre
+	for t in range(20):
+		_stand(game, thief, target)
+		game.tick({})
+
+	_check(
+		red_flag.captures == 1,
+		"carrying it to the other end scores it", str(red_flag.captures)
+	)
+	_check(red_flag.is_home(), "and the flag goes home")
+	_check(
+		game.match_node.scoreboard.team_score(game.team_of(thief)) > 0,
+		"and dot-match has the point, through report_objective rather than a bare "
+		+ "team score, so the win check ran with it",
+		str(game.match_node.scoreboard.team_score(game.team_of(thief)))
+	)
+
+	# A carrier who dies drops it.
+	_stand(game, thief, red_flag.at)
+	game.tick({})
+	_check(red_flag.carrier == str(thief), "it is taken again")
+	_kill_through_combat(game, defender, thief)
+	game.tick({})
+	_check(
+		red_flag.state == DotObjectiveFlag.State.DROPPED,
+		"and a carrier who dies drops it",
+		DotObjectiveFlag.State.keys()[red_flag.state]
+	)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+
+
+## Zero the warmup and tick until the match is actually being played.
+##
+## Through the real state machine rather than by setting the state: warmup exists, the
+## objective layer keys off it, and a test that jumped the machine would be testing a
+## state the game never reaches this way.
+func _go_live(game: ArenaGame) -> void:
+	game.match_node.rules.warmup_sec = 0.0
+	game.match_node.rules.countdown_sec = 0.0
+	game.match_node.rules.min_players = 1
+	var guard := 0
+	while not game.match_node.is_live() and guard < TICK_RATE * 20:
+		game.tick({})
+		guard += 1
+
+
+## Kill somebody the way the game does it, through dot-combat.
+##
+## Not `DotMatch.report_kill`: that scores a death and emits nothing the game listens
+## to, so every layer hanging off `ArenaGame.player_killed` — the spectator camera, the
+## flag drop — never hears about it. A test that kills the scoreboard's way is a test
+## that never exercises the path a real death takes.
+func _kill_through_combat(game: ArenaGame, killer: int, victim: int) -> void:
+	var health := game.combat.health_of(victim)
+	if health == null:
+		return
+	var type := game.combat.damage_type(&"bullet")
+	if type == null:
+		type = DotDamageType.new()
+		type.id = &"bullet"
+	# Spawn protection off first. A player who has just spawned is invulnerable for a
+	# second or two and `DotHealth.apply` refuses everything until then — silently,
+	# because a refused hit is a legitimate outcome — so a test that kills somebody
+	# immediately after a spawn kills nobody and every check after it fails for a
+	# reason that is nothing to do with what it is testing.
+	health.invulnerable_until_tick = -1
+	var damage := DotDamage.make(killer, victim, health.health + health.armour + 50.0, type)
+	damage.tick = game.current_tick()
+	var applied := health.apply(damage)
+	if applied != null and applied.lethal:
+		game.combat.entity_killed.emit(victim, applied)
+
+
+## Put a player somewhere, without simulating a walk there.
+func _stand(game: ArenaGame, id: int, at: Vector3) -> void:
+	var player := game.player_for(id)
+	if player == null or player.controller == null:
+		return
+	player.controller.state.position = at
 
 
 # --- Assertions ------------------------------------------------------------

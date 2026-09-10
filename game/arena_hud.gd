@@ -30,6 +30,15 @@ var timer_label: Label = null
 var remaining_override: float = NAN
 var score_label: Label = null
 
+## What the round is about, when it is about something. Empty in a deathmatch.
+##
+## One line rather than a widget per objective, because the two modes that have any
+## want completely different pictures — a hill wants a clock and a flag wants two
+## states — and a widget general enough for both would draw neither well. A game that
+## wants a proper objective HUD builds it; this is the line that says a mode is
+## running and how far along it is.
+var objective_label: Label = null
+
 
 ## Builds every widget. Call after adding to the tree.
 func build(p_game: ArenaGame) -> void:
@@ -103,6 +112,11 @@ func build(p_game: ArenaGame) -> void:
 	timer_label = _make_label("Timer", Control.PRESET_CENTER_TOP, Vector2(0.0, 8.0))
 	score_label = _make_label("Score", Control.PRESET_CENTER_TOP, Vector2(0.0, 34.0))
 	score_label.theme_type_variation = &"DotDim"
+
+	objective_label = _make_label(
+		"Objective", Control.PRESET_CENTER_TOP, Vector2(0.0, 58.0)
+	)
+	objective_label.theme_type_variation = &"DotDim"
 
 	if game != null:
 		game.player_killed.connect(_on_kill)
@@ -239,3 +253,57 @@ func _process(_delta: float) -> void:
 			leader.display_name, leader.score, game.match_node.rules.score_limit
 		]
 	)
+
+	if objective_label != null:
+		objective_label.text = _objective_line()
+
+
+## One line about the objectives, or nothing at all.
+##
+## Reads the mirroring manager on a client and the real one on a listen server, which
+## is the same object either way: `ArenaObjectives` holds a `DotObjectiveManager` whose
+## `authoritative` decides whether it simulates, and a HUD asking it for a fraction does
+## not care which.
+func _objective_line() -> String:
+	if game.objectives == null or game.objectives.manager == null:
+		return ""
+
+	var manager := game.objectives.manager
+
+	if not manager.has_objectives():
+		return ""
+
+	var parts := PackedStringArray()
+
+	for objective in manager.objectives.objectives:
+		var label := objective.def.label if objective.def.label != "" \
+			else String(objective.id())
+
+		if objective is DotObjectiveHoldout:
+			var holdout := objective as DotObjectiveHoldout
+			var lead := holdout.leader()
+			if lead <= 0:
+				parts.append("%s --" % label)
+			else:
+				var left := holdout.remaining_for(lead)
+				parts.append(
+					"%s %d:%02d" % [
+						label,
+						left / (60 * game.tick_rate),
+						(left / game.tick_rate) % 60,
+					]
+				)
+		elif objective is DotObjectiveFlag:
+			var flag := objective as DotObjectiveFlag
+			parts.append(
+				"%s %s" % [
+					label,
+					DotObjectiveFlag.State.keys()[flag.state].substr(0, 4),
+				]
+			)
+		elif objective.owner_team > 0:
+			parts.append("%s:%d" % [label, objective.owner_team])
+		else:
+			parts.append("%s %d%%" % [label, int(objective.progress() * 100.0)])
+
+	return "  ".join(parts)

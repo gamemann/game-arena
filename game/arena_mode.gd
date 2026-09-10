@@ -80,6 +80,17 @@ extends Resource
 ## How many props the map scatters as cover, owned by nobody.
 @export_range(0, 64, 1) var scatter_props: int = 0
 
+@export_group("Objectives")
+
+## Which objective layout this mode plays, or empty for none.
+##
+## [b]An id rather than a list of definitions, and that is deliberate.[/b] The layout is
+## derived from the MAP's own extent — see [method ArenaObjectives.build] — so a mode
+## carrying the definitions would carry `dm_atrium`'s flag positions into every map it
+## was ever played on. `ffa`, `tdm` and `siege` leave it empty and are scored on kills,
+## which is what [DotMatch] alone has always been enough for.
+@export var objective_layout: StringName = &""
+
 @export_group("Map")
 
 ## The map this mode is played on if nothing else says. Empty means "whatever is loaded".
@@ -180,6 +191,79 @@ static func team_deathmatch(limit: int = 75) -> ArenaMode:
 	rules.intermission_sec = 8.0
 	rules.match_end_sec = 15.0
 	rules.suicide_points = -1
+	rules.friendly_points = -1
+	mode.rules = rules
+
+	return mode
+
+
+## King of the hill: one point, two clocks, and the clock that runs is the owner's.
+##
+## [b]The mode that made this game need dot-objective.[/b] Everything before it is
+## scored on kills, so [DotMatch] alone was enough; this one is scored on **holding a
+## place**, and the difference is not a score limit — it is a capture curve where the
+## second player is worth half a player, a block that pauses rather than undoes, a
+## partial capture that decays over a minute, and a clock that FREEZES rather than
+## resetting when the point changes hands. That last one is the whole tension of the
+## mode and it is the thing every hand-written version gets wrong.
+static func king_of_the_hill() -> ArenaMode:
+	var mode := ArenaMode.new()
+	mode.id = &"koth"
+	mode.display_name = "King of the Hill"
+	mode.description = "One point in the middle. Hold it for ninety seconds."
+	mode.team_count = 2
+	mode.friendly_fire = false
+	mode.self_damage = true
+	mode.objective_layout = &"koth"
+	mode.preferred_map = &"dm_atrium"
+
+	# One point wins it. The objective IS the score, so a kill limit on top would be a
+	# second way to end a round that nobody is playing for.
+	var rules := DotMatchRules.team_deathmatch(1)
+	rules.display_name = "King of the Hill"
+	rules.respawn_delay_sec = 5.0
+	rules.spawn_protection_sec = 2.0
+	rules.warmup_sec = 10.0
+	rules.countdown_sec = 3.0
+	rules.min_players = 2
+	rules.intermission_sec = 8.0
+	rules.match_end_sec = 15.0
+	rules.suicide_points = 0
+	rules.friendly_points = -1
+	mode.rules = rules
+
+	return mode
+
+
+## Capture the flag: theirs to yours, and yours has to be home.
+##
+## The respawn is long on purpose. A capture is a journey across the map and a defender
+## who is back in three seconds makes it one nobody completes; five seconds is what
+## turns a kill near the flag into time on the clock.
+static func capture_the_flag(limit: int = 3) -> ArenaMode:
+	var mode := ArenaMode.new()
+	mode.id = &"ctf"
+	mode.display_name = "Capture the Flag"
+	mode.description = "Take theirs to yours. First side to %d." % limit
+	mode.team_count = 2
+	mode.friendly_fire = false
+	mode.self_damage = true
+	mode.objective_layout = &"ctf"
+	mode.preferred_map = &"dm_atrium"
+
+	var rules := DotMatchRules.team_deathmatch(limit)
+	rules.display_name = "Capture the Flag"
+	rules.respawn_delay_sec = 5.0
+	rules.spawn_protection_sec = 2.0
+	rules.warmup_sec = 10.0
+	rules.countdown_sec = 3.0
+	rules.min_players = 2
+	rules.intermission_sec = 8.0
+	rules.match_end_sec = 15.0
+	# Zero, not -1: a carrier who jumps into a pit to deny a capture has already given
+	# the flag back, and charging them a point for it as well is paying twice for one
+	# mistake. Deathmatch charges -1 because there the death IS the mistake.
+	rules.suicide_points = 0
 	rules.friendly_points = -1
 	mode.rules = rules
 

@@ -680,6 +680,39 @@ func _process(delta: float) -> void:
 	for body in game.players():
 		body.present(delta)
 
+	_drive_spectator_camera()
+
+
+## Where a dead player looks.
+##
+## [b]Until this existed the camera stayed where the body fell.[/b] That is the one
+## thing a first-person game must not do: the corpse is on the floor, so the view is on
+## the floor, and the seconds before a respawn are spent looking at a wall from ankle
+## height. dot-spectate decides what to look at and the server decides whether it is
+## allowed; this is the four lines that put the answer on the camera.
+##
+## Once a FRAME rather than once a tick, deliberately. A camera moved on the tick
+## timeline steps at the tick rate however smoothly the thing it is following is
+## interpolated — which is the jitter this family measured at 47% in g2gfast and spent
+## a day on.
+func _drive_spectator_camera() -> void:
+	if game.spectate == null or player == null or player.camera == null:
+		return
+
+	var id := player.player_id
+
+	if not game.spectate.is_spectating(id):
+		if not player.camera.current:
+			player.camera.current = true
+		return
+
+	var where := game.spectate.camera_for(id)
+
+	if where == Transform3D.IDENTITY:
+		return
+
+	player.camera.global_transform = where
+
 
 ## The fire command, from the keyboard and the mouse.
 ##

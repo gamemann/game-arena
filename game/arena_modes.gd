@@ -21,6 +21,8 @@ static func all() -> Array[ArenaMode]:
 		ArenaMode.free_for_all(),
 		ArenaMode.team_deathmatch(),
 		ArenaMode.siege(),
+		ArenaMode.king_of_the_hill(),
+		ArenaMode.capture_the_flag(),
 	]
 
 
