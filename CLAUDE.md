@@ -138,7 +138,7 @@ the client still converged, because the second replay started from the first one
 — and the only visible cost was in the number that exists to measure exactly this:
 `correction_rate()` read **0.500** with the extra pass and **0.032** without. A rate near
 a half is what `DotNetPredictor` documents as "the two simulations disagree, and no
-smoothing will fix that". Found from `dot-2d-hungry`, whose bridge was written from this
+smoothing will fix that". Found from `game-hungario`, whose bridge was written from this
 one and inherited it.
 
 ## The client
@@ -224,7 +224,7 @@ under loss.
 
 **`dedicated`** boots a real `DotServer` and loads `ArenaModule`. It does not connect a
 client: dot-platform runs that seam with a real `DotClientLink` over a real socket, and
-`dot-2d-hungry`'s `sandbox` now runs it with a game's own RPCs on top. Repeating it here
+`game-hungario`'s `sandbox` now runs it with a game's own RPCs on top. Repeating it here
 would test dot-server rather than this game.
 
 Two bugs the interface checks found, both of which parsed cleanly:
@@ -240,13 +240,10 @@ Two bugs the interface checks found, both of which parsed cleanly:
 ## Validating changes
 
 ```bash
-cd godot/game-arena
-for pair in dot_core:dot-core dot_net:dot-net dot_server:dot-server \
-            dot_fps_controller:dot-fps-controller dot_combat:dot-combat \
-            dot_loadout:dot-loadout dot_match:dot-match dot_ui:dot-ui; do
-  ln -s "../../${pair##*:}/addons/${pair%%:*}" "addons/${pair%%:*}"
-done
+# The eight addon links, from this project's own .gitignore. Do not hand-make them.
+godot/bootstrap/bootstrap.sh --links
 
+cd godot/game-arena
 godot --headless --path . --import
 find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read f; do
     godot --headless --path . --check-only --script "res://${f#./}"
@@ -274,20 +271,17 @@ and cost two timed-out runs before the log was read.
 
 ## Things deliberately not here
 
-- **Netcode over a real socket.** `ArenaNetBridge` exists and `headless_net` runs it over
-  a loopback, but nothing here opens a socket or wires the bridge into `ArenaModule` —
-  the dedicated server still ticks `ArenaGame` directly. `dot-2d-hungry` does the whole
-  thing, `HungryModule` included, and is what this would copy from.
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and
   dot-combat records the launch vector without spawning anything. A projectile is a
   replicated entity with a lifetime; the bridge now exists to give it one.
 - **Pickups in the world.** dot-loadout ships `DotPickup` and `DotPickupField`; the map
   places none. An arena with weapon and armour pickups is most of what makes map
   control matter, and it is a level-design decision rather than a wiring one.
-- **A real client.** No camera rig, no viewmodel, no sound, no input sampling into
-  `ArenaGame`. `DotFpsSampler` is the seam; there is no scene a person can play yet.
-  `dot-2d-hungry` has the 2D equivalent of all of it — launcher, camera, renderer, HUD,
-  chat, touch — and is the shape this would take.
+- **Sound, and a viewmodel.** `ArenaClient` has the camera rig, the input sampling, the
+  renderer, the HUD and the menus. It has no audio whatsoever — nothing in `game/` names
+  an `AudioStream` — and nothing is drawn for the weapon in your own hands, so the only
+  feedback a shot gives is the crosshair and the ammunition counter. `game-hungario`
+  generates its sound rather than shipping any, and is the shape this would take.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
 - **A hot `changelevel`.** There are two maps now (`dm_box`, `dm_atrium`) and
