@@ -19,10 +19,37 @@ limit, and a HUD and menus with no art assets anywhere.
 **This is the reference game.** It exists to prove the addons compose, to show what the
 bridges between them look like, and to be the thing a new game is copied from.
 
-## Running it
+## Playing it
 
 ```bash
-ln -s ../../dot-core/addons/dot_core addons/dot_core          # and the other seven
+ln -s ../../dot-core/addons/dot_core addons/dot_core   # and the other seven
+godot --path .                                         # bots, no server needed
+```
+
+No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` registered
+the client is the authority, loads `dm_atrium` out of its own build and adds three
+bots. `-- --offline` forces that even when a link *is* available.
+
+| | |
+| --- | --- |
+| **WASD** | Move |
+| **Space** | Jump — hold it, auto-hop is on |
+| **Ctrl** | Crouch |
+| **Mouse 1** | Fire |
+| **R** | Reload |
+| **1**..**4** / wheel | Weapon slot |
+| **Tab** (hold) | Scoreboard |
+| **Esc** | Pause menu, and release the mouse |
+
+**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody
+spawns until LIVE — dot-match's respawn queue is what places a player, and it does not
+run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a
+screenshot taken earlier than that shows an empty room and a player at the origin, which
+is correct and looks exactly like a broken spawn.
+
+## Running it headless
+
+```bash
 godot --headless --path . res://examples/headless_match.tscn   # a whole deathmatch
 godot --headless --path . res://examples/headless_net.tscn     # the netcode
 godot --headless --path . res://examples/dedicated.tscn        # a real DotServer
