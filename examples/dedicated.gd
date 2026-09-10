@@ -52,6 +52,7 @@ func _run() -> void:
 		await _test_services()
 		_test_maps_and_vote()
 		_test_query()
+		await _test_browser()
 		_test_commands()
 		_test_unload()
 
@@ -121,6 +122,10 @@ func _build() -> bool:
 	config.hibernate_when_empty = false
 	config.startup_config = ""
 	config.autoexec_config = ""
+	# The query listener, which `_test_browser` needs. On by default on a real server;
+	# named here so a suite that stopped exercising it fails rather than skipping.
+	config.query_enabled = true
+	config.query_port = PORT + 1
 
 	_server = DotServer.new()
 	_server.name = "Server"
@@ -432,6 +437,133 @@ func _test_query() -> void:
 		"and the map it names is the one that is running",
 		str(snapshot.game.get("map", ""))
 	)
+
+
+## dot-browser asking a real [DotServer] — which nothing in this family had done.
+##
+## [b]This is the seam the family's own notes name.[/b] dot-server has answered A2S and
+## its own richer protocol since it was written; dot-browser's suite queries a DQP
+## server over a real loopback socket. Neither had ever met the other, and by this
+## family's repeated lesson that is where the next bugs are.
+##
+## The listening query port is the server's own, so this is a real UDP round trip
+## between two objects in one process — which is exactly the deployment shape a player
+## opening a server list is in, minus the distance.
+func _test_browser() -> void:
+	print("")
+	print("a browser asking this server")
+
+	var browser := ArenaBrowser.new()
+	browser.name = "Browser"
+	browser.timeout_ms = 2000
+	# In memory. A suite that wrote a player's favourites to disk is a suite that
+	# passes differently the second time it is run.
+	browser.favourites_path = ""
+	add_child(browser)
+
+	var started := browser.setup()
+
+	if not _check(started.ok, "the browser starts", str(started.error)):
+		browser.queue_free()
+		remove_child(browser)
+		return
+
+	# The query port, not the game port. dot-server listens for queries separately —
+	# a browser that asked the game port would get no answer and report every server
+	# as offline, which reads as the browser being broken.
+	var query_port := _server.config.query_port
+
+	if query_port <= 0:
+		_check(false, "the server has a query port to ask", "query_enabled is off")
+		browser.queue_free()
+		remove_child(browser)
+		return
+
+	# The query port as a separate argument, not a third part of the string. A
+	# three-part address parses as a malformed IPv6 one and fails at `connect_to_host`
+	# with "Invalid IPv6 address", several layers below anything that could say what
+	# was actually wrong.
+	var added := browser.add("127.0.0.1:%d" % PORT, query_port)
+	_check(added.ok, "a server can be added by address", str(added.error))
+
+	var refreshed: DotResult = await browser.refresh()
+	_check(refreshed.ok, "and asked", str(refreshed.error))
+
+	var entries := browser.browser.entries()
+
+	if not _check(entries.size() == 1, "there is one entry", "%d" % entries.size()):
+		browser.queue_free()
+		remove_child(browser)
+		return
+
+	var entry := entries[0]
+
+	_check(
+		entry.is_online(),
+		"the server answered",
+		entry.error.message if entry.error != null else entry.status_name()
+	)
+
+	if entry.is_online():
+		_check(
+			entry.name == _server.config.hostname,
+			"with its hostname",
+			"%s vs %s" % [entry.name, _server.config.hostname]
+		)
+		_check(
+			entry.max_players == _server.config.max_players,
+			"and its slot count",
+			"%d vs %d" % [entry.max_players, _server.config.max_players]
+		)
+
+		# The game half, which is what `ArenaModule`'s query provider contributes. A
+		# `DotGameDescriptor` alone would say only that the game is called Arena — the
+		# mode, the map and the state are the provider's, and until a browser asked,
+		# nothing had ever read them.
+		#
+		# [b]It is NOT `entry.map`.[/b] That is dot-server's `info.map`, which means
+		# "the content id of the loaded game" and is empty on a server that has never
+		# switched games — so the first version of this check read it, got "", and
+		# reported a browser fault for a browser that was working. dot-browser nests
+		# the game's own section under `rules["game"]` precisely so a game putting a
+		# field called `map` in it cannot overwrite the other one.
+		_check(
+			ArenaBrowser.game_field(entry, "map") == String(_game.map.id),
+			"and the map the GAME says it is running",
+			"%s vs %s" % [ArenaBrowser.game_field(entry, "map"), String(_game.map.id)]
+		)
+		_check(
+			ArenaBrowser.game_field(entry, "mode") != "",
+			"and the mode, which only the query provider knows",
+			ArenaBrowser.game_field(entry, "mode")
+		)
+
+	# Favourites and history, which is the half a list is actually for.
+	browser.favourite(entry.key(), true)
+	_check(browser.browser.is_favourite(entry.key()), "a server can be favourited")
+
+	browser.favourite(entry.key(), false)
+	_check(
+		not browser.browser.is_favourite(entry.key()),
+		"and un-favourited again"
+	)
+
+	# Filtering is LOCAL. A server does not get to decide whether it appears in your
+	# list; you queried it, you hold the answer, and a filter the server applied would
+	# be a filter the server could lie about.
+	browser.filter.hide_empty = true
+	var hidden := browser.listing().size()
+	browser.filter.hide_empty = false
+	var shown := browser.listing().size()
+
+	_check(
+		hidden <= shown,
+		"and the filter runs on what this client holds",
+		"%d hidden, %d shown" % [hidden, shown]
+	)
+
+	browser.queue_free()
+	remove_child(browser)
 
 
 func _test_client_spawn() -> void:

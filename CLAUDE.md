@@ -393,6 +393,29 @@ Three more the suite found, all in the wiring rather than in the addons:
   owner like any other, so eight props costing fourteen against a budget of twelve
   placed seven and refused the eighth silently.
 
+## The server browser, from the other end
+
+**dot-server has answered queries since it was written and nothing had ever asked
+one.** `ArenaModule` contributes a query provider — the mode, the map, the round, the
+state, how many monsters and props are in the world — and until `ArenaBrowser` existed,
+the only thing in this family that could read it was a test.
+
+`dedicated` now has a real browser ask a real `DotServer` over a real UDP socket. Two
+things a reader of a query section gets wrong once, and both were got wrong here first:
+
+- **The map is not `entry.map`.** That is dot-server's `info.map`, which means "the
+  content id of the loaded game" and is empty on a server that never switches games.
+  dot-browser nests a game's own section under `rules["game"]` precisely so a game
+  putting a field called `map` in it cannot overwrite the other one.
+- **The query port is a separate argument, not a third part of the address.**
+  `DotBrowserTarget.parse` takes `host:port`; a three-part string parses as a malformed
+  IPv6 address and fails at `connect_to_host` with "Invalid IPv6 address", several
+  layers below anything that could say what was wrong.
+
+**Filtering is local, and that is a rule rather than an optimisation.** A server does
+not get to decide whether it appears in your list: you queried it, you hold the answer,
+and a filter the server applied would be a filter the server could lie about.
+
 ## Chat, voice and moderation
 
 `ArenaServices` is **the second file that names dot-server**, and the rule is now "two
@@ -411,12 +434,21 @@ player, and `!` commands the game can claim.
 chat router that started first would find nothing, warn once, and enforce no gag for the
 life of the server.
 
-**Voice has its own channel on the link.** A talk spurt is fifty frames a second per
+**Voice has its own channel on the link, and picks its own transport.** A talk spurt is fifty frames a second per
 speaker relayed to every listener; on the state channel it would sit in the same ordered
 queue as the snapshots, so somebody holding the talk key would add a frame of latency to
 everybody's movement. The speaker id is stamped from the transport's sender and never
 read out of the payload — a client that could name its own could put words in anybody's
 mouth, and the only symptom is words coming out of the wrong player.
+
+**UDP on a desktop and TCP in a browser, with neither named anywhere.** The two voice
+calls are declared `unreliable`, which is what voice wants: a lost frame is 20 ms of
+silence a jitter buffer conceals, and a resent one arrives after the frames either side
+of it have already played. What that becomes on the wire is `DotTransportAuto`'s
+decision, and it has one sensible answer either way — ENet honours the unreliable
+channel as UDP, and a browser has no UDP at all, so WebSocket delivers it reliably and
+in order over TCP whatever anybody asks for. The platform rule falls out rather than
+being written.
 
 ## Two examples, two deployment shapes
 
@@ -463,7 +495,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-186 + 116 + 65 checks.
+186 + 116 + 77 checks.
 
 **Filter `--check-only` for the lines that mean a parse failed, not against the lines
 that do not.** `tools/check.sh` elsewhere in this family subtracts shutdown noise by
@@ -504,10 +536,13 @@ and cost two timed-out runs before the log was read.
   counts on the client the moment anybody writes one; what the player gets today is
   the HUD's notice line. A scrolling window with an input field is a `DotScreen`, and
   nobody has written it.
-- **A server browser screen.** dot-browser's client half — sources, filters,
-  favourites, history — is not wired into `ArenaClient`. The *server* half is:
-  `ArenaModule` contributes a query provider so a browser has something to read, and
-  `dedicated` asserts what it says. Nothing has yet asked a real `DotServer` for it.
+- **A master server.** `DotBrowserSourceBackbone` reads a listing that nothing is yet
+  publishing, and there is no heartbeat — so the browser finds what somebody typed
+  into it and nothing else. That gap is the family's rather than this game's.
+- **Joining from the browser.** `ArenaBrowser.BrowserScreen` lists servers, favourites
+  them and reports which one was picked; connecting means tearing down this client's
+  netcode, opening a transport at a new address and going through signon again, which
+  is a launcher's job — and this game is loaded *by* one.
 - **A viewmodel, and sound.** `ArenaClient` has the camera rig, the input sampling, the
   renderer, the HUD and the menus. It has no audio whatsoever beyond voice chat, and
   nothing is drawn for the weapon in your own hands.

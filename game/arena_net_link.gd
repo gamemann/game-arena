@@ -40,6 +40,19 @@ const CHANNEL_STATE := 1
 ## holding the talk key would add a frame of latency to everybody's movement — and a
 ## burst of snapshots would arrive as a gap in the audio, which is the one artefact a
 ## jitter buffer cannot hide.
+##
+## [b]UDP on a desktop and TCP in a browser, and neither is chosen here.[/b] The calls
+## below are declared `unreliable`, which is what voice wants: a lost frame is 20 ms of
+## silence a jitter buffer conceals, and a resent one arrives after the frames either
+## side of it have already played. What that becomes on the wire is
+## `DotTransportAuto`'s decision and it has exactly one sensible answer either way —
+## ENet honours the unreliable channel as UDP; a browser has no UDP at all, so
+## WebSocket delivers it reliably and in order over TCP whatever anybody asks for.
+##
+## So the platform rule falls out rather than being written: a desktop client's voice
+## is unreliable UDP, a browser client's is TCP, and this file names neither. Trying to
+## pick per platform here would mean a game naming a transport, which is the one thing
+## `DotTransport` exists to stop.
 const CHANNEL_VOICE := 2
 
 ## The bridge these calls are delivered to. Set by whoever creates this node.

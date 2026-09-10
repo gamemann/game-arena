@@ -90,6 +90,9 @@ var _ui_config: DotUiConfig = null
 ## The meshes of the map currently drawn. Replaced on a map change.
 var _level: Node3D = null
 
+## dot-browser's client half, and the screen over it.
+var browser: ArenaBrowser = null
+
 
 func _ready() -> void:
 	link = DotRegistry.get_node_service(LINK_SERVICE)
@@ -202,7 +205,28 @@ func _build_interface() -> void:
 	add_child(menus)
 
 	_ui_config = DotUiConfig.new()
-	ArenaMenus.install(menus, game, _ui_config)
+	var pause := ArenaMenus.install(menus, game, _ui_config)
+
+	# The server browser, which is the only screen here that is about something other
+	# than this game. Built whether or not this client is connected: looking for a
+	# server is what you do when you are not on one.
+	browser = ArenaBrowser.new()
+	browser.name = "Browser"
+	add_child(browser)
+
+	var listed := browser.setup()
+	DotLog.result(CHANNEL, "the server browser", listed)
+
+	if listed.ok:
+		var screen := ArenaBrowser.BrowserScreen.new()
+		screen.name = "Servers"
+		screen.build(browser)
+		menus.register(screen)
+
+		browser.listing_changed.connect(screen.redraw)
+		screen.join_pressed.connect(_on_join_requested)
+
+		var _unused := pause
 
 
 # --- Offline ---------------------------------------------------------------
@@ -342,6 +366,25 @@ func _on_map_changed(map: DotMapDef) -> void:
 
 	if hud != null:
 		hud.notice("Now playing %s." % map.name_or_id())
+
+
+## The player picked a server.
+##
+## [b]It does not connect, and that is honest rather than lazy.[/b] Joining means
+## tearing down this client's netcode, opening a transport at a new address and going
+## through dot-server's signon again — which is a launcher's job, and this game is
+## loaded BY one. What this does is note the visit, so the server lands in the
+## player's history, and say where to go.
+func _on_join_requested(entry: DotBrowserEntry) -> void:
+	if browser != null:
+		browser.note_connected(entry.key())
+
+	if hud != null:
+		hud.notice("Join %s at %s" % [entry.name, entry.join_address()])
+
+	DotLog.info(CHANNEL, "the player picked a server", {
+		"name": entry.name, "address": entry.join_address()
+	})
 
 
 func _on_hello(info: Dictionary) -> void:
