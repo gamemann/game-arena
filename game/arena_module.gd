@@ -480,7 +480,7 @@ func _register_game() -> void:
 	# exactly the failure this family has already shipped once, from the other end,
 	# when a script under `scenes/` never reached a build.
 	#
-	# `metadata` is where a module path goes, and dot-server-setup-test's host reads
+	# `metadata` is where a module path goes, and dot-server-deploy's host reads
 	# it from precisely there.
 	descriptor.metadata = {
 		"module": "res://game/arena_module.gd",

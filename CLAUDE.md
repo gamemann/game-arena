@@ -266,7 +266,7 @@ will disagree, and the helper is the only reason they cannot.
 
 ## Where it runs besides here
 
-`dot-server-setup-test` vendors it — `setup.sh` copies `game/`, `scenes/*.tscn` and
+`dot-server-deploy` vendors it — `setup.sh` copies `game/`, `scenes/*.tscn` and
 `maps/`, `content/arena/game.yml` points at `res://scenes/arena_server.tscn`, and the
 browser shell maps content id `arena` to `res://game/arena.tscn`. It is **demo server
 five**, on loopback `:6110` and nginx TLS `:6068`, at 64 ticks.

@@ -8,7 +8,7 @@ extends Node
 ## game that built itself in `_ready` would have no way to report that it had not.
 ##
 ## [b]It lives in `game/`, not beside its own scene in `scenes/`.[/b] That is a
-## deployment constraint rather than a preference: `dot-server-setup-test/setup.sh`
+## deployment constraint rather than a preference: `dot-server-deploy/setup.sh`
 ## vendors a game by copying its `game/` wholesale and its `scenes/*.tscn` — only the
 ## `.tscn` — so a script under `scenes/` is a script that never reaches the build. The
 ## scene then fails to load with "referenced non-existent resource", the module refuses
