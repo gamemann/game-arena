@@ -256,6 +256,135 @@ static func dm_atrium() -> ArenaMap:
 	return map
 
 
+## The third arena: a sunken floor, a catwalk around it, and one bridge across.
+##
+## [b]Free-for-all only, and that is the point rather than an omission.[/b] Every spawn
+## here is untagged, so [method ArenaMaps.supports_mode] answers no for a team mode and
+## this is the first map in the game that ever does. `dm_box` and `dm_atrium` both tag
+## their spawns, which means the three places that ask the question -- the ballot, the
+## mode half of the ballot, and the refusal in [ArenaMapSession] -- had never once been
+## told no by a real map. A filter with nothing to filter is a filter nobody has run.
+##
+## It is also the small map this game did not have. `dm_box` is 48 m across and
+## `dm_atrium` 60; this is 28, and a map you can cross in four seconds is a different
+## game rather than a smaller one -- which is the reason a shooter ships one.
+##
+## [b]The shape.[/b] The floor is the pit. A 3 m catwalk runs around all four walls at
+## 3.6 m, with 3 m of headroom under it, so the ring is both the high ground and a
+## covered gallery for whoever is beneath it. A 2 m bridge crosses north to south
+## through the middle at catwalk height, over open air.
+##
+## Three ways up, and they are deliberately not equivalent:
+##
+## - [b]the north-west stair[/b], ten treads of 0.36, walkable, slow, and in the open;
+## - [b]the south-east stair[/b], its mirror, so the two long diagonals are symmetric
+##   and nothing else on the map is;
+## - [b]the north-east crates[/b], two jumps and a third onto the ring, which is the
+##   fast way and the only one that does not announce itself.
+##
+## Down is free everywhere, which is what keeps the pit from being a trap: the ring is
+## worth holding for as long as nobody has decided to drop on you.
+static func dm_pit() -> ArenaMap:
+	var map := ArenaMap.new()
+	map.id = &"dm_pit"
+	map.display_name = "dm_pit"
+	map.extent = 14.0
+	map.wall_height = 7.0
+
+	# --- The catwalk -------------------------------------------------------
+	#
+	# A ring 3 m wide against all four walls, top face at 3.6. Four boxes rather than
+	# a frame with a hole, for the reason every other map here gives: a hole is not a
+	# box and everything downstream of this list understands only boxes.
+	const RING_Y := 3.0
+	const RING_T := 0.6
+	const RING_IN := 11.0
+
+	map.add_box(AABB(Vector3(-14.0, RING_Y, -14.0), Vector3(28.0, RING_T, 3.0)))
+	map.add_box(AABB(Vector3(-14.0, RING_Y, RING_IN), Vector3(28.0, RING_T, 3.0)))
+	map.add_box(AABB(Vector3(-14.0, RING_Y, -RING_IN), Vector3(3.0, RING_T, 22.0)))
+	map.add_box(AABB(Vector3(RING_IN, RING_Y, -RING_IN), Vector3(3.0, RING_T, 22.0)))
+
+	# The bridge, north to south through the middle at ring height. Flush with both
+	# ends of the ring, so crossing it is a decision rather than a jump.
+	map.add_box(AABB(Vector3(-1.0, RING_Y, -RING_IN), Vector3(2.0, RING_T, 22.0)))
+
+	# --- The two stairs ----------------------------------------------------
+	#
+	# Ten treads of 0.36, which is under `DotFpsTunables.step_height` (0.4) and so is
+	# walked rather than jumped. The number is `dm_atrium`'s, and it is 0.36 there
+	# because 0.6 was measured and a bot holding forward stopped dead against the
+	# first tread.
+	#
+	# The last tread's far face lands exactly on `RING_IN`. A stair that stops half a
+	# metre short is a stair with a hole at the top of it, which reads as the player
+	# falling through the map.
+	for index in range(10):
+		var rise := 0.36 * float(index + 1)
+
+		# North-west, climbing west onto the west arm.
+		map.add_box(AABB(
+			Vector3(-2.0 - float(index + 1) * 0.9, 0.0, -10.5),
+			Vector3(0.9, rise, 3.0)
+		))
+
+		# South-east, climbing east onto the east arm.
+		map.add_box(AABB(
+			Vector3(2.0 + float(index) * 0.9, 0.0, 7.5),
+			Vector3(0.9, rise, 3.0)
+		))
+
+	# --- The north-east crates ---------------------------------------------
+	#
+	# 1.4, then 2.6, then the ring at 3.6. Two jumps and a hop, none of them over
+	# 1.2 m, and the last one crosses a 0.5 m gap onto the north arm.
+	map.add_box(AABB(Vector3(6.0, 0.0, -6.5), Vector3(2.5, 1.4, 2.5)))
+	map.add_box(AABB(Vector3(8.0, 0.0, -10.5), Vector3(2.5, 2.6, 2.5)))
+
+	# --- Cover in the pit --------------------------------------------------
+	#
+	# A low island in the middle, under the bridge with 2.2 m of headroom, and three
+	# waist-high pillars. Three and not four: the fourth corner is where the crates
+	# are, and a pillar there would grow through the first of them.
+	map.add_box(AABB(Vector3(-2.5, 0.0, -2.5), Vector3(5.0, 0.8, 5.0)))
+
+	for corner in [Vector2(-6.0, -6.0), Vector2(-6.0, 6.0), Vector2(6.0, 6.0)]:
+		map.add_box(AABB(
+			Vector3(corner.x - 0.75, 0.0, corner.y - 0.75), Vector3(1.5, 2.2, 1.5)
+		))
+
+	map.add_perimeter()
+
+	# --- Spawns ------------------------------------------------------------
+	#
+	# Eight, five in the pit and three on the ring, and [b]every one of them
+	# untagged[/b]. This is the property the map exists for: `_has_team_spawns` says
+	# no, the catalogue records `teams: false`, and a team mode cannot be played here.
+	# Do not tag them.
+	var points: Array[Vector3] = [
+		Vector3(-8.0, 0.1, 0.0),
+		Vector3(8.0, 0.1, 2.0),
+		Vector3(0.0, 0.1, 8.5),
+		Vector3(-4.0, 0.1, -4.0),
+		Vector3(4.5, 0.1, -2.0),
+		Vector3(-12.5, 3.7, -6.0),
+		Vector3(12.5, 3.7, 6.0),
+		Vector3(0.0, 3.7, -12.5),
+	]
+
+	for at in points:
+		var to_centre := Vector3(-at.x, 0.0, -at.z)
+
+		if to_centre.length_squared() < 0.001:
+			to_centre = Vector3.FORWARD
+
+		map.add_spawn(
+			Transform3D(Basis.looking_at(to_centre.normalized(), Vector3.UP), at)
+		)
+
+	return map
+
+
 ## Every map this game ships, by id.
 ##
 ## [b]A function rather than a constant array, because a map is 40-odd boxes and an
@@ -268,6 +397,8 @@ static func by_id(id: StringName) -> ArenaMap:
 			return dm_box()
 		&"dm_atrium":
 			return dm_atrium()
+		&"dm_pit":
+			return dm_pit()
 
 	return null
 
@@ -278,7 +409,7 @@ static func by_id(id: StringName) -> ArenaMap:
 ## having: a map added to one and not the other is a map that either cannot be listed or
 ## cannot be loaded, and `headless_match` checks the two agree.
 static func ids() -> Array[StringName]:
-	return [&"dm_box", &"dm_atrium"]
+	return [&"dm_box", &"dm_atrium", &"dm_pit"]
 
 
 ## Adds a spawn and its tag together, which is the only way to add one.

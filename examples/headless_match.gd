@@ -31,7 +31,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 247
+const CHECKS := 268
 
 var _passed := 0
 var _failed := 0
@@ -60,6 +60,7 @@ func _run() -> void:
 
 	_test_content()
 	_test_map()
+	_test_pit()
 	await _test_atrium()
 	_test_modes()
 	await _test_team_deathmatch()
@@ -889,6 +890,183 @@ func _test_map() -> void:
 	_check(texture != null and texture.get_width() == 64, "the dev texture generates")
 
 
+## `dm_pit`: the geometry, the bot that has to get out of the pit, and the mode gate.
+##
+## [b]Three separate things, and the third is why the map exists.[/b] The geometry and
+## the bot are what every new map here owes. The mode gate is what this one adds:
+## `dm_pit` is the first map in the game whose spawns carry no team tags, so it is the
+## first map for which [method ArenaMaps.supports_mode] can answer no — and every place
+## that asks it had, until now, only ever been told yes.
+func _test_pit() -> void:
+	_group("dm_pit")
+
+	var map := ArenaMap.dm_pit()
+
+	_check(map.boxes.size() > 24, "the map has geometry", str(map.boxes.size()))
+	_check(map.spawns.size() == 8, "and eight spawns", str(map.spawns.size()))
+
+	# The invariant every map here is built around, restated for this one.
+	_check(
+		map.to_fps_body().boxes.size() == map.boxes.size()
+			and map.to_trace().boxes.size() == map.boxes.size(),
+		"all three representations hold the same boxes"
+	)
+
+	# --- Nobody spawns inside a wall --------------------------------------
+	#
+	# A 0.8 x 1.8 column at each spawn against every solid. `_test_map` checks the
+	# weaker version of this -- inside the room, above the floor -- which a spawn
+	# buried in a stair tread passes. This map has thirty-five boxes in a
+	# twenty-eight metre room and three of them are staircases, so the weaker check
+	# is not enough: the first draft of `pg_lobby`'s spiral put its start pad inside
+	# its own pillar and nothing caught it until a screenshot.
+	var buried := PackedStringArray()
+
+	for index in range(map.spawns.size()):
+		var at: Vector3 = map.spawns[index].origin
+		var column := AABB(at + Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 1.8, 0.8))
+
+		for box in map.boxes:
+			if box.intersects(column):
+				buried.append("#%d at %s" % [index, str(at)])
+				break
+
+	_check(buried.is_empty(), "and no spawn is inside a solid", ", ".join(buried))
+
+	# --- The property the map is for --------------------------------------
+
+	var tagged := 0
+
+	for index in range(map.spawns.size()):
+		if map.spawn_tag(index) != &"":
+			tagged += 1
+
+	_check(tagged == 0, "every spawn is untagged, on purpose", "%d tagged" % tagged)
+
+	var catalogue := ArenaMaps.catalogue()
+	var def := catalogue.get_map(&"dm_pit")
+
+	if not _check(def != null, "and it is in the catalogue"):
+		return
+
+	_check(
+		not bool(def.meta.get("teams", true)),
+		"whose entry records that it has no team spawns"
+	)
+
+	var ffa := ArenaMode.free_for_all()
+	var team := _first_team_mode()
+
+	_check(ArenaMaps.supports_mode(def, ffa), "a free-for-all can be played on it")
+
+	if _check(team != null, "this game has a team mode to test the refusal with"):
+		_check(
+			not ArenaMaps.supports_mode(def, team),
+			"and a team mode cannot -- the first map here that says so",
+			String(team.id)
+		)
+
+		# The other two maps must still say yes, or the filter below is passing for
+		# the wrong reason.
+		_check(
+			ArenaMaps.supports_mode(catalogue.get_map(&"dm_box"), team)
+				and ArenaMaps.supports_mode(catalogue.get_map(&"dm_atrium"), team),
+			"while the other two maps still can"
+		)
+
+	# --- A bot has to be able to get out of the pit -----------------------
+	#
+	# The one thing an assertion about boxes cannot tell you. The route under test is
+	# the north-west stair: ten treads of 0.36, which the movement should WALK. If a
+	# tread is too tall the bot stops dead against the first one -- measured on
+	# `dm_atrium`, where the first draft used 0.6 -- and the map has a route on it
+	# that no player can take.
+	var holder := Node3D.new()
+	holder.name = "PitBot"
+	add_child(holder)
+
+	var bot := ArenaPlayer.HeadlessController.new()
+	bot.name = "Movement"
+	bot.flat_body = map.to_fps_body()
+	bot.drive = DotFpsController.Drive.EXTERNAL
+	bot.tick_rate = TICK_RATE
+	bot.tunables = ArenaPlayer.arena_tunables()
+	bot.register_service = false
+	bot.register_default_actions = false
+	bot.body_ref = DotNodeRef.of_path(NodePath(".."))
+	holder.add_child(bot)
+
+	# At the bottom of the stair, facing west along it. Yaw 90 is -X in Godot's
+	# -Z-forward convention, which is the direction the treads climb.
+	bot.teleport(Vector3(-1.0, 0.2, -9.0), 90.0, 0.0)
+
+	var delta := 1.0 / float(TICK_RATE)
+	var highest := bot.state.position.y
+
+	for tick in range(int(TICK_RATE * 4)):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		command.pitch = 0.0
+		command.move = Vector2(0.0, 1.0)
+		bot.apply_command(command)
+		bot.simulate_tick(tick, delta)
+		highest = maxf(highest, bot.state.position.y)
+
+	# The ring's top face is 3.6. Anything at or above it means the bot walked the
+	# whole stair; the failure this catches is a bot at 0.36 four seconds later.
+	_check(
+		highest >= 3.5,
+		"a bot walks the north-west stair onto the catwalk",
+		"reached %.2f m, ring is at 3.60" % highest
+	)
+
+	var on_ring := bot.state.position
+	_check(
+		on_ring.y >= 3.5 and on_ring.x <= -10.0,
+		"and is standing on it at the end",
+		"at %s" % str(on_ring)
+	)
+
+	# And across the bridge. It is 2 m wide over 22 m of open air, so a bot that walks
+	# it is a bot the geometry lines up for; a bot that falls is a bridge that does not
+	# meet the ring it is drawn as meeting.
+	bot.teleport(Vector3(0.0, 3.9, -10.0), 180.0, 0.0)
+
+	var crossed := false
+
+	for tick in range(int(TICK_RATE * 4)):
+		var command := DotFpsCommand.new()
+		command.yaw = 180.0
+		command.pitch = 0.0
+		command.move = Vector2(0.0, 1.0)
+		bot.apply_command(command)
+		bot.simulate_tick(int(TICK_RATE * 4) + tick, delta)
+
+		if bot.state.position.z > 9.0 and bot.state.position.y > 3.0:
+			crossed = true
+			break
+
+	_check(
+		crossed,
+		"and crosses the bridge without falling into the pit",
+		"ended at %s" % str(bot.state.position)
+	)
+
+	holder.queue_free()
+	remove_child(holder)
+
+
+## The first mode in this game that needs tagged spawns, or null if there is none.
+func _first_team_mode() -> ArenaMode:
+	for id in ArenaModes.ids():
+		var mode := ArenaModes.by_id(id)
+
+		if mode != null and mode.is_team_mode():
+			return mode
+
+	return null
+
+
 # --- Building --------------------------------------------------------------
 
 func _build() -> void:
@@ -1699,6 +1877,64 @@ func _test_map_change() -> void:
 		"nobody fell through the new floor",
 		"%d below it" % below
 	)
+
+	# --- The mode gate, over a live rotation -------------------------------
+	#
+	# [b]Last, because it moves the game into a team mode and back.[/b] Nothing below
+	# depends on the state this leaves, and nothing above should have to care.
+	#
+	# What is being checked is the hole `dm_pit` opened. dot-map's rotation filters on
+	# player count and cooldown and knows nothing about modes, and until this map every
+	# map here could host every mode -- so an unfiltered rotation and a filtered one
+	# were the same rotation. The first map that answers no is the first map a team game
+	# could have been dropped into with nothing said about it.
+	var team := _first_team_mode()
+
+	if team != null:
+		var to_team := _game.change_map(ArenaMap.by_id(_game.map.id), team)
+
+		if _check(to_team.ok, "the game moves into a team mode", str(to_team.error)):
+			director.restrict_rotation()
+
+			_check(
+				not director.session.rotation.order.has(&"dm_pit"),
+				"the rotation stops offering dm_pit while a team mode is played",
+				str(director.session.rotation.order)
+			)
+			_check(
+				director.session.rotation.order.has(&"dm_box")
+					and director.session.rotation.order.has(&"dm_atrium"),
+				"and still offers the two that can host it"
+			)
+
+			# Asked for by name, which is what an admin typing `changelevel` does and
+			# what a rotation cannot be made to stop doing. This is the backstop: even
+			# reached directly, the change has to be refused rather than quietly produce
+			# a team game with one shared spawn pool.
+			var refused: DotResult = await director.change_to(&"dm_pit")
+
+			_check(
+				not refused.ok,
+				"and changing to it by name is refused outright"
+			)
+			_check(
+				_game.map.id != &"dm_pit",
+				"with the game left on the map it was on",
+				String(_game.map.id)
+			)
+
+			var back := _game.change_map(
+				ArenaMap.by_id(_game.map.id), ArenaMode.free_for_all()
+			)
+
+			if _check(back.ok, "the game goes back to a free-for-all", str(back.error)):
+				director.restrict_rotation()
+
+				_check(
+					director.session.rotation.order.has(&"dm_pit"),
+					"and dm_pit is offered again",
+					str(director.session.rotation.order)
+				)
 
 	director.queue_free()
 	remove_child(director)

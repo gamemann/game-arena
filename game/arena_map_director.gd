@@ -181,7 +181,53 @@ func change_to_next(players: int = 0) -> DotResult:
 	if not _ready_for_changes:
 		return DotResult.fail(DotError.CODE_STATE, "The map director is not set up.")
 
+	restrict_rotation()
+
 	return await sync.change_to_next(players)
+
+
+## Narrows the rotation to the maps that can host the mode being played.
+##
+## [b]dot-map's rotation filters on player count and on cooldown, and knows nothing
+## about modes — correctly.[/b] "What a mode needs from a map" is a game's question and
+## every game answers it differently; here it is one property, whether any spawn is
+## tagged. So the filtering has to happen on this side, and this is the only place that
+## sees both the catalogue and [member ArenaGame.mode].
+##
+## It did not exist until `dm_pit`, and nothing was wrong before that: `dm_box` and
+## `dm_atrium` both tag their spawns, so every map answered yes and an unfiltered
+## rotation was indistinguishable from a filtered one. The first map that answers no
+## is the first map the rotation could have dropped a team game into.
+##
+## Called before the rotation is asked, rather than once at setup, because the mode can
+## change under a running server — a vote, an admin, or a map def that names one.
+func restrict_rotation() -> void:
+	if session == null or session.rotation == null or session.catalogue == null:
+		return
+
+	var mode: ArenaMode = game.mode if game != null else null
+	var allowed: Array[StringName] = []
+
+	for def in session.catalogue.maps:
+		if ArenaMaps.supports_mode(def, mode):
+			allowed.append(def.id)
+
+	# Never leave it empty. A mode no map can host is a configuration mistake, and the
+	# honest failure for it is "the map did not change", which says so — not "the
+	# rotation has nothing in it", which is a server that sits on one map for ever and
+	# never explains why.
+	if allowed.is_empty():
+		DotLog.warn(CHANNEL, "no map in the catalogue can host the current mode", {
+			"mode": String(mode.id) if mode != null else "none",
+			"maps": session.catalogue.size(),
+		})
+		return
+
+	# Only when it actually differs. In [constant DotMapRotation.Mode.SEQUENTIAL] the
+	# cursor indexes into `order`, so rewriting the same list every change would be a
+	# rotation that never moves off the map it is on.
+	if session.rotation.order != allowed:
+		session.rotation.order = allowed
 
 
 ## The map the rotation would choose next, without choosing it.

@@ -83,7 +83,13 @@ func change_to_map(map: DotMapDef) -> DotResult:
 
 	var wanted := _mode_for(map)
 
-	if wanted != null and not ArenaMaps.supports_mode(map, wanted):
+	# What will actually be played here, which is NOT the same question. `wanted` is
+	# only ever set when the map def names a mode, and no map in this game does — so
+	# for as long as the check below read `wanted`, it was guarding a case that never
+	# arose while the case that did arise walked straight past it.
+	var playing := _mode_after(map)
+
+	if playing != null and not ArenaMaps.supports_mode(map, playing):
 		# Refused rather than warned. A team mode on a map with no tagged spawns puts
 		# both sides in one pool, which on a symmetric map means spawning in the enemy
 		# base about half the time — and it reads as a spawn-selection bug for as long
@@ -91,7 +97,7 @@ func change_to_map(map: DotMapDef) -> DotResult:
 		return DotResult.fail(
 			DotError.CODE_INVALID,
 			"That map has no tagged spawns, so it cannot host a team mode.",
-			"%s / %s" % [String(map.id), String(wanted.id)]
+			"%s / %s" % [String(map.id), String(playing.id)]
 		)
 
 	changing_now = true
@@ -186,6 +192,25 @@ func changed_world() -> void:
 
 
 ## The mode a map def asks for, or null to keep the current one.
+## The mode that will be played on [param map] once the change is done.
+##
+## The map's own when it names one, and otherwise the one already running — because
+## changing the map does not change the mode, and "which mode is this map about to
+## have to host" is the only form of the question worth refusing on.
+##
+## [b]Separate from [method _mode_for] deliberately.[/b] That one answers "what should
+## this change set the mode to", and null there means "leave it alone" rather than
+## "there is no mode". Reading it as the second was how a free-for-all-only map could
+## be rotated into the middle of a team game with nothing said.
+func _mode_after(map: DotMapDef) -> ArenaMode:
+	var named := _mode_for(map)
+
+	if named != null:
+		return named
+
+	return game.mode if game != null else null
+
+
 func _mode_for(map: DotMapDef) -> ArenaMode:
 	if not mode_from_meta:
 		return null

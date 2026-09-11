@@ -496,7 +496,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-247 + 40 + 116 + 91 checks.
+268 + 40 + 116 + 91 checks.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -858,6 +858,36 @@ It found three things on its first run, none of which any assertion here could r
 - **The rebinder's rows were in interned-pointer order.** Also dot-ui's, and the same trap that gave two peers two different wire ids in dot-net.
 
 **The tool refuses to save a grey rectangle.** If `push` fails it says so and skips the shot, because a picture of an empty viewport is indistinguishable from a renderer that is not working — which is exactly how dot-ui's blank pause menu looked before the cause was found.
+
+## `dm_pit`, and the filter that had never said no
+
+The third map is small (28 m against `dm_box`'s 48 and `dm_atrium`'s 60), built around a
+sunken floor with a catwalk ring at 3.6 m and a bridge across the middle, and it is
+reached three ways that are deliberately unequal: two stairs of ten 0.36 treads, and a
+pair of crates that is two jumps and a hop.
+
+**Every spawn on it is untagged, and that is the point rather than an oversight.**
+`ArenaMaps.supports_mode` answers no for a team mode on it, and it is the first map here
+that can. `dm_box` and `dm_atrium` both tag their spawns, so the three places that ask
+the question — the ballot, the mode half of the ballot, and the refusal in
+`ArenaMapSession` — had only ever been told yes. A filter with nothing to filter is a
+filter nobody has run, and adding the first map that answers no found two things:
+
+- **The refusal read the wrong mode.** `ArenaMapSession` checked `_mode_for(map)`, which
+  is only ever non-null when the map def *names* a mode in its meta — and no map in this
+  game does. So the guard was covering a case that never arose while the case that does
+  arise walked past it: a free-for-all-only map could be loaded into a running team game,
+  both sides drawing from one pool, which is the symptom that comment warns about.
+  `_mode_after` is the question worth asking — the map's own mode if it names one, and
+  otherwise the one already being played.
+- **The rotation had no idea modes existed.** Correctly: dot-map filters on player count
+  and cooldown, and "what a mode needs from a map" is a game's question. But nothing on
+  this side was answering it either, so the rotation could have handed a team game a map
+  that then refused to load. `ArenaMapDirector.restrict_rotation` narrows
+  `DotMapRotation.order` to what the current mode can host, before every ask rather than
+  once at setup, because the mode changes under a running server. It never empties the
+  order: a mode no map can host is a configuration mistake, and "the map did not change"
+  says so where an empty rotation is a server that sits still and never explains why.
 
 ## Things deliberately not here
 
