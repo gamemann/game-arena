@@ -12,12 +12,9 @@ This project, along with every asset it is built on, was built initially with **
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
 ## The Reference Game
-A 3D dev-textured arena deathmatch, built entirely out of the
-[dot-*](https://github.com/modcommunity) family. Four weapons, one map, a match that ends on its score
-limit, and a HUD and menus with no art assets anywhere.
+A 3D dev-textured arena deathmatch, built entirely out of the [dot-*](https://github.com/modcommunity) family. Four weapons, one map, a match that ends on its score limit, and a HUD and menus with no art assets anywhere.
 
-**This is the reference game.** It exists to prove the addons compose, to show what the
-bridges between them look like, and to be the thing a new game is copied from.
+**This is the reference game.** It exists to prove the addons compose, to show what the bridges between them look like, and to be the thing a new game is copied from.
 
 ## Playing it
 
@@ -26,9 +23,7 @@ ln -s ../../dot-core/addons/dot_core addons/dot_core   # and the other seven
 godot --path .                                         # bots, no server needed
 ```
 
-No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` registered
-the client is the authority, loads `dm_atrium` out of its own build and adds three
-bots. `-- --offline` forces that even when a link *is* available.
+No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` registered the client is the authority, loads `dm_atrium` out of its own build and adds three bots. `-- --offline` forces that even when a link *is* available.
 
 | | |
 | --- | --- |
@@ -41,11 +36,7 @@ bots. `-- --offline` forces that even when a link *is* available.
 | **Tab** (hold) | Scoreboard |
 | **Esc** | Pause menu, and release the mouse |
 
-**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody
-spawns until LIVE — dot-match's respawn queue is what places a player, and it does not
-run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a
-screenshot taken earlier than that shows an empty room and a player at the origin, which
-is correct and looks exactly like a broken spawn.
+**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody spawns until LIVE — dot-match's respawn queue is what places a player, and it does not run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a screenshot taken earlier than that shows an empty room and a player at the origin, which is correct and looks exactly like a broken spawn.
 
 ## Running it headless
 
@@ -75,25 +66,17 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 
 ## The four files that matter
 
-**`maps/arena_map.gd`** — a level is a list of boxes, and that list becomes three
-things: meshes, physics bodies, and analytic geometry for a headless server. Building
-them separately means three descriptions that drift, and the drift is invisible until
-shots start passing through something clients can see.
+**`maps/arena_map.gd`** — a level is a list of boxes, and that list becomes three things: meshes, physics bodies, and analytic geometry for a headless server. Building them separately means three descriptions that drift, and the drift is invisible until shots start passing through something clients can see.
 
-**`game/arena_player.gd`** — movement, weapons, health and hitboxes on one body. Every
-addon says this wiring belongs in the game, because an addon that did it would dictate
-a scene shape.
+**`game/arena_player.gd`** — movement, weapons, health and hitboxes on one body. Every addon says this wiring belongs in the game, because an addon that did it would dictate a scene shape.
 
-**`game/arena_game.gd`** — the seam. Six addons, each correct alone; this is the fifty
-lines where a combat kill becomes a match score and a match respawn becomes a loadout.
+**`game/arena_game.gd`** — the seam. Six addons, each correct alone; this is the fifty lines where a combat kill becomes a match score and a match respawn becomes a loadout.
 
-**`game/arena_module.gd`** — the only file that names dot-server. About forty lines,
-and it is the entire dedicated-server integration.
+**`game/arena_module.gd`** — the only file that names dot-server. About forty lines, and it is the entire dedicated-server integration.
 
 ## The weapons
 
-Four, because they are four genuinely different answers to "how do I close distance",
-and a deathmatch with fewer has one right answer.
+Four, because they are four genuinely different answers to "how do I close distance", and a deathmatch with fewer has one right answer.
 
 | | |
 | --- | --- |
@@ -102,9 +85,7 @@ and a deathmatch with fewer has one right answer.
 | **Shotgun** | Nine pellets in a *learnable* ring, so range is a skill rather than a dice roll. |
 | **Rocket Launcher** | Low direct damage, high splash. The interesting part is what it does to the floor — and to your own feet. |
 
-Loadouts are two weapons on a six-point budget: a rifle and a shotgun, or a rocket
-launcher and a pistol, and not a rocket launcher and a shotgun. Four numbers instead of
-an enumeration.
+Loadouts are two weapons on a six-point budget: a rifle and a shotgun, or a rocket launcher and a pistol, and not a rocket launcher and a shotgun. Four numbers instead of an enumeration.
 
 ## Validating
 
@@ -118,13 +99,8 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-`headless_match` — 75 checks. Plays an entire deathmatch: four bots, real movement,
-real shots, real kills, real respawns, ending on the score limit. Then builds the HUD
-and the menus and drives them.
+`headless_match` — 75 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
 
-`headless_net` — 62 checks. Runs a server and a client in one process over a loopback
-that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the
-client moves on the tick it presses, and the two stay together under loss.
+`headless_net` — 62 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, and the two stay together under loss.
 
-`dedicated` — 21 checks. Boots a real `DotServer`, binds a port, loads the module,
-runs its console commands, unloads it and loads it again.
+`dedicated` — 21 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
