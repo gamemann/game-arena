@@ -6,7 +6,7 @@ extends Node
 ##
 ## [b]This is the seam nothing else runs.[/b] dot-match knows nothing about damage,
 ## dot-combat knows nothing about scoring, dot-loadout knows nothing about weapons, and
-## dot-fps-controller knows about none of them. Six addons, each correct alone. This is
+## dot-player-controller knows about none of them. Six addons, each correct alone. This is
 ## the fifty lines where they meet, and the only place a mistake in the joins between
 ## them can show up.
 ##
@@ -130,6 +130,10 @@ var match_node: DotMatch = null
 var combat: DotCombatManager = null
 var loadouts: DotLoadoutManager = null
 
+## Rockets in flight. Built alongside the combat manager, because it traces against
+## the same world and resolves through the same rules.
+var projectiles: ArenaProjectiles = null
+
 ## Statistics, achievements and boards. Null when [member track_progress] is off or
 ## this instance is not the authority.
 var progress: ArenaProgress = null
@@ -158,6 +162,15 @@ var objectives: ArenaObjectives = null
 
 ## Where a dead player looks. Built in every mode, because every mode kills people.
 var spectate: ArenaSpectate = null
+
+## Who is in the session, which side, what class, where they enter, and the physics.
+##
+## [b]Built last and binds to everything else.[/b] It adds no authority: dot-match still
+## decides the round and dot-combat still decides damage. What it does is keep one set
+## of records in step with them, so a scoreboard, a spectator camera, a class screen and
+## a spawn selector read the same thing rather than four dictionaries that agree until
+## somebody reconnects. See [ArenaPlayerStack].
+var player_stack: ArenaPlayerStack = null
 
 ## player id -> [ArenaPlayer].
 var _players: Dictionary = {}
@@ -239,6 +252,11 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 	# an export on this class — see `ArenaMode.horde`.
 	_reconcile_world_layers()
 
+	var stack_result := _build_player_stack()
+
+	if not stack_result.ok:
+		return stack_result
+
 	if register_service:
 		_registered_name = (
 			DotRegistry.scoped_name(SERVICE, service_scope)
@@ -294,6 +312,12 @@ func _build_combat() -> DotResult:
 
 	combat.entity_killed.connect(_on_entity_killed)
 	combat.damage_applied.connect(_on_damage_applied)
+
+
+	projectiles = ArenaProjectiles.new()
+	# The same gravity the players fall under, so a grenade arc and a jump arc agree.
+	# ArenaPlayer sets this on its tunables; the two must not drift apart.
+	projectiles.setup(combat, 22.0)
 
 	return DotResult.success(null)
 
@@ -419,6 +443,26 @@ func _build_loadouts() -> DotResult:
 ## connects to the combat manager's shot and damage signals and to dot-match's round
 ## and match signals; every one of those is created by the three builders above, and
 ## attaching before them would connect to null with no error until the first kill.
+## Stands up the player-facing addons and binds them to this game.
+##
+## After everything else, because it reads the match's team manager, the match's spawn
+## points and this node's tick rate, and a stack built before any of those exists binds
+## to nothing and reports success.
+func _build_player_stack() -> DotResult:
+	if player_stack != null:
+		player_stack.queue_free()
+
+	player_stack = ArenaPlayerStack.new()
+	player_stack.name = "PlayerStack"
+	# A client mirrors what the server decided; re-applying a physics profile there
+	# would have it simulate at a rate the server does not.
+	player_stack.apply_physics = is_authority
+	player_stack.register_service = register_service
+	add_child(player_stack)
+
+	return player_stack.setup(self).wrap("The arena's player stack")
+
+
 func _build_progress() -> DotResult:
 	if not track_progress or not is_authority:
 		return DotResult.success(null)
@@ -738,6 +782,7 @@ func _teardown_world() -> void:
 		combat.queue_free()
 
 	combat = null
+	projectiles = null
 
 	for point in _spawn_points:
 		if is_instance_valid(point):
@@ -814,6 +859,13 @@ func remove_player(id: int) -> void:
 		# Before the player leaves the match: `leave` files the session onto the
 		# boards and reads the display name off the player to do it.
 		progress.leave(id)
+
+	if player_stack != null:
+		# Before dot-match forgets them: the stack reads the scoreboard and the match's
+		# team for the records it files, and after `match_node.remove_player` there is
+		# nothing there to read. A method rather than a signal, because there is no
+		# signal here and adding one for a single subscriber is worse than a call.
+		player_stack.drop_player(id)
 
 	player.leave_combat()
 	match_node.remove_player(str(id))
@@ -909,7 +961,7 @@ func _loadout_key(id: int) -> String:
 ## match's clock and win check run last, so a kill scored on this tick can end the
 ## round on this tick rather than the next one.
 ##
-## [param commands] is `{player id: [DotFpsCommand, DotCombatCommand]}`. A player with
+## [param commands] is `{player id: [DotFpsCommand, DotWeaponCommand]}`. A player with
 ## no entry repeats their last command, which is what a dropped input packet should
 ## look like.
 func tick(commands: Dictionary = {}) -> void:
@@ -926,11 +978,16 @@ func tick(commands: Dictionary = {}) -> void:
 
 		var pair: Array = commands.get(id, [])
 		var move: DotFpsCommand = pair[0] if pair.size() > 0 else DotFpsCommand.new()
-		var fire: DotCombatCommand = pair[1] if pair.size() > 1 else DotCombatCommand.new()
+		var fire: DotWeaponCommand = pair[1] if pair.size() > 1 else DotWeaponCommand.new()
 
 		if move != null and fire != null:
 			match_node.note_activity(str(id), _tick)
-			shots.append_array(player.simulate_tick(_tick, delta, move, fire))
+			var outcome := player.simulate_tick(_tick, delta, move, fire)
+			shots.append_array(outcome.shots)
+			# A rocket is not a shot and is not resolved here; it is launched and
+			# flown. See ArenaProjectiles for why that is a new file.
+			if projectiles != null:
+				projectiles.accept(outcome)
 
 	if is_authority:
 		for shot in shots:
@@ -945,6 +1002,12 @@ func tick(commands: Dictionary = {}) -> void:
 	# players ended the tick, and a monster killed by a shot resolved above has to be
 	# reported dead before the match's win check runs — otherwise its death is counted
 	# on the following tick, which at a score limit is one round decided late.
+	# Before the props and after the shots: a rocket that arrives this tick has to kill
+	# before the match's win check runs, for the same reason everything below is
+	# ordered the way it is.
+	if projectiles != null:
+		projectiles.tick(delta)
+
 	if props != null:
 		props.tick(delta)
 
@@ -963,6 +1026,12 @@ func tick(commands: Dictionary = {}) -> void:
 
 	if spectate != null:
 		spectate.tick(delta)
+
+	# Before the match, like everything above it, and for a different reason: the stack
+	# expires spawn protection, and a player whose protection ran out on this tick has
+	# to be killable by a shot the match is about to count.
+	if player_stack != null:
+		player_stack.tick(_tick)
 
 	match_node.tick(_tick)
 

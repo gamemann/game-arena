@@ -16,6 +16,7 @@ const CHANNEL := "arena.menus"
 class PauseScreen extends DotScreen:
 	signal resume_pressed()
 	signal settings_pressed()
+	signal interface_pressed()
 	signal controls_pressed()
 	signal quit_pressed()
 
@@ -32,8 +33,8 @@ class PauseScreen extends DotScreen:
 		panel.set_anchors_preset(Control.PRESET_CENTER)
 		panel.offset_left = -160.0
 		panel.offset_right = 160.0
-		panel.offset_top = -140.0
-		panel.offset_bottom = 140.0
+		panel.offset_top = -160.0
+		panel.offset_bottom = 160.0
 		add_child(panel)
 
 		var column := VBoxContainer.new()
@@ -48,6 +49,7 @@ class PauseScreen extends DotScreen:
 
 		_add_button(column, "Resume", func() -> void: resume_pressed.emit())
 		_add_button(column, "Settings", func() -> void: settings_pressed.emit())
+		_add_button(column, "Interface", func() -> void: interface_pressed.emit())
 		_add_button(column, "Controls", func() -> void: controls_pressed.emit())
 		_add_button(column, "Leave", func() -> void: quit_pressed.emit())
 
@@ -68,7 +70,14 @@ class PauseScreen extends DotScreen:
 		return button
 
 
-## Settings, generated from a [DotConfig].
+## The INTERFACE's own settings, generated from [DotUiConfig].
+##
+## [b]Registered as `interface`, not `settings`, and that rename is the point.[/b] This
+## screen offers the scale, the safe area, the transition time and how many chat lines the
+## HUD keeps — real settings, and not one of them is what a player means by the word. The
+## volume, the field of view and the sensitivity live in the presentation layer's
+## [code]DotSettingsManager[/code], and until `settings` pointed at that, a player who
+## opened this menu to turn the game down found a slider for the interface scale.
 ##
 ## The panel reads the config's own `@export` annotations, so this screen never
 ## restates a setting and cannot drift from one.
@@ -76,7 +85,7 @@ class SettingsScreen extends DotScreen:
 	var panel: DotSettingsPanel = null
 
 	func _screen_id() -> StringName:
-		return &"settings"
+		return &"interface"
 
 	func build(config: DotConfig) -> void:
 		hides_below = false
@@ -157,7 +166,23 @@ class ControlsScreen extends DotScreen:
 
 		panel = DotBindingsPanel.new()
 		panel.config = config
-		panel.prefix = "arena_"
+		# `dot_fps_`, not `arena_`, and the difference is the whole screen.
+		#
+		# `prefix` filters the InputMap, and THERE HAS NEVER BEEN AN `arena_` ACTION. This
+		# game's bindable actions are the movement ones, registered by
+		# `DotFpsSampler.register_default_actions` in `ArenaClient._build_interface` and
+		# therefore named `dot_fps_forward`, `dot_fps_jump` and so on. Everything else this
+		# client reads -- fire, reload, the scoreboard -- is matched on a keycode in
+		# `_unhandled_input` and is not an action at all.
+		#
+		# So the rebinder listed nothing, for the whole life of this screen: a Controls
+		# menu with a title, a Defaults button, a Back button and no controls. Nothing
+		# errored, because a filter that matches nothing is a legitimate filter and an
+		# empty list is a legitimate list. A rendered frame is what showed it.
+		#
+		# game-hungario's `hungry_` is correct by contrast -- `HungryInput._register_actions`
+		# really does create `hungry_split`, `hungry_throw` and the rest.
+		panel.prefix = "dot_fps_"
 		column.add_child(panel)
 		panel.build()
 		panel.load_saved()
@@ -254,17 +279,41 @@ class ScoreboardScreen extends DotScreen:
 static func install(
 	stack: DotScreenStack,
 	game: ArenaGame,
-	ui_config: DotUiConfig
+	ui_config: DotUiConfig,
+	player_settings: Object = null
 ) -> PauseScreen:
 	var pause := PauseScreen.new()
 	pause.name = "Pause"
 	pause.build()
 	stack.register(pause)
 
-	var settings := SettingsScreen.new()
-	settings.name = "Settings"
-	settings.build(ui_config)
-	stack.register(settings)
+	var interface_screen := SettingsScreen.new()
+	interface_screen.name = "Interface"
+	interface_screen.build(ui_config)
+	stack.register(interface_screen)
+
+	# The player's own settings, on dot-ui's shared screen rather than a fourth copy of
+	# one. Optional, because a suite that drives the menus without a presentation layer is
+	# a legitimate caller and the menu greys the button rather than opening nothing.
+	if player_settings != null:
+		var player_screen := DotSettingsScreen.new()
+		player_screen.name = "Settings"
+
+		var built := player_screen.build(player_settings)
+
+		if built.ok:
+			stack.register(player_screen)
+			pause.settings_pressed.connect(func() -> void: stack.push(&"settings"))
+		else:
+			DotLog.result(CHANNEL, "the settings screen", built)
+			player_screen.free()
+			var button := pause.get_node_or_null("Panel/Column/Settings") as Button
+			if button != null:
+				button.disabled = true
+	else:
+		var button := pause.get_node_or_null("Panel/Column/Settings") as Button
+		if button != null:
+			button.disabled = true
 
 	var controls := ControlsScreen.new()
 	controls.name = "Controls"
@@ -277,7 +326,7 @@ static func install(
 	stack.register(scoreboard)
 
 	pause.resume_pressed.connect(func() -> void: stack.pop(&"pause"))
-	pause.settings_pressed.connect(func() -> void: stack.push(&"settings"))
+	pause.interface_pressed.connect(func() -> void: stack.push(&"interface"))
 	pause.controls_pressed.connect(func() -> void: stack.push(&"controls"))
 
 	return pause

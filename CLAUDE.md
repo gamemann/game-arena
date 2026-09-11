@@ -14,7 +14,7 @@ game-arena is the deployment shape where **twenty-six addons** are present at on
 is a game, and it is also the only test of the joins between them.
 
 ```
-the fight        dot-fps-controller  dot-combat  dot-loadout  dot-match
+the fight        dot-player-controller  dot-combat  dot-loadout  dot-match
 what you keep    dot-stats  dot-achievements  dot-leaderboard
 the world        dot-map  dot-props  dot-npc  dot-npc-ai  dot-npc-ai-director
 what plays next  dot-vote
@@ -120,7 +120,7 @@ store is a reason to give someone a rifle, not a reason to leave them watching.
 ## Movement is a game's choice
 
 `ArenaPlayer.arena_tunables()` is fast, floaty, high air control, and has no sprint.
-None of it is dot-fps-controller's default — the addon ships numbers that feel like a
+None of it is dot-player-controller's default — the addon ships numbers that feel like a
 modern shooter, and this is a deliberate departure. The air-acceleration and
 wish-speed-cap pair is the classic formula: it does nothing when you hold forward and
 everything when you turn while strafing.
@@ -177,7 +177,7 @@ Four decisions in it are not obvious, and three of them were bugs first.
 **It uses `Mode.HEADLESS` collision, on a client with a screen.** That reads like the
 wrong setting and is the only correct one. `HEADLESS` is `ArenaMap`'s analytic geometry
 — the same list of `AABB`s the meshes come from — and what matters is the last clause
-of dot-fps-controller's own note on it: *it gives the same answer on a client replaying
+of dot-player-controller's own note on it: *it gives the same answer on a client replaying
 a tick and a server that ran it.* **A predicting client must use the same collision
 backend as the server it is predicting against.** Godot physics on the client is a
 second solver with its own contact epsilons; every replay would land somewhere slightly
@@ -483,7 +483,7 @@ Two bugs the interface checks found, both of which parsed cleanly:
 
 ```bash
 # The eight addon links, from this project's own .gitignore. Do not hand-make them.
-godot/bootstrap/bootstrap.sh --links
+godot/dot-bootstrap/bootstrap.sh --links
 
 cd godot/game-arena
 godot --headless --path . --import
@@ -491,11 +491,18 @@ find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read
     godot --headless --path . --check-only --script "res://${f#./}"
 done
 godot --headless --path . res://examples/headless_match.tscn
+godot --headless --path . res://examples/headless_presentation.tscn
 godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-193 + 116 + 77 checks.
+247 + 40 + 116 + 91 checks.
+
+**`headless_presentation` is reachable from none of the other three.** `headless_match`
+plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
+connects one — which is exactly the shape this game has already been bitten by, when its
+module looked a session up by the wrong key and **nobody could ever join a dedicated arena
+server** while `dedicated.tscn` passed its twenty-one checks throughout.
 
 **Filter `--check-only` for the lines that mean a parse failed, not against the lines
 that do not.** `tools/check.sh` elsewhere in this family subtracts shutdown noise by
@@ -769,6 +776,89 @@ things that had been true the whole time:
   from the real fault it exists for. `refresh_spawns` takes `announce_empty` now and
   `setup` passes false.
 
+## The presentation layer, and the gap this project was the sharpest case of
+
+`ArenaPresentation` holds dot-settings, dot-audio, dot-fx and dot-console on the client.
+**This was the game where the missing audio was most obviously wrong**: a camera rig,
+input sampling, a renderer, a HUD and menus, and firing produced no sound and drew nothing
+for the gun in your own hands — the only feedback was the crosshair and the ammunition
+counter.
+
+What was missing was never the files. It was the decision about **what is audible, how
+many at once, how loud, and how far away it stops mattering**, which is a document:
+
+- Every weapon sound is positional with a real cull distance, because **a shot you cannot
+  place is a shot you cannot answer** — the one thing audio contributes here that the HUD
+  cannot. A hit marker is flat, because it is information about your *own* shot and would
+  otherwise get quieter the further away you hit somebody.
+- `max_concurrent` is 3 on a rifle. Twelve in one tick is not twelve gunshots; it is one,
+  twelve times as loud, with comb filtering.
+- The shot is predicted on the client that fired it. Waiting for the server's confirmation
+  would put the bang a round trip after the click, and it is safe for exactly the reason
+  dot-fx is built the way it is: **a sound never changes the simulation**, so a shot the
+  server later refuses cost a noise.
+
+**dot-effects and dot-fx are not the same thing and this game has both.** `ArenaEffects` is
+burning, slows, invulnerability and being down — things that happen over time to an entity
+and change the simulation. `ArenaPresentation` is what any of that *looks* like, and an
+effect there never changes the simulation, which is what lets a frame budget drop one.
+
+### The camera is written in exactly one place
+
+`ArenaPlayer.present` already said so in its own comment, so the shake is handed to the
+player as `camera_offset` / `camera_roll` rather than written onto the camera by whoever
+computed it. dot-fx computes a displacement and touches no camera — dot-spectate's rule —
+and one implementation then serves the play rig, a spectator's and a headless suite.
+
+`attach_camera` is idempotent and now re-applies the field of view when called again,
+because a player who moves that slider and sees nothing happen has a setting that is stored
+and read by nobody.
+
+### `field_of_view` is why `SERVER_CLAMPED` exists
+
+A wide field of view is a competitive advantage, so a server capping it is a legitimate
+rule. A server *reading* it — or the sensitivity, or the bindings, or the audio device —
+would be assembling a fingerprint that survives a new account and every ban a moderator
+issues. So there is no read direction at all, and a clamp is a **bound**: a player who
+prefers 90 keeps 90 under a cap of 100, and what is saved is their choice rather than the
+cap.
+
+## A private match files nothing
+
+`ArenaParty` is dot-peer-to-peer at `Trust.SANDBOXED`, and that is the decision this game
+makes that the lobby does not. This one reports to dot-stats, unlocks dot-achievements and
+files to dot-leaderboard; a peer-to-peer host is a player's own machine and can lie about
+all of it. **A host who can cheat and a leaderboard are not two features. They are one
+exploit**, and the only honest answers are a dedicated server or a sandbox.
+
+`reporting_allowed()` is asked in one place rather than by four reporters, because the one
+that is forgotten is the one that files a peer-to-peer host's score to a real board.
+
+**Migration is off**, where the lobby's and hungario's are on. A round-based deathmatch's
+host holds the match clock, the score and every hitbox, and handing that over mid-round
+produces a round nobody can agree about. A private match whose host left has ended, and
+saying so is better than continuing wrongly.
+
+## "Settings" opened the interface's settings
+
+`DotUiConfig` is the scale, the safe area, the transition time and how many chat lines the HUD keeps. All of those are real settings and **not one of them is what a player means by the word** — the volume, the field of view and the sensitivity are in `ArenaPresentation.settings`, a `DotSettingsManager`. So a player who opened the pause menu to turn the game down found a slider for the interface scale.
+
+`settings` is the player's document now, on dot-ui's shared `DotSettingsScreen`; the old screen is `interface` and has its own button. This file listed "A settings screen" under *things deliberately not here* on the grounds that `to_config()` made one a single `DotSettingsPanel` away — which was true, and the half that was missing is the way back: `to_config()` hands out a **snapshot**, so a screen that called only the panel's apply would report success and change nothing. `absorb_config()` is the second step and had no caller anywhere in the family.
+
+**With no manager the button is greyed out** rather than opening nothing, which is what `headless_match` drives: that fixture builds the menus without a presentation layer, and asserting the disabled button is what stops the missing case from silently becoming an empty screen.
+
+## The menus, rendered and looked at
+
+`tools/screenshot_menus.sh` renders the pause menu, the rebinder and the scoreboard — the screens dot-ui does not own. It is separate from `screenshot.sh`, which renders maps: a map wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it, and one script doing both would spend itself deciding which it was doing.
+
+It found three things on its first run, none of which any assertion here could reach:
+
+- **The rebinder listed nothing, and always had.** `DotBindingsPanel.prefix` filters the `InputMap`, `ArenaMenus` set it to `"arena_"`, and **there has never been an `arena_` action**. The bindable actions here are the movement ones, registered by `DotFpsSampler.register_default_actions` and therefore named `dot_fps_forward` and so on; fire, reload and the scoreboard are matched on a keycode in `_unhandled_input` and are not actions at all. A Controls menu with a title, a Defaults button, a Back button and no controls — and nothing errored, because a filter that matches nothing is a legitimate filter.
+- **The scoreboard drew one column.** Kills, deaths, assists, score and ping were all zero-width. That one is dot-ui's, in `DotTableView`, and it applied to every scoreboard and every server browser in the family.
+- **The rebinder's rows were in interned-pointer order.** Also dot-ui's, and the same trap that gave two peers two different wire ids in dot-net.
+
+**The tool refuses to save a grey rectangle.** If `push` fails it says so and skips the shot, because a picture of an empty viewport is indistinguishable from a renderer that is not working — which is exactly how dot-ui's blank pause menu looked before the cause was found.
+
 ## Things deliberately not here
 
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and
@@ -777,11 +867,11 @@ things that had been true the whole time:
 - **Pickups in the world.** dot-loadout ships `DotPickup` and `DotPickupField`; the map
   places none. An arena with weapon and armour pickups is most of what makes map
   control matter, and it is a level-design decision rather than a wiring one.
-- **Sound, and a viewmodel.** `ArenaClient` has the camera rig, the input sampling, the
-  renderer, the HUD and the menus. It has no audio whatsoever — nothing in `game/` names
-  an `AudioStream` — and nothing is drawn for the weapon in your own hands, so the only
-  feedback a shot gives is the crosshair and the ammunition counter. `game-hungario`
-  generates its sound rather than shipping any, and is the shape this would take.
+- **Any actual audio files, and a viewmodel.** dot-audio is wired, the catalogue is
+  written and every id resolves to a path in `audio/` that does not exist yet — which is
+  the right way round, because what this game was missing was the decision rather than the
+  files. Dropping eight `.ogg`s in changes nothing else. Nothing is still drawn for the
+  weapon in your own hands.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
 - **A chat window.** `DotChatClient` holds the history, the channels and the unread
@@ -795,6 +885,3 @@ things that had been true the whole time:
   them and reports which one was picked; connecting means tearing down this client's
   netcode, opening a transport at a new address and going through signon again, which
   is a launcher's job — and this game is loaded *by* one.
-- **A viewmodel, and sound.** `ArenaClient` has the camera rig, the input sampling, the
-  renderer, the HUD and the menus. It has no audio whatsoever beyond voice chat, and
-  nothing is drawn for the weapon in your own hands.

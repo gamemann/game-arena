@@ -87,15 +87,14 @@ func build(p_game: ArenaGame) -> void:
 	ammo_bar.bind(func() -> Variant:
 		if not _live():
 			return 0.0
-		var state := player.arsenal.current()
-		return float(state.ammo) if state != null else 0.0
+		var slot := player.arsenal.current()
+		return float(slot.magazine) if slot != null else 0.0
 	)
 	ammo_bar.max_source = func() -> Variant:
 		if not _live():
 			return 1.0
-		var state := player.arsenal.current()
-		var weapon := state.weapon() if state != null else null
-		return float(maxi(1, weapon.magazine)) if weapon != null else 1.0
+		var slot := player.arsenal.current()
+		return float(maxi(1, slot.def.magazine)) if slot != null else 1.0
 
 	feed = DotFeedView.new()
 	feed.name = "KillFeed"

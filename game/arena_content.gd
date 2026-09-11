@@ -73,84 +73,131 @@ static func damage_types() -> Array[DotDamageType]:
 
 
 # --- Weapons ---------------------------------------------------------------
+#
+# A weapon is a DotWeaponDef naming a behaviour script by path, plus a
+# DotWeaponBallistics carrying the numbers that behaviour reads. Until dot-weapon
+# existed these were one fat DotWeapon resource with every gun field on it; the split
+# is what lets this game add a bow, a grappling hook or a mine layer later without
+# either editing an addon or pretending the new thing is a gun.
+#
+# Every duration is in ticks. Seconds would make the pistol fire at two different
+# rates on a 64 Hz server and a 128 Hz one, which is two different games.
+
+const TICK_RATE := 64
+
+const HITSCAN := "res://addons/dot_weapon/behaviour/dot_weapon_hitscan.gd"
+const PROJECTILE := "res://addons/dot_weapon/behaviour/dot_weapon_projectile.gd"
+
+
+## Ticks between shots for a weapon quoted in rounds per minute.
+##
+## Rounds per minute is what a designer tunes in and ticks are what the simulation
+## runs on, so the conversion lives here once rather than in four hand-computed
+## numbers that drift the first time somebody changes the tick rate.
+static func rpm_ticks(rpm: float) -> int:
+	return maxi(1, int(round(60.0 / rpm * float(TICK_RATE))))
+
+
+static func sec_ticks(seconds: float) -> int:
+	return maxi(0, int(round(seconds * float(TICK_RATE))))
+
 
 ## The starting weapon. Always available, never runs out, and always loses a fair
 ## fight — which is what makes picking something up worth doing.
-static func pistol() -> DotWeapon:
-	var weapon := DotWeapon.make(&"pistol", 18.0)
-	weapon.display_name = "Pistol"
-	weapon.slot = 1
-	weapon.fire_mode = DotWeapon.Fire.SEMI
-	weapon.rpm = 380.0
-	weapon.magazine = 0
-	weapon.infinite_reserve = true
-	weapon.spread_degrees = 0.4
-	weapon.spread_moving = 1.6
-	weapon.spread_bloom = 0.35
-	weapon.spread_bloom_max = 3.0
-	weapon.recoil_pitch = 0.5
-	weapon.max_range = 120.0
-	weapon.deploy_sec = 0.2
-	weapon.holster_sec = 0.15
-	weapon.damage_type = bullet()
-	return weapon
+static func pistol() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = &"pistol"
+	def.display_name = "Pistol"
+	def.behaviour_path = HITSCAN
+	def.slot = 1
+	def.fire_mode = DotWeaponDef.Fire.SEMI
+	def.use_interval_ticks = rpm_ticks(380.0)
+	def.magazine = 0
+	def.infinite_reserve = true
+	def.cost_per_use = 0
+	def.deploy_ticks = sec_ticks(0.2)
+	def.holster_ticks = sec_ticks(0.15)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 18.0
+	b.damage_type = bullet()
+	b.spread = 0.4
+	b.spread_moving = 1.6
+	b.bloom = 0.35
+	b.bloom_max = 3.0
+	b.recoil_pitch = 0.5
+	b.max_range = 120.0
+	def.tuning = b
+	return def
 
 
 ## The all-rounder. Wins at range, loses in a corridor.
-static func rifle() -> DotWeapon:
-	var weapon := DotWeapon.make(&"rifle", 22.0)
-	weapon.display_name = "Rifle"
-	weapon.slot = 2
-	weapon.fire_mode = DotWeapon.Fire.AUTO
-	weapon.rpm = 620.0
-	weapon.magazine = 30
-	weapon.reserve = 90
-	weapon.reserve_max = 180
-	weapon.ammo_type = AMMO_RIFLE
-	weapon.reload_sec = 2.1
-	weapon.spread_degrees = 0.5
-	weapon.spread_moving = 2.2
-	weapon.spread_airborne = 4.5
-	weapon.spread_crouched = 0.55
-	weapon.spread_bloom = 0.28
-	weapon.spread_bloom_max = 4.5
-	weapon.spread_recovery = 9.0
-	weapon.recoil_pitch = 0.35
-	weapon.recoil_yaw = 0.14
-	weapon.max_range = 200.0
-	weapon.deploy_sec = 0.3
-	weapon.holster_sec = 0.2
-	weapon.damage_type = bullet()
-	return weapon
+static func rifle() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = &"rifle"
+	def.display_name = "Rifle"
+	def.behaviour_path = HITSCAN
+	def.slot = 2
+	def.fire_mode = DotWeaponDef.Fire.AUTO
+	def.use_interval_ticks = rpm_ticks(620.0)
+	def.magazine = 30
+	def.reserve = 90
+	def.reserve_max = 180
+	def.ammo_type = AMMO_RIFLE
+	def.reload_ticks = sec_ticks(2.1)
+	def.deploy_ticks = sec_ticks(0.3)
+	def.holster_ticks = sec_ticks(0.2)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 22.0
+	b.damage_type = bullet()
+	b.spread = 0.5
+	b.spread_moving = 2.2
+	b.spread_airborne = 4.5
+	b.spread_crouched = 0.55
+	b.bloom = 0.28
+	b.bloom_max = 4.5
+	b.bloom_recovery = 9.0 / float(TICK_RATE)
+	b.recoil_pitch = 0.35
+	b.recoil_yaw = 0.14
+	b.max_range = 200.0
+	def.tuning = b
+	return def
 
 
 ## The corridor answer. Nine pellets in a learnable ring, so range is a skill rather
 ## than a dice roll.
-static func shotgun() -> DotWeapon:
-	var weapon := DotWeapon.make(&"shotgun", 11.0)
-	weapon.display_name = "Shotgun"
-	weapon.slot = 3
-	weapon.fire_mode = DotWeapon.Fire.SEMI
-	weapon.rpm = 75.0
-	weapon.pellets = 9
-	weapon.fixed_pattern = true
-	weapon.spread_degrees = 4.5
-	weapon.spread_moving = 0.5
-	weapon.magazine = 6
-	weapon.reserve = 24
-	weapon.reserve_max = 48
-	weapon.ammo_type = AMMO_SHELL
-	weapon.reload_per_round = true
-	weapon.reload_sec = 0.45
-	weapon.reload_start_sec = 0.3
-	weapon.recoil_pitch = 2.2
+static func shotgun() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = &"shotgun"
+	def.display_name = "Shotgun"
+	def.behaviour_path = HITSCAN
+	def.slot = 3
+	def.fire_mode = DotWeaponDef.Fire.SEMI
+	def.use_interval_ticks = rpm_ticks(75.0)
+	def.magazine = 6
+	def.reserve = 24
+	def.reserve_max = 48
+	def.ammo_type = AMMO_SHELL
+	def.reload_per_round = true
+	def.reload_ticks = sec_ticks(0.45)
+	def.reload_start_ticks = sec_ticks(0.3)
+	def.deploy_ticks = sec_ticks(0.35)
+	def.holster_ticks = sec_ticks(0.25)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 11.0
+	b.damage_type = bullet()
+	b.pellets = 9
+	b.fixed_pattern = true
+	b.spread = 4.5
+	b.spread_moving = 0.5
+	b.recoil_pitch = 2.2
 	# Well short of the map's diagonal, so a shotgun across the arena does nothing
 	# rather than doing a little — which is a clearer rule to play against.
-	weapon.max_range = 24.0
-	weapon.deploy_sec = 0.35
-	weapon.holster_sec = 0.25
-	weapon.damage_type = bullet()
-	return weapon
+	b.max_range = 24.0
+	def.tuning = b
+	return def
 
 
 ## Area denial, mobility, and the reason the raised middle is worth holding.
@@ -158,43 +205,65 @@ static func shotgun() -> DotWeapon:
 ## Direct damage is deliberately low and the splash is deliberately high: a rocket that
 ## kills on a direct hit is a hitscan weapon with travel time, and the interesting part
 ## of a rocket launcher is what it does to the floor.
-static func rocket_launcher() -> DotWeapon:
-	var weapon := DotWeapon.make(&"rocket", 30.0)
-	weapon.display_name = "Rocket Launcher"
-	weapon.slot = 4
-	weapon.fire_mode = DotWeapon.Fire.SEMI
-	weapon.delivery = DotWeapon.Delivery.PROJECTILE
-	weapon.rpm = 70.0
-	weapon.magazine = 4
-	weapon.reserve = 12
-	weapon.reserve_max = 20
-	weapon.ammo_type = AMMO_ROCKET
-	weapon.reload_sec = 2.6
-	weapon.projectile_speed = 42.0
-	weapon.projectile_radius = 0.2
-	weapon.projectile_life_sec = 5.0
-	weapon.splash_radius = 4.5
-	weapon.splash_damage = 85.0
-	weapon.splash_hurts_owner = true
-	weapon.spread_degrees = 0.0
-	weapon.recoil_pitch = 3.0
-	weapon.max_range = 220.0
-	weapon.deploy_sec = 0.45
-	weapon.holster_sec = 0.3
-	weapon.damage_type = blast()
-	weapon.splash_type = blast()
-	return weapon
+static func rocket_launcher() -> DotWeaponDef:
+	var def := DotWeaponDef.new()
+	def.id = &"rocket"
+	def.display_name = "Rocket Launcher"
+	def.behaviour_path = PROJECTILE
+	def.slot = 4
+	def.fire_mode = DotWeaponDef.Fire.SEMI
+	def.use_interval_ticks = rpm_ticks(70.0)
+	def.magazine = 4
+	def.reserve = 12
+	def.reserve_max = 20
+	def.ammo_type = AMMO_ROCKET
+	def.reload_ticks = sec_ticks(2.6)
+	def.deploy_ticks = sec_ticks(0.45)
+	def.holster_ticks = sec_ticks(0.3)
+
+	var b := DotWeaponBallistics.new()
+	b.damage = 30.0
+	b.damage_type = blast()
+	b.splash_type = blast()
+	b.speed = 42.0
+	# Not a charged weapon, so the minimum and the maximum are the same number: a
+	# rocket launcher that fired slower rockets when tapped would be a different gun.
+	b.min_speed = 42.0
+	b.min_charge_damage = 1.0
+	b.radius = 0.2
+	b.life_ticks = sec_ticks(5.0)
+	b.splash_radius = 4.5
+	b.splash_damage = 85.0
+	b.splash_hurts_owner = true
+	b.spread = 0.0
+	b.spread_moving = 0.0
+	b.spread_airborne = 0.0
+	b.recoil_pitch = 3.0
+	b.max_range = 220.0
+	def.tuning = b
+	return def
 
 
-static func weapons() -> Array[DotWeapon]:
+static func weapons() -> Array[DotWeaponDef]:
 	return [pistol(), rifle(), shotgun(), rocket_launcher()]
+
+
+## The whole weapon table, validated as one document.
+##
+## A server checks this at boot, headless, before anybody joins — which is the only
+## moment anybody is watching.
+static func weapon_catalogue() -> DotWeaponCatalogue:
+	var catalogue := DotWeaponCatalogue.new()
+	for def in weapons():
+		catalogue.add(def)
+	return catalogue
 
 
 ## Weapons by id, for a module that has an item id and needs the weapon.
 static func weapon_table() -> Dictionary:
 	var table := {}
-	for weapon in weapons():
-		table[weapon.id] = weapon
+	for def in weapons():
+		table[def.id] = def
 	return table
 
 

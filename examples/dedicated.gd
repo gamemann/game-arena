@@ -188,6 +188,25 @@ func _test_module_loaded() -> void:
 		_server.console.find_cvar("arena_scorelimit") != null, "and its cvar"
 	)
 
+	# dot-map's own commands, on a real console. `map` was dot-server's and it changed the
+	# GAME; on a server running one game and several maps that is the one thing an operator
+	# typing it does not mean.
+	for command in ["map", "maps", "mapinfo"]:
+		_check(
+			_server.console.find_command(command) != null,
+			"and dot-map's %s" % command
+		)
+	_check(
+		_server.console.find_command("game") != null,
+		"while `game` is what changes the game, which is what dot-server's `map` used to do"
+	)
+
+	var map_command := _server.console.find_command("map")
+	_check(
+		map_command != null and not map_command.chat_allowed,
+		"and changing the map is NOT typable in chat, because it ends every round in progress"
+	)
+
 
 # --- The rest of the server -------------------------------------------------
 

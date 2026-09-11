@@ -52,7 +52,7 @@ var extras: ArenaClientExtras = null
 
 var _offline := true
 var _sampler: DotFpsSampler = null
-var _fire := DotCombatCommand.new()
+var _fire := DotWeaponCommand.new()
 
 ## A weapon slot the player asked for this tick, or 0 for "no change". Cleared once
 ## sent — see [method _read_fire].
@@ -93,6 +93,10 @@ var _level: Node3D = null
 ## dot-browser's client half, and the screen over it.
 var browser: ArenaBrowser = null
 
+## Settings, audio, effects and the console. Everything that belongs to the person at the
+## keyboard rather than to the match.
+var presentation: ArenaPresentation = null
+
 ## Whether this client believes it is holding a prop.
 ##
 ## [b]A belief, not a fact, and the distinction is the whole reason props are not
@@ -119,7 +123,7 @@ func _ready() -> void:
 	# `Mode.HEADLESS` is not a degraded mode — it is `ArenaMap`'s analytic geometry, and
 	# `ArenaMap`'s whole design is that the meshes, the physics bodies and the analytic
 	# boxes come from ONE list of `AABB`s so they cannot drift. What matters for a
-	# client is the last clause of dot-fps-controller's own note on it: *it gives the
+	# client is the last clause of dot-player-controller's own note on it: *it gives the
 	# same answer on a client replaying a tick and a server that ran it.*
 	#
 	# A predicting client MUST use the same collision backend as the server it is
@@ -163,6 +167,10 @@ func _ready() -> void:
 	_sampler = DotFpsSampler.new(ArenaPlayer.arena_tunables())
 	DotFpsSampler.register_default_actions(_sampler)
 
+	# Before the interface, because the field of view and the crosshair come out of the
+	# settings document and a screen built first would have laid itself out from the
+	# defaults.
+	_build_presentation()
 	_build_interface()
 
 	if _offline:
@@ -214,7 +222,12 @@ func _build_interface() -> void:
 	add_child(menus)
 
 	_ui_config = DotUiConfig.new()
-	var pause := ArenaMenus.install(menus, game, _ui_config)
+	var pause := ArenaMenus.install(
+		menus,
+		game,
+		_ui_config,
+		presentation.settings if presentation != null else null
+	)
 
 	# The server browser, which is the only screen here that is about something other
 	# than this game. Built whether or not this client is connected: looking for a
@@ -416,6 +429,12 @@ func _on_map_changed(map: DotMapDef) -> void:
 	_level = game.map.to_scene()
 	add_child(_level)
 
+	if presentation != null:
+		# Everything drawn for the old map is meaningless now -- a decal is a hole in a
+		# wall that no longer exists, and a decal ring that survives a map change is one
+		# that survives the map it was about.
+		presentation.on_map_changed()
+
 	if hud != null:
 		hud.notice("Now playing %s." % map.name_or_id())
 
@@ -559,18 +578,40 @@ func _on_player_added(added: ArenaPlayer) -> void:
 		)
 
 
+## Settings, audio, effects and the console.
+func _build_presentation() -> void:
+	presentation = ArenaPresentation.new()
+	presentation.name = "Presentation"
+	presentation.client = self
+	add_child(presentation)
+	DotLog.result(CHANNEL, "the presentation layer", presentation.setup())
+
+	presentation.settings.changed.connect(func(key: StringName, _v: Variant, _w: StringName) -> void:
+		# The field of view is the one setting that has to reach something already built.
+		# A camera that keeps the value it was created with is exactly the "produced
+		# correctly and consumed by nothing" this family keeps finding.
+		if key == &"field_of_view" and player != null:
+			player.attach_camera(_field_of_view())
+	)
+
+
 func _adopt(candidate: ArenaPlayer) -> void:
 	if candidate == null or player != null:
 		return
 
 	player = candidate
-	player.attach_camera(FIELD_OF_VIEW)
+	# The player's own field of view, capped by whatever the server clamped it to. A
+	# server capping it is a legitimate competitive rule; the player's *choice* is what is
+	# saved, so leaving the server gives it back rather than editing their settings.
+	player.attach_camera(_field_of_view())
 
 	if hud != null:
 		hud.follow(player)
 
 	if _sampler != null:
 		_sampler.tunables = player.controller.tunables
+
+	_hear_the_local_player()
 
 	# Logged because this is the moment everything a person can see comes into
 	# existence — the camera, the HUD's subject and every key below the `player == null`
@@ -623,7 +664,7 @@ func _local_commands(move: DotFpsCommand) -> Dictionary:
 
 	for id in _bots:
 		var bot: ArenaPlayer = _bots[id]
-		out[int(id)] = [bot.get_meta("bot_move", DotFpsCommand.new()), bot.get_meta("bot_fire", DotCombatCommand.new())]
+		out[int(id)] = [bot.get_meta("bot_move", DotFpsCommand.new()), bot.get_meta("bot_fire", DotWeaponCommand.new())]
 
 	return out
 
@@ -651,7 +692,7 @@ func _drive_bots() -> void:
 				nearest = other
 
 		var move := DotFpsCommand.new()
-		var fire := DotCombatCommand.new()
+		var fire := DotWeaponCommand.new()
 
 		if nearest != null:
 			var to := nearest.global_position - bot.global_position
@@ -660,7 +701,7 @@ func _drive_bots() -> void:
 			move.move = Vector2(0.0, 1.0)
 			fire.yaw = move.yaw
 			fire.pitch = move.pitch
-			fire.set_button(DotCombatCommand.BUTTON_ATTACK, best < 40.0)
+			fire.set_button(DotWeaponCommand.BUTTON_ATTACK, best < 40.0)
 
 		bot.set_meta("bot_move", move)
 		bot.set_meta("bot_fire", fire)
@@ -679,6 +720,18 @@ func _process(delta: float) -> void:
 	# computing.
 	if extras != null:
 		extras.pump_voice(delta)
+
+	if presentation != null:
+		# dot-audio culls by distance from the listener and dot-fx ages what it spawned;
+		# neither ticks itself, for the reason everything tickable in this family is
+		# explicit -- `_process` does not run while a tree is paused, and a pause menu is
+		# exactly when nothing finishes.
+		var eye := camera_position()
+		var forward := Vector3.FORWARD
+		if player != null and player.camera != null:
+			forward = -player.camera.global_transform.basis.z
+		presentation.present(delta, eye, forward)
+		_apply_shake()
 
 	# A position report, once a second, for as long as the client has a player.
 	#
@@ -744,7 +797,7 @@ func _drive_spectator_camera() -> void:
 
 ## The fire command, from the keyboard and the mouse.
 ##
-## [b]`DotCombatCommand` is a button BITMASK, not a set of booleans.[/b] `set_button`
+## [b]`DotWeaponCommand` is a button BITMASK, not a set of booleans.[/b] `set_button`
 ## is the accessor; assigning `.attack` creates nothing and errors at runtime with
 ## "Invalid assignment of property or key 'attack'". Also the aim, which is read from
 ## the movement command's angles rather than sampled again — sampling the mouse twice
@@ -753,8 +806,8 @@ func _read_fire(move: DotFpsCommand) -> void:
 	var firing := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
 		and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 
-	_fire.set_button(DotCombatCommand.BUTTON_ATTACK, firing)
-	_fire.set_button(DotCombatCommand.BUTTON_RELOAD, Input.is_key_pressed(KEY_R))
+	_fire.set_button(DotWeaponCommand.BUTTON_ATTACK, firing)
+	_fire.set_button(DotWeaponCommand.BUTTON_RELOAD, Input.is_key_pressed(KEY_R))
 	_fire.yaw = move.yaw
 	_fire.pitch = move.pitch
 
@@ -788,6 +841,13 @@ func _grab_mouse() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# [b]The console first, and before the click that captures the mouse.[/b] Without it,
+	# a click inside an open console grabs pointer lock and the next keystroke goes to
+	# movement -- so typing `noclip` walks the player forward, which is the single most
+	# reported bug in every game that ships a console and forgets this line.
+	if presentation != null and presentation.swallows_input():
+		return
+
 	# Before the `player == null` guard, deliberately. A browser player clicks while
 	# the world is still loading more often than not, and a click swallowed for want of
 	# a player is a click that never captures anything — after which the only
@@ -878,6 +938,101 @@ func _apply_mouse() -> void:
 		return
 
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Connects the local player's own noises and pictures.
+##
+## [b]Only the local player's.[/b] Somebody else being hurt is their business: a damage
+## tint for every player in the match would be a screen that is permanently red, and a
+## shake for somebody else's rifle would make a crowded room unplayable. What everybody
+## hears is the positional half -- the shot, the impact -- which comes from the world.
+func _hear_the_local_player() -> void:
+	if presentation == null or player == null:
+		return
+
+	presentation.on_spawned()
+
+	if player.health != null and not player.health.damaged.is_connected(_on_local_damaged):
+		player.health.damaged.connect(_on_local_damaged)
+		player.health.died.connect(_on_local_died)
+
+	if player.arsenal != null and not player.arsenal.fired.is_connected(_on_local_fired):
+		# The PREDICTED shot, on the client that fired it. Waiting for the server's
+		# confirmation would put the bang a round trip after the click, which is the one
+		# piece of feedback a player judges the whole game's responsiveness by -- and it
+		# is safe to predict for exactly the reason dot-fx is built the way it is: a sound
+		# never changes the simulation, so a shot the server later refuses cost a noise.
+		player.arsenal.fired.connect(_on_local_fired)
+
+
+func _on_local_fired(shot: DotShot) -> void:
+	if presentation == null:
+		return
+	var muzzle := Transform3D.IDENTITY
+	muzzle.origin = shot.origin
+	# The weapon's id rather than a slot number. A slot is where a player put something;
+	# an id is what it is, and a sound catalogue keyed on a slot would play the rifle
+	# whenever anybody put a shotgun in slot one.
+	var weapon_id: StringName = shot.weapon.id if shot.weapon != null else &"rifle"
+	presentation.on_fired(weapon_id, muzzle, true)
+
+	# Where the pellets landed, from the client's own prediction. Impacts are a list
+	# because a shotgun is one shot with several of them, and a single impact sound for
+	# eight pellets is a shotgun that sounds like a rifle.
+	for at in shot.impacts:
+		var hit := Transform3D.IDENTITY
+		hit.origin = at
+		presentation.on_impact(hit, false)
+
+	if not shot.damages.is_empty():
+		presentation.on_hit_confirmed()
+
+
+func _on_local_damaged(damage: DotDamage) -> void:
+	if presentation != null:
+		presentation.on_hurt(damage.amount)
+
+
+func _on_local_died(_damage: DotDamage) -> void:
+	if presentation == null or player == null:
+		return
+	var where := Transform3D.IDENTITY
+	where.origin = player.global_position
+	presentation.on_died(where)
+
+
+## Adds the frame's camera shake. dot-fx computes it; this is the only thing that applies it.
+##
+## Same rule as dot-spectate's camera: one implementation then serves the play rig, a
+## spectator's and a headless suite, with no second code path to keep in step.
+func _apply_shake() -> void:
+	if player == null or player.camera == null or presentation == null:
+		return
+	# Handed to the player rather than written onto the camera. `ArenaPlayer.present` is
+	# the one place the camera's transform is set -- it says so in its own comment -- and a
+	# second writer would fight it every frame for the same value.
+	player.camera_offset = presentation.camera_shake()
+	player.camera_roll = presentation.camera_roll()
+
+
+## The field of view to use: the player's own, under any cap a server has applied.
+func _field_of_view() -> float:
+	if presentation == null:
+		return FIELD_OF_VIEW
+	return float(presentation.settings.get_int(&"field_of_view", int(FIELD_OF_VIEW)))
+
+
+## Where this client thinks it is, as one line. What the console's `where` prints.
+func describe_position() -> PackedStringArray:
+	if player == null:
+		return PackedStringArray(["no local player yet"])
+	var st := player.controller.state
+	return PackedStringArray([
+		"position %s" % st.position,
+		"node     %s" % player.global_position,
+		"camera   %s" % camera_position(),
+		"yaw %.1f  pitch %.1f  grounded %s" % [st.yaw, st.pitch, st.grounded],
+	])
 
 
 ## Where the camera actually is, or the origin when there is none.

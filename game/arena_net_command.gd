@@ -8,14 +8,14 @@ extends DotNetInput
 ## position, and dot-net's whole security model rests on the distinction.
 ##
 ## An arena player has two commands, because two addons that do not know about each
-## other each define one: [DotFpsCommand] for movement and [DotCombatCommand] for
+## other each define one: [DotFpsCommand] for movement and [DotWeaponCommand] for
 ## the weapon. Both already know how to write themselves through a duck-typed
 ## [code]Variant[/code] writer, for the same reason [DotFpsNetSync] never mentions
 ## [code]DotNetVar[/code] — an addon that named a dot-net class would fail to parse
 ## without dot-net installed. Composing them here costs nothing and keeps the
 ## quantisation decisions in the addon that owns them.
 ##
-## [b]The view angles travel once, not twice.[/b] [DotCombatCommand] carries its own
+## [b]The view angles travel once, not twice.[/b] [DotWeaponCommand] carries its own
 ## yaw and pitch, and sending them again would be 21 wasted bits per tick — and worse
 ## than wasted: two copies can disagree, and then the shot leaves at an angle the
 ## player was not looking along. [ArenaPlayer.simulate_tick] already overwrites the
@@ -26,23 +26,23 @@ extends DotNetInput
 var move: DotFpsCommand = DotFpsCommand.new()
 
 ## Weapons: the selected slot, attack, reload, and the rest of the buttons.
-var fire: DotCombatCommand = DotCombatCommand.new()
+var fire: DotWeaponCommand = DotWeaponCommand.new()
 
 
 func _write(writer: DotNetWriter) -> void:
 	move.write(writer)
 	# Slot and buttons only. The angles come from `move`; see the class notes.
 	writer.write_uint(clampi(fire.slot, 0, 15), 4)
-	writer.write_uint(fire.buttons, DotCombatCommand.BUTTON_BITS)
+	writer.write_uint(fire.buttons, DotWeaponCommand.BUTTON_BITS)
 
 
 func _read(reader: DotNetReader) -> void:
 	move = DotFpsCommand.new()
 	move.read(reader)
 
-	fire = DotCombatCommand.new()
+	fire = DotWeaponCommand.new()
 	fire.slot = reader.read_uint(4)
-	fire.buttons = reader.read_uint(DotCombatCommand.BUTTON_BITS)
+	fire.buttons = reader.read_uint(DotWeaponCommand.BUTTON_BITS)
 	fire.yaw = move.yaw
 	fire.pitch = move.pitch
 
@@ -77,7 +77,7 @@ func _equals(other: DotNetInput) -> bool:
 
 ## Bits one command costs, before dot-net's own framing.
 static func estimated_bits() -> int:
-	return DotFpsCommand.estimated_bits() + 4 + DotCombatCommand.BUTTON_BITS
+	return DotFpsCommand.estimated_bits() + 4 + DotWeaponCommand.BUTTON_BITS
 
 
 func describe() -> Dictionary:

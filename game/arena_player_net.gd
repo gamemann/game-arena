@@ -1,11 +1,11 @@
 class_name ArenaPlayerNet
 extends DotNetBehaviour
 
-## The thirty lines dot-fps-controller and dot-combat each say belong in the game.
+## The thirty lines dot-player-controller and dot-combat each say belong in the game.
 ##
 ## [b]Neither addon may name a dot-net class.[/b] A script that so much as mentions a
 ## missing [code]class_name[/code] fails to parse and takes every script that
-## references it down with it, so dot-fps-controller has to compile with dot-core
+## references it down with it, so dot-player-controller has to compile with dot-core
 ## alone. What each addon ships instead is a [code]*NetSync[/code] class describing
 ## what to replicate as data — property names, and type names as strings. Resolving
 ## those strings against [code]DotNetVar.Type[/code] is this file's job, and it is the
@@ -30,12 +30,12 @@ var net_crouch: float = 0.0
 var net_flags: int = 0
 var net_modifiers: int = 0
 
-# --- Health and weapons, from DotCombatNetSync.specs() ---
+# --- Health from DotCombatNetSync, weapons from DotWeaponNetSync ---
 var net_health: int = 0
 var net_armour: int = 0
 var net_alive: bool = false
 var net_slot: int = 0
-var net_ammo: int = 0
+var net_magazine: int = 0
 var net_reserve: int = 0
 
 ## The last command received, retained.
@@ -48,7 +48,7 @@ var net_reserve: int = 0
 ## behaviour through [method ArenaGame.tick], which substitutes a zeroed command for a
 ## player with no entry.
 var last_move: DotFpsCommand = DotFpsCommand.new()
-var last_fire: DotCombatCommand = DotCombatCommand.new()
+var last_fire: DotWeaponCommand = DotWeaponCommand.new()
 
 ## Newest tick whose state this behaviour has adopted. Client side, for reconciliation.
 var last_state_tick: int = -1
@@ -71,7 +71,7 @@ func _register_net_vars() -> void:
 			# claims; over the default range it would be 3%.
 			declaration.range_of(0.0, 1.0)
 
-	for spec in DotCombatNetSync.specs():
+	for spec in DotCombatNetSync.specs() + DotWeaponNetSync.specs():
 		var declaration := replicate(spec["property"], DotNetVar.Type[spec["type"]])
 
 		if int(spec["bits"]) > 0:
@@ -140,7 +140,8 @@ func pull() -> void:
 		return
 
 	DotFpsNetSync.pull(player.controller.state, self)
-	DotCombatNetSync.pull(player.health, player.arsenal, self)
+	DotCombatNetSync.pull(player.health, self)
+	DotWeaponNetSync.pull(player.arsenal, self)
 
 
 ## Copies received state back into the simulation. Receiving side.
@@ -157,7 +158,8 @@ func _net_state_applied(tick: int) -> void:
 	last_state_tick = tick
 
 	DotFpsNetSync.push(self, player.controller.state)
-	DotCombatNetSync.push(self, player.health, player.arsenal)
+	DotCombatNetSync.push(self, player.health)
+	DotWeaponNetSync.push(self, player.arsenal)
 
 	# The controller writes its state out to the body node during simulation, and a
 	# receiving client does not simulate this player. Without this the state moves and

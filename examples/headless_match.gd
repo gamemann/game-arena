@@ -8,7 +8,7 @@ extends Node
 ##
 ## Exits non-zero on any failure, so it works as a smoke test as-is.
 ##
-## [b]This is the only place the six addons meet.[/b] dot-fps-controller, dot-combat,
+## [b]This is the only place the six addons meet.[/b] dot-player-controller, dot-combat,
 ## dot-loadout, dot-match, dot-core and the map all pass their own suites in isolation;
 ## every one of those suites runs one addon with the others absent. What this runs is
 ## the joins: a movement state feeding a spread cone, a combat kill becoming a match
@@ -962,21 +962,21 @@ func _commands_for_tick(tick: int) -> Dictionary:
 
 		var target := _nearest_target(player)
 		var move := DotFpsCommand.new()
-		var fire := DotCombatCommand.new()
+		var fire := DotWeaponCommand.new()
 
 		if target != null:
 			var to_target := (
 				target.muzzle_position() - player.muzzle_position()
 			).normalized()
 
-			# The inverse of DotCombatCommand.aim_direction(), which is Godot's
+			# The inverse of DotWeaponCommand.aim_direction(), which is Godot's
 			# -Z-forward convention. Getting the sign wrong here makes every bot shoot
 			# backwards, which reads as a broken hit registration rather than a broken
 			# test.
 			move.yaw = rad_to_deg(atan2(-to_target.x, -to_target.z))
 			move.pitch = rad_to_deg(asin(clampf(to_target.y, -1.0, 1.0)))
 
-			fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+			fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
 
 			# Strafe, so they are not four statues: it exercises the movement-based
 			# spread and the ground friction, and it means the shots are not all
@@ -1181,11 +1181,14 @@ func _test_interface() -> void:
 	# while moving, `still` was already the wide gap and the comparison against
 	# movement = 1.0 could not beat it. One run in twelve, on a check about the
 	# binding rather than about the bot.
-	subject.arsenal.movement = 0.0
+	# The spread is read off the simulated movement state rather than a field on the
+	# arsenal now: dot-weapon hands a behaviour a context per tick instead of keeping
+	# posture on the arsenal, so the thing to move is the player.
+	subject.controller.state.velocity = Vector3.ZERO
 	hud.refresh_all()
 	var still := hud.crosshair.gap_pixels()
 
-	subject.arsenal.movement = 1.0
+	subject.controller.state.velocity = Vector3(8.0, 0.0, 0.0)
 	hud.refresh_all()
 	_check(
 		hud.crosshair.gap_pixels() > still,
@@ -1230,12 +1233,26 @@ func _test_interface() -> void:
 	_check(not hud.visible, "an opaque pause menu does take it down")
 	_check(stack.depth() == 2, "and stacks over the scoreboard")
 
-	stack.push(&"settings")
-	_check(stack.top_id() == &"settings", "settings opens over the pause menu")
-	var settings := stack.screen(&"settings") as ArenaMenus.SettingsScreen
+	# `interface`, not `settings`. The screen built from `DotUiConfig` offers the scale,
+	# the safe area and how many chat lines the HUD keeps -- real settings, and not one of
+	# them is what a player means by the word. `settings` is the player's own document now,
+	# and a player who opened this menu to turn the game down used to find a slider for the
+	# interface scale.
+	stack.push(&"interface")
+	_check(stack.top_id() == &"interface", "the interface screen opens over the pause menu")
+	var settings := stack.screen(&"interface") as ArenaMenus.SettingsScreen
 	_check(
 		settings.panel.editor_for("scale") != null,
 		"and generated a control for the UI scale"
+	)
+	_check(
+		stack.screen(&"settings") == null,
+		"while `settings` is the player's own, which this fixture has no manager for"
+	)
+	var settings_button := pause.get_node_or_null("Panel/Column/Settings") as Button
+	_check(
+		settings_button != null and settings_button.disabled,
+		"so its button is greyed out rather than opening nothing"
 	)
 
 	stack.pop()
@@ -1929,7 +1946,7 @@ func _test_horde() -> void:
 ## The mode where every addon in this game is live at once.
 ##
 ## [b]This is the deployment shape the project exists for, one level up.[/b]
-## `headless_match` above runs dot-fps-controller, dot-combat, dot-loadout, dot-match
+## `headless_match` above runs dot-player-controller, dot-combat, dot-loadout, dot-match
 ## and dot-core together; this adds dot-npc, dot-npc-ai, dot-npc-ai-director,
 ## dot-props, dot-stats, dot-achievements and dot-leaderboard on top and plays it. Every
 ## one of those passes its own suite with the others absent.
@@ -2157,8 +2174,8 @@ func _commands_for(game: ArenaGame, tick: int) -> Dictionary:
 		move.yaw = fmod(float(tick) * 1.7 + float(player.player_id) * 90.0, 360.0)
 		move.pitch = 0.0
 
-		var fire := DotCombatCommand.new()
-		fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+		var fire := DotWeaponCommand.new()
+		fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
 		fire.yaw = move.yaw
 		fire.pitch = move.pitch
 
@@ -2172,7 +2189,7 @@ func _commands_for(game: ArenaGame, tick: int) -> Dictionary:
 func _test_geometry_held() -> void:
 	_group("the world held")
 
-	# The failure dot-fps-controller documents at length: a player who ends a tick
+	# The failure dot-player-controller documents at length: a player who ends a tick
 	# exactly touching the floor is never grounded again and sinks through the world.
 	# Four bots for ninety seconds is enough for it to happen if it can.
 	_check(

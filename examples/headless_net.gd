@@ -201,9 +201,9 @@ func _test_command_wire() -> void:
 	move.pitch = -12.0
 	move.set_button(DotFpsCommand.BUTTON_JUMP, true)
 
-	var fire := DotCombatCommand.new()
+	var fire := DotWeaponCommand.new()
 	fire.slot = 2
-	fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+	fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
 
 	var sent := ArenaNetCommand.new()
 	sent.tick = 4242
@@ -222,7 +222,7 @@ func _test_command_wire() -> void:
 	_check(absf(got.move.yaw - move.yaw) < 0.2, "the yaw survives", str(got.move.yaw))
 	_check(got.move.is_pressed(DotFpsCommand.BUTTON_JUMP), "jump survives")
 	_check(got.fire.slot == 2, "the weapon slot survives")
-	_check(got.fire.is_pressed(DotCombatCommand.BUTTON_ATTACK), "attack survives")
+	_check(got.fire.is_pressed(DotWeaponCommand.BUTTON_ATTACK), "attack survives")
 	_check(
 		absf(got.fire.yaw - got.move.yaw) < 0.001,
 		"the aim is the movement's, not a second copy"
@@ -233,7 +233,7 @@ func _test_command_wire() -> void:
 	var cheat := ArenaNetCommand.new()
 	cheat.move = DotFpsCommand.new()
 	cheat.move.move = Vector2(1.0, 1.0)
-	cheat.fire = DotCombatCommand.new()
+	cheat.fire = DotWeaponCommand.new()
 	cheat.sanitise(TICK_RATE)
 	_check(
 		cheat.move.move.length() <= 1.001,
@@ -243,7 +243,7 @@ func _test_command_wire() -> void:
 
 	var greedy := ArenaNetCommand.new()
 	greedy.move = DotFpsCommand.new()
-	greedy.fire = DotCombatCommand.new()
+	greedy.fire = DotWeaponCommand.new()
 	greedy.delta = 10.0
 	greedy.sanitise(TICK_RATE)
 	_check(greedy.delta <= 2.0 / float(TICK_RATE), "a ten-second tick is refused")
@@ -294,11 +294,11 @@ func _commands_for(peer_id: int, tick: int) -> Array:
 	move.move = Vector2(0.0, 1.0 if peer_id == 2 else -1.0)
 	move.yaw = 0.0 if peer_id == 2 else 180.0
 
-	var fire := DotCombatCommand.new()
+	var fire := DotWeaponCommand.new()
 	fire.slot = 2
 
 	if tick % 8 == 0:
-		fire.set_button(DotCombatCommand.BUTTON_ATTACK, true)
+		fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
 
 	return [move, fire]
 
@@ -458,15 +458,15 @@ func _test_owner_only() -> void:
 	var own: ArenaPlayerNet = bridge.behaviour_for(11)
 	var other: ArenaPlayerNet = bridge.behaviour_for(12)
 
-	var declaration := own.find_var(&"net_ammo")
+	var declaration := own.find_var(&"net_magazine")
 	_check(
 		declaration != null and declaration.audience == DotNetVar.Audience.OWNER,
 		"ammunition is declared owner-only"
 	)
 	_check(
-		other.net_ammo == 0,
+		other.net_magazine == 0,
 		"and an opponent's is never received",
-		"received %d" % other.net_ammo
+		"received %d" % other.net_magazine
 	)
 	# Not asserted: that the owner's own ammunition arrives non-zero. It does travel —
 	# the declaration above is what puts it on the wire for the owner alone — but a

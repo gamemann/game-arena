@@ -28,7 +28,7 @@ No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` regis
 | | |
 | --- | --- |
 | **WASD** | Move |
-| **Space** | Jump — hold it, auto-hop is on |
+| **Space** | Jump. Hold it, auto-hop is on |
 | **Ctrl** | Crouch |
 | **Mouse 1** | Fire |
 | **R** | Reload |
@@ -36,7 +36,7 @@ No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` regis
 | **Tab** (hold) | Scoreboard |
 | **Esc** | Pause menu, and release the mouse |
 
-**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody spawns until LIVE — dot-match's respawn queue is what places a player, and it does not run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a screenshot taken earlier than that shows an empty room and a player at the origin, which is correct and looks exactly like a broken spawn.
+**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody spawns until LIVE, because dot-match's respawn queue is what places a player, and it does not run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a screenshot taken earlier than that shows an empty room and a player at the origin, which is correct and looks exactly like a broken spawn.
 
 ## Running it headless
 
@@ -57,7 +57,7 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 | | |
 | --- | --- |
 | [dot-core](https://github.com/modcommunity/dot-core) | Everything shared. |
-| [dot-fps-controller](https://github.com/modcommunity/dot-fps-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
+| [dot-player-controller](https://github.com/modcommunity/dot-player-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
 | [dot-combat](https://github.com/modcommunity/dot-combat) | Health, weapons, hit registration. |
 | [dot-loadout](https://github.com/modcommunity/dot-loadout) | What you take in, and what you may take. |
 | [dot-match](https://github.com/modcommunity/dot-match) | Rounds, scoring, spawning, respawning. |
@@ -66,13 +66,13 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 
 ## The four files that matter
 
-**`maps/arena_map.gd`** — a level is a list of boxes, and that list becomes three things: meshes, physics bodies, and analytic geometry for a headless server. Building them separately means three descriptions that drift, and the drift is invisible until shots start passing through something clients can see.
+**`maps/arena_map.gd`**: a level is a list of boxes, and that list becomes three things: meshes, physics bodies, and analytic geometry for a headless server. Building them separately means three descriptions that drift, and the drift is invisible until shots start passing through something clients can see.
 
-**`game/arena_player.gd`** — movement, weapons, health and hitboxes on one body. Every addon says this wiring belongs in the game, because an addon that did it would dictate a scene shape.
+**`game/arena_player.gd`**: movement, weapons, health and hitboxes on one body. Every addon says this wiring belongs in the game, because an addon that did it would dictate a scene shape.
 
-**`game/arena_game.gd`** — the seam. Six addons, each correct alone; this is the fifty lines where a combat kill becomes a match score and a match respawn becomes a loadout.
+**`game/arena_game.gd`**: the seam. Six addons, each correct alone; this is the fifty lines where a combat kill becomes a match score and a match respawn becomes a loadout.
 
-**`game/arena_module.gd`** — the only file that names dot-server. About forty lines, and it is the entire dedicated-server integration.
+**`game/arena_module.gd`**: the only file that names dot-server. About forty lines, and it is the entire dedicated-server integration.
 
 ## The weapons
 
@@ -83,7 +83,7 @@ Four, because they are four genuinely different answers to "how do I close dista
 | **Pistol** | Never runs out, always loses a fair fight. Which is what makes picking something up worth doing. |
 | **Rifle** | Wins at range, loses in a corridor. Bloom punishes holding the trigger. |
 | **Shotgun** | Nine pellets in a *learnable* ring, so range is a skill rather than a dice roll. |
-| **Rocket Launcher** | Low direct damage, high splash. The interesting part is what it does to the floor — and to your own feet. |
+| **Rocket Launcher** | Low direct damage, high splash. The interesting part is what it does to the floor, and to your own feet. |
 
 Loadouts are two weapons on a six-point budget: a rifle and a shotgun, or a rocket launcher and a pistol, and not a rocket launcher and a shotgun. Four numbers instead of an enumeration.
 
@@ -99,8 +99,8 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-`headless_match` — 75 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
+`headless_match`: 75 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
 
-`headless_net` — 62 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, and the two stay together under loss.
+`headless_net`: 62 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, and the two stay together under loss.
 
-`dedicated` — 21 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+`dedicated`: 21 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.

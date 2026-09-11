@@ -27,7 +27,8 @@ extends "res://addons/dot_npc_ai/runtime/dot_npc_ai_brain.gd"
 ## [b]There is no difficulty setting; the character is the difficulty.[/b]
 ## [DotNpcAiCharacter] carries reaction time, aggression and self-preservation per NPC,
 ## seeded from the instance id, so twenty monsters do not all lunge on the same tick.
-## That is Quake III's characteristics table and it is the reason dot-npc-ai exists.
+## That is the arena shooters' characteristics table and it is the reason dot-npc-ai
+## exists.
 
 ## What the tree writes and the machine reads. StringNames, so a typo is a parse-time
 ## identifier rather than a string that silently never matches.

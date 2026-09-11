@@ -5,7 +5,7 @@ extends Node3D
 ## One player: movement, weapons, health and hitboxes, assembled.
 ##
 ## [b]This is the piece every one of the addons says belongs in the game.[/b]
-## dot-fps-controller does not know about dot-combat; dot-combat does not know about
+## dot-player-controller does not know about dot-combat; dot-combat does not know about
 ## dot-match; none of them knows about the others' node layout. Something has to own
 ## the wiring, and it is deliberately here rather than in an addon — an addon that did
 ## it would be an addon that dictates a scene shape.
@@ -27,7 +27,7 @@ const CHANNEL := "arena.player"
 signal died(damage: DotDamage)
 
 ## Fired a shot. Before it is resolved, so a client can draw a tracer immediately.
-signal fired(shot: DotShot)
+signal used(outcome: DotWeaponOutcome)
 
 ## Spawned or respawned.
 signal spawned(at: Transform3D)
@@ -38,7 +38,7 @@ enum Mode {
 	##
 	## Not a degraded mode: it is exact, it needs no physics space, and — the part
 	## that matters — it gives the same answer on a client replaying a tick and a
-	## server that ran it. See dot-fps-controller's `DotFpsFlatBody`.
+	## server that ran it. See dot-player-controller's `DotFpsFlatBody`.
 	HEADLESS,
 	## Godot physics. A client, and a listen server.
 	PHYSICS,
@@ -60,7 +60,7 @@ enum Mode {
 var mode: Mode = Mode.HEADLESS
 
 var controller: DotFpsController = null
-var arsenal: DotArsenal = null
+var arsenal: DotWeaponArsenal = null
 var health: DotHealth = null
 var hitboxes: DotHitboxSet = null
 
@@ -70,30 +70,29 @@ var view: Node3D = null
 ## The local player's camera. Null on a server, on a remote player, and headless.
 var camera: Camera3D = null
 
+## A displacement added to the camera this frame, and a roll. Written by the client.
+##
+## [b]The shake is added here rather than applied to the camera by whoever computed
+## it[/b], because this is the one place the camera's transform is written — the comment
+## in [method present] below says why, and a second writer would fight it every frame for
+## the same value. dot-fx computes a displacement and touches no camera, which is
+## dot-spectate's rule and is what lets one implementation serve this rig, a spectator's
+## and a headless suite.
+var camera_offset: Vector3 = Vector3.ZERO
+var camera_roll: float = 0.0
+
 ## What a remote player is drawn as. Null on the local player, who sees their own eyes.
 var body_mesh: Node3D = null
 
 var _map: ArenaMap = null
 var _combat: DotCombatManager = null
-var _command := DotCombatCommand.new()
+var _command := DotWeaponCommand.new()
 var _tick_rate: int = 64
-
-
-## An arsenal whose shots are attributed to the player id rather than to a node.
-##
-## `DotArsenal.attacker_id()` defaults to its parent's instance id, which is a fourth
-## id space nobody else here uses. Overriding it is the documented seam, and it is what
-## keeps the scoreboard key, the combat entity id and the damage attribution one value.
-class PlayerArsenal extends DotArsenal:
-	var owner_id: int = 0
-
-	func attacker_id() -> int:
-		return owner_id
 
 
 ## A [DotFpsController] that collides against analytic geometry rather than physics.
 ##
-## `_make_body` is dot-fps-controller's documented seam for exactly this, and using it
+## `_make_body` is dot-player-controller's documented seam for exactly this, and using it
 ## is what lets the same [ArenaPlayer] run on a dedicated server with no physics space
 ## and in a client with one.
 class HeadlessController extends DotFpsController:
@@ -153,7 +152,7 @@ func _build_controller() -> void:
 ##
 ## Fast, floaty, high air control, and no sprint — the speed is the speed, and the way
 ## to go faster is to move well. Every number here is a game's choice; none of it is
-## dot-fps-controller's default.
+## dot-player-controller's default.
 static func arena_tunables() -> DotFpsTunables:
 	var tunables := DotFpsTunables.new()
 	tunables.max_speed = 9.0
@@ -189,17 +188,37 @@ func _build_health() -> void:
 
 
 func _build_arsenal() -> void:
-	var owned := PlayerArsenal.new()
-	owned.owner_id = player_id
-	arsenal = owned
-
+	arsenal = DotWeaponArsenal.new()
 	arsenal.name = "Arsenal"
 	arsenal.tick_rate = _tick_rate
 	arsenal.max_slots = 4
-	arsenal.muzzle_ref = DotNodeRef.of_path(NodePath("../View"))
+	# Every player shares one catalogue: definitions are read-only and a per-player
+	# copy would be four resources per player for nothing. Behaviour instances are
+	# per-player, which is the half that actually holds state.
+	arsenal.catalogue = _catalogue()
 	add_child(arsenal)
 
-	arsenal.fired.connect(_on_fired)
+	var res := arsenal.setup()
+	if not res.ok:
+		push_error(res.error.message)
+
+	arsenal.used.connect(_on_used)
+
+
+## The shared weapon table, built once for the whole process.
+##
+## Validated on first use rather than per player, and loudly: a catalogue with a
+## duplicate id hands somebody the wrong weapon and nothing reports it.
+static var _shared_catalogue: DotWeaponCatalogue = null
+
+
+static func _catalogue() -> DotWeaponCatalogue:
+	if _shared_catalogue == null:
+		_shared_catalogue = ArenaContent.weapon_catalogue()
+		var res := _shared_catalogue.validate()
+		if not res.ok:
+			push_error(res.error.message)
+	return _shared_catalogue
 
 
 func _build_hitboxes() -> void:
@@ -298,27 +317,34 @@ func leave_combat() -> void:
 ## Gives the weapons a resolved loadout names.
 ##
 ## [param entries] is what [method DotLoadoutManager.resolve] returns: dictionaries of
-## `slot`, `arsenal_slot`, `item` and `count`. dot-loadout never heard of `DotWeapon`
-## and dot-combat never heard of `DotItem`; this three-line loop is the entire join,
-## and it is here because it is the only place that knows both.
+## `slot`, `arsenal_slot`, `item` and `count`.
+##
+## [b]Not [DotWeaponLoadoutBridge], deliberately.[/b] The bridge does the weapon half
+## and would do it correctly, but this game's loadout also carries armour, which is not
+## a weapon and which the bridge is right to skip. Doing both here keeps the one place
+## that knows about both id spaces down to one loop.
 func give_loadout(entries: Array[Dictionary]) -> void:
 	arsenal.clear()
 
-	var table := ArenaContent.weapon_table()
+	var catalogue := arsenal.catalogue
 	var lowest := 0
 
 	for entry in entries:
 		var item: DotItem = entry["item"]
-		var weapon: DotWeapon = table.get(item.id)
 
-		if weapon == null:
+		if not catalogue.has(item.id):
 			# An equipment item with no weapon behind it. Armour goes through here.
 			if item.id == &"armour":
 				health.add_armour(100.0)
 			continue
 
-		var slot := int(entry["arsenal_slot"])
-		arsenal.give(weapon, slot)
+		var res := arsenal.give(item.id)
+
+		if not res.ok:
+			push_warning(res.error.message)
+			continue
+
+		var slot := catalogue.get_def(item.id).slot
 
 		if lowest == 0 or slot > lowest:
 			lowest = slot
@@ -330,8 +356,8 @@ func give_loadout(entries: Array[Dictionary]) -> void:
 ## The default loadout, for a player who has not chosen one.
 func give_default_loadout() -> void:
 	arsenal.clear()
-	arsenal.give(ArenaContent.pistol(), 1)
-	arsenal.give(ArenaContent.rifle(), 2)
+	arsenal.give(&"pistol")
+	arsenal.give(&"rifle")
 	arsenal.select(2, controller.state.tick)
 
 
@@ -383,28 +409,20 @@ func simulate_tick(
 	tick: int,
 	delta: float,
 	movement_command: DotFpsCommand,
-	combat_command: DotCombatCommand
-) -> Array[DotShot]:
+	combat_command: DotWeaponCommand
+) -> DotWeaponOutcome:
 	if not health.alive:
-		return []
+		return DotWeaponOutcome.nothing("Dead.")
 
 	controller.apply_command(movement_command)
 	controller.simulate_tick(tick, delta)
 
 	var state := controller.state
 
-	# Pushed in from the simulated state, never read out of a rendered one: an
-	# interpolated position differs between client and server by design, and feeding it
-	# to the spread makes the spread differ too.
-	arsenal.movement = clampf(
-		state.horizontal_speed() / maxf(0.001, controller.tunables.max_speed), 0.0, 1.0
-	)
-	arsenal.airborne = not state.is_grounded()
-	arsenal.crouched = state.is_crouched()
-
 	# The aim comes from the movement command, not from a second sample. Sampling the
 	# mouse twice gives a shot that leaves at a different angle than the one the
 	# player was looking along.
+	var previous := _command
 	_command = combat_command.duplicate_command()
 	_command.yaw = state.yaw
 	_command.pitch = state.pitch
@@ -414,7 +432,18 @@ func simulate_tick(
 	if _combat != null:
 		_combat.set_authoritative_origin(player_id, muzzle_position())
 
-	return arsenal.simulate_tick(tick, delta, _command)
+	# Pushed in from the simulated state, never read out of a rendered one: an
+	# interpolated position differs between client and server by design, and feeding it
+	# to the spread makes the spread differ too.
+	var ctx := DotWeaponContext.make(
+		player_id, tick, muzzle_position(), _command.aim_direction()
+	)
+	ctx.speed = state.horizontal_speed()
+	ctx.airborne = not state.is_grounded()
+	ctx.crouched = state.is_crouched()
+	ctx.authority = arsenal.authority
+
+	return arsenal.simulate_tick(_command, ctx, previous)
 
 
 ## Draws this player at where they are BETWEEN ticks. Called once per rendered frame.
@@ -454,9 +483,9 @@ func present(delta: float) -> void:
 				else drawn.position + Vector3(0.0, 1.6, 0.0)
 			)
 
-		camera.global_position = view.global_position
+		camera.global_position = view.global_position + camera_offset
 		camera.global_rotation = Vector3(
-			deg_to_rad(drawn.pitch), deg_to_rad(drawn.yaw), 0.0
+			deg_to_rad(drawn.pitch), deg_to_rad(drawn.yaw), camera_roll
 		)
 	elif body_mesh != null:
 		# A remote player. Its node is moved by `_net_interpolated`, so all that is
@@ -475,6 +504,10 @@ func present(delta: float) -> void:
 ## player who cannot aim and cannot say why.
 func attach_camera(horizontal_fov_at_4_3: float = 100.0) -> Camera3D:
 	if camera != null:
+		# Already attached, so the only thing that can have changed is the field of view --
+		# and a player who moves that slider and sees nothing happen has a setting that is
+		# stored and read by nobody, which is this family's most repeated bug.
+		set_field_of_view(horizontal_fov_at_4_3)
 		return camera
 
 	camera = Camera3D.new()
@@ -483,8 +516,7 @@ func attach_camera(horizontal_fov_at_4_3: float = 100.0) -> Camera3D:
 	camera.near = 0.05
 	camera.far = 512.0
 
-	var half := deg_to_rad(horizontal_fov_at_4_3 * 0.5)
-	camera.fov = rad_to_deg(2.0 * atan(tan(half) * 3.0 / 4.0))
+	set_field_of_view(horizontal_fov_at_4_3)
 
 	# Parented to the game rather than to this player, and positioned globally every
 	# frame. A camera hanging off the body inherits the body's per-tick position, which
@@ -492,6 +524,19 @@ func attach_camera(horizontal_fov_at_4_3: float = 100.0) -> Camera3D:
 	add_child(camera)
 
 	return camera
+
+
+## Sets the horizontal field of view, converting to the vertical one Godot wants.
+##
+## The conversion is against 4:3 rather than against the window, which is the convention
+## every game in this genre uses: a player who types 100 gets the same horizontal view on
+## a 16:9 monitor and on an ultrawide, rather than a number that means something different
+## on every screen.
+func set_field_of_view(horizontal_fov_at_4_3: float) -> void:
+	if camera == null:
+		return
+	var half := deg_to_rad(clampf(horizontal_fov_at_4_3, 40.0, 160.0) * 0.5)
+	camera.fov = rad_to_deg(2.0 * atan(tan(half) * 3.0 / 4.0))
 
 
 ## Something to see a remote player as.
@@ -571,7 +616,7 @@ func _wear(avatar: DotAvatar) -> bool:
 
 ## Where shots start: the eyes, not the feet.
 ##
-## Read off the View node when there is one, because that is what `DotArsenal` uses to
+## Read off the View node when there is one, because that is what the arsenal is handed to
 ## place a shot — computing it a second way here would let the server's idea of the
 ## muzzle drift from the one the shots actually came out of, and `_correct_origin`
 ## would then relocate every legitimate shot.
@@ -587,10 +632,21 @@ func aim_direction() -> Vector3:
 
 
 ## The current cone half-angle, for a crosshair.
+##
+## Asks the tuning rather than the behaviour, because a crosshair is drawn every frame
+## and a behaviour is only stepped on a tick. A weapon whose tuning is not ballistic
+## has no cone to draw and gets zero.
 func spread_degrees() -> float:
-	var state := arsenal.current()
-	return 0.0 if state == null else state.spread_degrees(
-		arsenal.movement, arsenal.airborne, arsenal.crouched
+	var slot := arsenal.current()
+
+	if slot == null or not (slot.def.tuning is DotWeaponBallistics):
+		return 0.0
+
+	var state := controller.state
+	var b: DotWeaponBallistics = slot.def.tuning
+
+	return b.spread_for(
+		state.horizontal_speed(), not state.is_grounded(), state.is_crouched()
 	)
 
 
@@ -599,8 +655,8 @@ func _on_died(damage: DotDamage) -> void:
 	died.emit(damage)
 
 
-func _on_fired(shot: DotShot) -> void:
-	fired.emit(shot)
+func _on_used(outcome: DotWeaponOutcome) -> void:
+	used.emit(outcome)
 
 
 func describe() -> Dictionary:

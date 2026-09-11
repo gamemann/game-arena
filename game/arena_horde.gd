@@ -225,8 +225,8 @@ func _rules() -> DotNpcDirectorRules:
 	rules.fade_seconds = 7.0
 	rules.relax_seconds = 20.0
 
-	# An arena is forty metres across, so Left 4 Dead's "spawn seventy metres ahead
-	# along the critical path" is off the map. These are one room's distances, and
+	# An arena is forty metres across, so the co-operative survival shooters' "spawn
+	# seventy metres ahead along the critical path" is off the map. These are one room's distances, and
 	# there is no route to spawn ahead along — a deathmatch has no direction of
 	# travel, which is why `spawn_ahead` is small rather than absent: the director
 	# still prefers to put a wave where the fight is going rather than behind it.

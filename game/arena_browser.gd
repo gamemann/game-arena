@@ -143,8 +143,9 @@ func add(address: String, query_port: int = 0) -> DotResult:
 
 ## The port a bare host is assumed to be on.
 ##
-## dot-server's own default, not Valve's 27015. A list that guessed the wrong port
-## would report every server on it as offline, which reads as the browser being broken.
+## dot-server's own default, not the long-standing 27015. A list that guessed the wrong
+## port would report every server on it as offline, which reads as the browser being
+## broken.
 static func default_port() -> int:
 	return 27015
 

@@ -798,6 +798,26 @@ func _add_extra_commands() -> void:
 			"arena_nextmap", _cmd_nextmap, "What plays next", ""
 		)
 
+		# `map`, `maps` and `mapinfo` come from dot-map itself. They were dot-server's
+		# `map`, which changed the GAME -- and on a server running one game and several
+		# maps, that is the one thing an operator typing `map` does not mean. dot-server's
+		# game change is `changelevel`, `game` and `gamechange` now.
+		#
+		# `allow_chat_change` stays OFF, matching `arena_map` beside it: a map change ends
+		# every round in progress, so it is the console, RCON or the vote. A relayed
+		# website command arrives as `Source.CHAT` and is refused here too;
+		# `DotChatRelayConfig.command_source` is the operator's switch for that.
+		# The SYNC HOST as the changer, not the session: a map change on this server has to
+		# reach the clients, and `ArenaMapDirector.session` on its own swaps the world in
+		# this process and tells nobody -- which is the absence dot-map's own notes call
+		# "the structural one".
+		var map_commands := DotMapCommands.new()
+		map_commands.session = maps.session
+		map_commands.changer = maps.sync
+		map_commands.player_count_fn = func() -> int:
+			return game.players().size() if game != null else 0
+		map_commands.bind(self)
+
 	if vote != null:
 		add_command(
 			"arena_vote", _cmd_vote, "Open a vote now", DotAdminFlags.VOTE

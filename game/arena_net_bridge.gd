@@ -378,7 +378,7 @@ func _commands() -> Dictionary:
 ## before predicting, because reconciliation replays that history — an input the
 ## buffer never saw is a tick the replay cannot reproduce, and the correction is then
 ## measured against a state the server never computed.
-func client_tick(tick: int, move: DotFpsCommand, fire: DotCombatCommand) -> void:
+func client_tick(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> void:
 	_tick = tick
 
 	if net == null or net.is_server:
@@ -447,7 +447,7 @@ func receive_snapshot(payload: PackedByteArray) -> DotResult:
 ##
 ## The acknowledgement goes first because it is fixed width. A bit-packed command is
 ## not, so a reader that had to skip it would need to decode it to know where it ends.
-func encode_input(tick: int, move: DotFpsCommand, fire: DotCombatCommand) -> PackedByteArray:
+func encode_input(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> PackedByteArray:
 	var command := ArenaNetCommand.new()
 	command.tick = tick
 	command.delta = net.clock.tick_duration()

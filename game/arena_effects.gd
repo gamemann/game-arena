@@ -205,7 +205,15 @@ func _apply_movement() -> void:
 		if tunables == null:
 			continue
 		var scale := manager.move_speed_scale(id)
-		var base: Variant = tunables.get_meta("arena_base_speed", null)
+		# has_meta first: Object.get_meta's default parameter IS null, so passing null
+		# explicitly is indistinguishable from passing nothing — and the engine pushes
+		# "the object does not have any 'meta' values with the key" once per player per
+		# tick. Four errors a tick on a four-player server buries every other line in
+		# the log, which is the file docs/testing.md says to read.
+		var base: Variant = (
+			tunables.get_meta("arena_base_speed")
+			if tunables.has_meta("arena_base_speed") else null
+		)
 		if base == null:
 			base = tunables.max_speed
 			tunables.set_meta("arena_base_speed", base)
