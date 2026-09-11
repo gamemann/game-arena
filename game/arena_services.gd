@@ -62,6 +62,15 @@ signal command_entered(peer: int, command: String, args: PackedStringArray)
 ## one-server community ever has was the case that silently enforced nothing.
 @export var server_scope: String = ""
 
+@export_group("Website chat")
+
+## The relay's configuration. Left null, a default is built and the relay stays OFF.
+##
+## Off is the right default for the same reason `pg_arena` is: a relay carries what your
+## players type to a web page and back, and that is an operator's decision rather than a
+## consequence of installing an addon.
+@export var relay_config: DotChatRelayConfig = null
+
 @export_group("Voice")
 
 ## Whether voice is relayed at all.
@@ -78,7 +87,21 @@ var chat: DotChatRouter = null
 var voice: DotVoiceRouter = null
 var moderation: DotModerationManager = null
 
+## The website chat relay, when one is configured. See [method _build_relay].
+var relay: DotChatRelay = null
+
+## The backbone client the relay posts through. Assigned by the module BEFORE
+## [method setup], because [ArenaIdentity] is what owns one and is built first.
+##
+## [b]An [Object], not a [DotBackboneClient].[/b] Same reasoning as dot-chat's own: this
+## file is happy to name the type and the relay is not, and keeping one spelling across
+## the seam means the duck-typed contract is the only contract.
+var backbone: Object = null
+
 var _started: bool = false
+
+## Latched by [method claim_command] for the duration of one command dispatch.
+var _command_claimed: bool = false
 
 
 ## Builds all three. Call from the module's load, after the game is found.
@@ -109,6 +132,11 @@ func setup(p_server: DotServer, p_game: ArenaGame, p_link: ArenaNetLink) -> DotR
 	if not chatted.ok:
 		return chatted
 
+	# After chat, because it needs the router; not fatal, because a relay that cannot
+	# start is a server that still runs a perfectly good match.
+	var relayed := _build_relay()
+	DotLog.result(CHANNEL, "the website chat relay", relayed)
+
 	if voice_enabled:
 		var voiced := _build_voice()
 
@@ -117,6 +145,96 @@ func setup(p_server: DotServer, p_game: ArenaGame, p_link: ArenaNetLink) -> DotR
 
 	_started = true
 	return DotResult.success(self)
+
+
+# --- The website relay -----------------------------------------------------
+
+## Joins this server's chat to its room on the website.
+##
+## [b]Three seams, and every one of them points at something that already existed.[/b]
+## The backbone client is dot-auth's. The permission answer is dot-server's admin
+## manager, through `uid_has_permission` — the method written for exactly this, deciding
+## what somebody may do when they are not connected. The command runner is the console,
+## with a context built the way RCON builds one.
+##
+## Nothing here is a new policy. A relayed command is checked against the same file, by
+## the same flags, as the same person typing it in game.
+func _build_relay() -> DotResult:
+	if relay_config == null:
+		relay_config = DotChatRelayConfig.new()
+
+	if not relay_config.enabled:
+		return DotResult.success(null)
+
+	if backbone == null:
+		# **Found, not handed over.** A backbone client is built by whatever owns the
+		# server's credential — dot-server-setup-test's `TmcReport`, or this game's own
+		# identity layer — and a relay built during module load exists before any host
+		# could assign one. `DotBackboneClient` publishes itself under this name for
+		# exactly that reason; the ordering trap is the one that left dot-server's audit
+		# log unopened in every default configuration.
+		backbone = DotRegistry.get_service(&"dot_backbone_client")
+
+	if backbone == null:
+		return DotResult.fail(
+			DotError.CODE_STATE,
+			"The chat relay is on but no backbone client was handed to services. "
+				+ "ArenaIdentity builds one when report_to_backbone is set."
+		)
+
+	relay = DotChatRelay.new()
+	relay.name = "ChatRelay"
+	relay.router = chat
+	relay.config = relay_config
+	relay.client = backbone
+	relay.permission_fn = _uid_has_permission
+	relay.command_fn = _run_relayed_command
+
+	add_child(relay)
+
+	var started := relay.start()
+
+	if not started.ok:
+		remove_child(relay)
+		relay.queue_free()
+		relay = null
+		return started
+
+	relay.site_command.connect(_on_site_command)
+
+	return DotResult.success(relay)
+
+
+func _uid_has_permission(uid: String, flag: String) -> bool:
+	if server == null or server.admins == null:
+		return false
+	return server.admins.uid_has_permission(uid, flag)
+
+
+## Runs a command typed on the website, as the site member who typed it.
+##
+## [b]dot-server's, not this game's.[/b] Every game in this family that has a relay needs
+## exactly this and the glue is identical in all of them — a context built by hand, the
+## uid's own flags on it, the console asked. Five copies of that is the shape this tree
+## has shipped in four shell scripts and three vendoring lists, so it lives in
+## `DotServer.run_command_as_uid` and this is the call.
+func _run_relayed_command(
+	uid: String, command: String, args: PackedStringArray, source: int
+) -> void:
+	if server == null:
+		return
+
+	for reply in server.run_command_as_uid(uid, command, args, source):
+		DotLog.info(CHANNEL, "relayed command reply", {"uid": uid, "line": reply})
+
+
+func _on_site_command(uid: String, command: String, allowed: bool) -> void:
+	# Audited either way. A refusal is the half worth having a record of: it is somebody
+	# trying to drive the server from a web page without the rights to.
+	if server != null and server.audit != null:
+		server.audit.record(
+			"relay_command", "web:%s" % uid, command, {"allowed": allowed}
+		)
 
 
 # --- Moderation ------------------------------------------------------------
@@ -228,6 +346,24 @@ func _build_chat() -> DotResult:
 	# session.
 	if server.events != null:
 		server.events.hook_pre("player_chat", _on_player_chat)
+
+		# **And `player_command`, without which none of this game's chat commands
+		# exist.** dot-server's chat manager checks for a command prefix BEFORE it
+		# fires `player_chat`, and `_handle_command` returns on every path — including
+		# the unknown-command one, which is silently ignored. Its prefixes are `["!",
+		# "/"]`, identical to `DotChatRules`'.
+		#
+		# So a line beginning with `!` never reached `DotChatRouter` at all, and
+		# `command_entered` — which this game connects, and which `_on_chat_command`
+		# below switches on — **could not fire.** `!nominate`, `!timeleft`, `!score`
+		# and `!stats` have no console equivalent and therefore did nothing whatever;
+		# `!rtv` and `!vote` only appeared to work because dot-server has commands of
+		# those names of its own.
+		#
+		# `player_command` is fired before the console lookup and is cancellable, which
+		# is exactly the seam for this: the game gets first refusal, claims what it
+		# knows, and anything it does not claim carries on to the console as before.
+		server.events.hook_pre("player_command", _on_player_command)
 
 	return DotResult.success(chat)
 
@@ -359,9 +495,39 @@ func _on_command_entered(
 
 
 ## Tells the router the game handled a command, so it is not broadcast as chat.
+##
+## Also latches for the `player_command` path, where there is no router message to
+## claim — the handler runs inside the event and what "claimed" means there is
+## "cancel the event so dot-server does not also look it up".
 func claim_command() -> void:
+	_command_claimed = true
+
 	if chat != null:
 		chat.claim_command()
+
+
+## A `!command` from dot-server's chat manager, before it reaches the console.
+func _on_player_command(event: DotEvent) -> void:
+	var session := event.get_session()
+
+	if session == null:
+		return
+
+	_command_claimed = false
+
+	var raw_args: Array = event.data.get("args", [])
+	var args := PackedStringArray()
+
+	for arg in raw_args:
+		args.append(str(arg))
+
+	command_entered.emit(session.peer_id, event.get_string("command"), args)
+
+	# Only what the game actually took. Anything else goes on to the console exactly as
+	# it did before, which is what keeps `!kick` and every other dot-server command
+	# working — and keeps the "do not confirm which commands exist" answer for the rest.
+	if _command_claimed:
+		event.cancel("handled by the game", CHANNEL)
 
 
 ## A line from the server to everybody.

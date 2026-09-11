@@ -379,6 +379,34 @@ func _on_map_changing(map: DotMapDef) -> void:
 ## player can SEE is a scene this client added, and a client that rebuilt one and not
 ## the other would walk through walls it can see and stop at walls it cannot.
 func _on_map_changed(map: DotMapDef) -> void:
+	# **The client has to ADOPT the map it was handed, and this is where that was
+	# missing.** `ArenaGame.map` is assigned in exactly three places — `setup`, the
+	# module's mode change, and `change_map` — and every one of them runs on the
+	# SERVER. A mirroring client never calls `change_map`; it is told the new map by
+	# `DotMapSyncClient` and that is the only notice it ever gets.
+	#
+	# So this handler received the correct `DotMapDef` and then rebuilt the level from
+	# `game.map`, which was still whatever it had been at signon. Measured on a live
+	# server: the server swapped dm_atrium for dm_box and reported `all peers have the
+	# map`, and the client tore down its level and rebuilt **the same one**. The player
+	# was then standing in geometry the server no longer had, with the server's
+	# collision somewhere else entirely — which reads as the client freezing, because
+	# every move they make is refused by a wall they cannot see.
+	#
+	# Nothing errored on either end. The server was right, the protocol completed, the
+	# handshake reported success, and the one line that mattered read a stale field.
+	var adopted := ArenaMap.by_id(map.id)
+
+	if adopted != null:
+		game.map = adopted
+	else:
+		# A delivered map this build has no geometry for. The level cannot be drawn,
+		# and drawing the OLD one is what this whole comment is about — so say so
+		# rather than silently showing a world that is not there.
+		DotLog.warn(CHANNEL, "the announced map has no local geometry", {
+			"map": String(map.id),
+		})
+
 	if _level != null and is_instance_valid(_level):
 		remove_child(_level)
 		# free(), not queue_free(): the new one goes in on this line and a deferred

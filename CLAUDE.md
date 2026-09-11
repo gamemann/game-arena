@@ -691,6 +691,84 @@ playing free-for-all is worse than one that refused, because an operator believe
 the put-back is guarded against its own `changed` signal, which would otherwise be a
 second mode change that fails for the same reason and undoes itself.
 
+## The website chat relay
+
+`ArenaServices` builds a `DotChatRelay` when `relay_config.enabled` is set, joining this
+server's chat to its room on the website. Every seam it uses already existed:
+
+- the backbone client is `ArenaIdentity`'s, which is why the module assigns
+  `services.backbone` **before** `setup` — a client handed over afterwards is one the
+  relay has already decided it does not have, the ordering that left dot-server's audit
+  log unopened in every default configuration;
+- the permission answer is `DotAdminManager.uid_has_permission`, the method written for
+  exactly this question — what somebody may do when they are not connected;
+- the command runner is `DotServer.run_command_as_uid`, which builds a context the way
+  RCON does but with **that uid's own flags** rather than root.
+
+**Relayed commands are off by default and audited either way.** A line typed on a web
+page by somebody who is not in the game is a privilege path, and `Source.CHAT` — which
+dot-server documents as the least trusted — is the right classification for it. The
+refusals are the half worth recording: they are somebody trying to drive the server from
+the website without the rights to.
+
+## The chat commands that did nothing
+
+`ArenaServices` hooks `player_command` as well as `player_chat`, and without it **none of
+this game's own chat commands existed.**
+
+dot-server's chat manager checks for a command prefix *before* it fires `player_chat`,
+and `_handle_command` returns on every path — including the unknown-command one, which is
+silently ignored rather than answered. Its `chat_command_prefixes` are `["!", "/"]`,
+identical to `DotChatRules`'. So a `!` line never reached `DotChatRouter`, and
+`command_entered` — which `_build_chat` connects and `ArenaModule._on_chat_command`
+switches on — **could not fire.**
+
+`!nominate`, `!timeleft`, `!score` and `!stats` have no console equivalent and did nothing
+at all. `!rtv` and `!vote` looked like they worked because dot-server has commands of
+those names of its own, which is what hid the rest: **a dead handler behind a name
+something else answers is the hardest kind to find.**
+
+`player_command` is fired before the console lookup and is cancellable, so the game gets
+first refusal and claims what it knows; anything it does not claim carries on to the
+console exactly as before, which is what keeps `!kick` working.
+
+**The map commands stay console-only.** A map change ends every round in progress, and
+g2gfast's suite asserts the same thing for the same reason. A command relayed from the
+website arrives as `Source.CHAT` and is refused here too;
+`DotChatRelayConfig.command_source` is the operator's switch.
+
+## What the first live map change found
+
+`arena_map dm_atrium` over RCON on a running demo server, which is the first time a hot
+changelevel here has been driven by anything other than a suite. It worked — the map
+swapped, the match rebuilt into warmup, the audit log recorded it — and it turned up two
+things that had been true the whole time:
+
+- **`arena_maps` said "No hot changelevel yet."** It has been wrong since
+  `ArenaGame.change_map` was written, and it sits four lines from `arena_map`, which does
+  exactly that. An operator reading the command's own output would have restarted the
+  server rather than used the command beside it.
+- **The client rebuilt the map it was already showing.** `ArenaClient._on_map_changed`
+  is handed the new `DotMapDef` and read `game.map` instead — and `ArenaGame.map` is
+  assigned in exactly three places, every one of them on the **server**. A mirroring
+  client never calls `change_map`; `DotMapSyncClient` telling it is the only notice it
+  gets. So the client tore down its level and rebuilt the same one, leaving the player
+  standing in geometry the server no longer had, with its collision somewhere else.
+
+  **It reads as the client freezing**, because every move is refused by a wall nobody can
+  see. Nothing errored at either end: the server was right, the protocol completed, and
+  `map.sync all peers have the map` was logged — the client really had loaded it, it just
+  drew the wrong one. Found by a person standing in it on a live server, which is the only
+  place it could have been found: `headless_net` has no renderer, so there is no level for
+  a client to rebuild and nothing to be wrong about.
+
+- **`no spawn points found` on every boot and every map change.** `DotMatch.setup` calls
+  `refresh_spawns` during `add_child(match_node)`, and this game — like every code-built
+  map in the family — adds its points with `add_spawn_point` on the *next lines*. So the
+  warning is about a condition corrected microseconds later, and it is indistinguishable
+  from the real fault it exists for. `refresh_spawns` takes `announce_empty` now and
+  `setup` passes false.
+
 ## Things deliberately not here
 
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and

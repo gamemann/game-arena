@@ -279,6 +279,13 @@ func _build_identity() -> DotResult:
 func _build_services() -> DotResult:
 	services = ArenaServices.new()
 	services.name = "Services"
+
+	# Before `setup`, not after. The relay is built inside it, and a client assigned
+	# afterwards is a client the relay has already decided it does not have — the same
+	# ordering that left dot-server's audit log unopened in every default configuration.
+	if identity != null:
+		services.backbone = identity.backbone
+
 	add_child(services)
 
 	var ready: DotResult = await services.setup(server, game, bridge.link)
@@ -779,6 +786,10 @@ func _on_map_over(_map: DotMapDef, reason: StringName) -> void:
 ## server actually has.
 func _add_extra_commands() -> void:
 	if maps != null:
+		# Console-only, like g2gfast's. A map change ends every round in progress, so it
+		# is not something a player types mid-match — the console, RCON or the vote.
+		# A relayed website command arrives as `Source.CHAT` and is refused here too;
+		# `DotChatRelayConfig.command_source` is the operator's switch for that.
 		add_command(
 			"arena_map", _cmd_map,
 			"Change the map: arena_map <id>", DotAdminFlags.CHANGEMAP
@@ -986,7 +997,7 @@ func _cmd_maps(ctx: DotCmdContext) -> void:
 	for id in ArenaMap.ids():
 		ctx.reply("%s %s" % ["*" if String(id) == current else " ", String(id)])
 
-	ctx.reply("Restart with `-- --map <id>` to change. No hot changelevel yet.")
+	ctx.reply("`arena_map <id>` changes it under the players. `arena_maps` lists them.")
 
 
 func _cmd_score(ctx: DotCmdContext) -> void:
