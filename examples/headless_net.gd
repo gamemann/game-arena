@@ -18,6 +18,8 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
+const CHECKS := 116
+
 var _passed := 0
 var _failed := 0
 
@@ -62,6 +64,15 @@ func _run() -> void:
 	print("")
 	print("%d passed, %d failed" % [_passed, _failed])
 
+	# The total the section counter cannot be. A runtime error inside a section aborts
+	# that function, and the counter is satisfied because the section had already
+	# announced itself. See docs/testing.md.
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
