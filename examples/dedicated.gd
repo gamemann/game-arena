@@ -25,6 +25,12 @@ extends Node
 const PORT := 27078
 const SERVER_DIR := "user://arena_dedicated"
 
+## The app's URL segment on the website, which is this game's code name.
+##
+## Unique and lowercase because the site already made it so. Display only — a
+## listing prints it to say which game this is, and nothing treats it as proof.
+const APP_URL := "arena"
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -133,6 +139,16 @@ func _build() -> bool:
 	_server.config_file = ""
 	_server.auto_boot = false
 	add_child(_server)
+
+	# The query responder is its own addon now, and a server only answers queries
+	# if one is plugged in. `_test_browser` asks this server over a real UDP
+	# socket, so without the host that section fails rather than skipping — which
+	# is the right way round.
+	var query_host := DotQueryHost.new()
+	query_host.name = "QueryHost"
+	query_host.app_url = APP_URL
+	query_host.server_ref = DotNodeRef.of_path(NodePath("../Server"))
+	add_child(query_host)
 
 	var booted: DotResult = await _server.boot()
 
