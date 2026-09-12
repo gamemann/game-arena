@@ -1386,6 +1386,25 @@ func _test_interface() -> void:
 	# The spread is read off the simulated movement state rather than a field on the
 	# arsenal now: dot-weapon hands a behaviour a context per tick instead of keeping
 	# posture on the arsenal, so the thing to move is the player.
+	# [b]And holding something that HAS spread.[/b] `spread_degrees()` reads the
+	# CURRENT slot's tuning and returns a flat zero unless it is
+	# [DotWeaponBallistics] -- so a subject that finished the match on a weapon
+	# without ballistics reported no spread standing still and no spread sprinting,
+	# and `gap_pixels()` came back as `base_gap` twice. The check then failed saying
+	# "4.6 -> 4.6", which is indistinguishable from the binding being broken and is
+	# the one thing it is supposed to detect.
+	#
+	# Whether that happened depended on what a bot happened to be holding when a
+	# simulated deathmatch ended, so it surfaced as roughly one run in five once
+	# DotSpread's mixer changed which shots landed. Selecting the weapon makes the
+	# check about the binding again.
+	for slot_index in subject.arsenal.slots():
+		var slot := subject.arsenal.slot_at(slot_index)
+
+		if slot != null and slot.def.tuning is DotWeaponBallistics:
+			subject.arsenal.select(slot_index, _game.current_tick())
+			break
+
 	subject.controller.state.velocity = Vector3.ZERO
 	hud.refresh_all()
 	var still := hud.crosshair.gap_pixels()
@@ -1395,7 +1414,12 @@ func _test_interface() -> void:
 	_check(
 		hud.crosshair.gap_pixels() > still,
 		"and the crosshair opens when the player moves",
-		"%.1f -> %.1f" % [still, hud.crosshair.gap_pixels()]
+		"%.1f -> %.1f, holding %s" % [
+			still,
+			hud.crosshair.gap_pixels(),
+			subject.arsenal.current_def().id if subject.arsenal.current_def() != null
+				else "nothing"
+		]
 	)
 
 	# This HUD was built after the match ended, which is exactly what a client joining
@@ -1818,7 +1842,21 @@ func _test_map_change() -> void:
 
 	if alive.size() >= 2:
 		var shooter := alive[0]
-		var victim := alive[1]
+
+		# [b]An ENEMY, not simply the next player in the list.[/b] Belt and braces
+		# rather than the fix: the resolver refuses a shot at a team-mate outright
+		# when friendly fire is off, and by this point in the run a team mode has
+		# assigned everybody, so taking `alive[1]` was one more emergent property
+		# this check did not mean to sample. Team 0 is "no team" and the resolver
+		# does not treat two unassigned players as allies, so the fallback is right
+		# in a free-for-all rather than merely tolerable.
+		var victim: ArenaPlayer = alive[1]
+
+		for candidate in alive.slice(1):
+			if _game.team_of(candidate.player_id) \
+					!= _game.team_of(shooter.player_id):
+				victim = candidate
+				break
 
 		# Put the victim back in the world first. The match that just ended left
 		# everybody dead, and damage to a dead entity is correctly refused — so a
@@ -1841,6 +1879,25 @@ func _test_map_change() -> void:
 				str(victim.player_id), _game.current_tick()
 			)
 
+		# [b]And THREE records, not two.[/b] `ArenaPlayerStack.refresh_spawn_rules`
+		# says it outright -- spawn protection is enforced by [DotHealth]'s window,
+		# by dot-spawn's ledger, and by the `arena_protected` effect -- and this
+		# cleared the first two. `ArenaEffects.adjust_damage` asks the effect manager
+		# first of all three, so on any run where the respawn above happened recently
+		# enough for the effect to still be up, `apply_damage` came back refused and
+		# the check read as a rebind that had not happened.
+		#
+		# It went unnoticed because whether the effect was still up depended on the
+		# emergent end state of a simulated deathmatch. Changing DotSpread's mixer --
+		# which changed no behaviour, only which numbers came out -- moved it to
+		# roughly one run in ten. A check about `rebind_world` should not be sampling
+		# a match, and the failure message now carries `damage.refusal` so the next
+		# one of these says which gate refused instead of only "0.0".
+		if _game.effects != null and _game.effects.manager != null:
+			_game.effects.manager.remove(
+				ArenaEffects.PROTECTED, victim.player_id
+			)
+
 		var before := _game.progress.session_values(shooter.player_id).get_value(
 			ArenaStats.DAMAGE_DEALT, 0.0
 		)
@@ -1860,10 +1917,16 @@ func _test_map_change() -> void:
 			ArenaStats.DAMAGE_DEALT, 0.0
 		)
 
+		# The refusal reason is in the message because without it this check says
+		# only "0.0", and every reason the resolver has for refusing looks
+		# identical from here.
 		_check(
 			damage.health_lost > 0.0,
 			"a rebuilt combat manager still applies damage",
-			"lost %.1f" % damage.health_lost
+			"lost %.1f%s" % [
+				damage.health_lost,
+				", refused: %s" % damage.refusal if damage.refused else ""
+			]
 		)
 		_check(
 			after > before,
