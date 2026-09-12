@@ -56,7 +56,7 @@ func setup() -> DotResult:
 	manager.rules = _rules()
 	add_child(manager)
 
-	var res := manager.setup(table(game.tick_rate))
+	var res := manager.setup(table(game.tick_rate, _protection_ticks()))
 	if not res.ok:
 		return res.wrap("arena effects")
 
@@ -104,7 +104,21 @@ func _rules() -> DotEffectRules:
 ## `sv_tickrate` and a client at whatever it exported; an effect table with 640 written
 ## into it is ten seconds on one and five on the other, which is g2gfast's
 ## 128-against-60 bug in a different subsystem.
-static func table(rate: int) -> Array[DotEffectDef]:
+## How long `PROTECTED` lasts, from the mode rather than from a constant.
+##
+## The table used to carry two seconds. A free-for-all's `spawn_protection_sec` is 1.5
+## and the horde's is 2.5, so the effect disagreed with [DotHealth] and with dot-spawn in
+## every mode — in one direction in some and the other in the rest. Falls back to the old
+## two seconds when there is no match to ask, which is what a self-test that builds the
+## table alone gets.
+func _protection_ticks() -> int:
+	if game == null or game.match_node == null:
+		return 2 * game.tick_rate if game != null else 0
+
+	return game.match_node.spawn_protection_ticks()
+
+
+static func table(rate: int, protection_ticks: int = 0) -> Array[DotEffectDef]:
 	var burning := DotEffectDef.burning(BURNING, 4.0, 6 * rate)
 	burning.tick_interval = rate / 2
 	burning.damage_type = &"fire"
@@ -122,7 +136,9 @@ static func table(rate: int) -> Array[DotEffectDef]:
 	# Spawn protection as an effect rather than as DotHealth's own flag, because this
 	# one has to stop the player CAPTURING as well: standing on a point, untouchable,
 	# is not a fight anybody can have. dot-objective's may_capture_fn is why.
-	var protected := DotEffectDef.invulnerability(PROTECTED, 2 * rate)
+	var protected := DotEffectDef.invulnerability(
+		PROTECTED, protection_ticks if protection_ticks > 0 else 2 * rate
+	)
 	protected.display_name = "Protected"
 	protected.label = "INV"
 
@@ -143,6 +159,21 @@ func adjust_damage(damage: DotDamage) -> void:
 
 	if manager.is_invulnerable(damage.victim):
 		damage.refuse("invulnerable")
+		return
+
+	# [b]dot-spawn's ledger, asked here because this is the one hook there is.[/b]
+	# `DotDamageResolver.adjust` is a single callable and this class owns it, so a second
+	# subsystem that wants a veto is a line in this function rather than a second hook —
+	# and a veto applied anywhere else is one applied at some damage sites and not
+	# others, which is the bug this class's own documentation opens with.
+	#
+	# It agrees with the two gates above it by construction rather than by luck:
+	# `ArenaPlayerStack.refresh_spawn_rules` takes the same `spawn_protection_sec` the
+	# `PROTECTED` effect below is built from and [DotHealth] is given.
+	if game.player_stack != null and game.player_stack.blocks_damage(
+		str(damage.attacker), str(damage.victim), damage.tick, damage.is_world_damage()
+	):
+		damage.refuse("spawn protection")
 		return
 
 	var dealt := manager.damage_dealt_scale(damage.attacker)

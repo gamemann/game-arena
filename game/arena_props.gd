@@ -128,6 +128,7 @@ func _rebuild_collision() -> void:
 
 	_collision = game.map.to_collision()
 	add_child(_collision)
+	_classify_level(_collision)
 
 
 func _make_limits() -> DotPropLimits:
@@ -487,8 +488,32 @@ func count() -> int:
 
 # --- Events ----------------------------------------------------------------
 
+## Puts the level on the layout's `world` layer.
+##
+## [b]Without it every box is on Godot's default layer 1 with mask 1.[/b] Bit 0 happens
+## to be `world` in `shooter_3d`, so a player still lands on the floor — but the mask is
+## wrong in both directions: the level would not be hit by a projectile or a prop, and
+## nothing in the inspector would match the layer names dot-physics writes there. The
+## layout was named and never applied to a single body in this game.
+func _classify_level(root: Node) -> void:
+	if game == null or game.player_stack == null:
+		return
+
+	var done := game.player_stack.classify_tree(root, &"world")
+	DotLog.debug(CHANNEL, "level classified", {"bodies": done})
+
+
 func _on_spawned(prop: DotPropInstance) -> void:
 	var owner_id := String(prop.owner_id).to_int()
+
+	# [b]On the prop layer, which is what makes props touch each other.[/b] A spawned
+	# prop is a `RigidBody3D` on layer 1 masking layer 1, so two crates dropped in the
+	# same place passed through one another — a physics sandbox whose physics objects
+	# were solid against the world and transparent to their own kind. `prop`'s row in
+	# the layout is [world, player, npc, prop, projectile, vehicle], which is what a
+	# player pushing a crate into another crate needs.
+	if game != null and game.player_stack != null and prop.node != null:
+		var _put := game.player_stack.classify(prop.node, &"prop")
 
 	prop_spawned.emit(owner_id, prop)
 

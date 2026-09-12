@@ -84,6 +84,12 @@ var camera_roll: float = 0.0
 ## What a remote player is drawn as. Null on the local player, who sees their own eyes.
 var body_mesh: Node3D = null
 
+## The movement this player was built with, before any class scaled it.
+##
+## See [method apply_class_movement]. Captured on the first application rather than at
+## build time, so a game that never uses classes never duplicates a tunables object.
+var _class_base: DotFpsTunables = null
+
 var _map: ArenaMap = null
 var _combat: DotCombatManager = null
 var _command := DotWeaponCommand.new()
@@ -146,6 +152,38 @@ func _build_controller() -> void:
 	controller.register_default_actions = false
 	controller.body_ref = DotNodeRef.of_path(NodePath(".."))
 	add_child(controller)
+
+
+## The collision layers this player's movement sweeps against.
+##
+## [b]Not left at `DotFpsTunables`' default of 1.[/b] One means bit 0, which is right
+## only while every body in the game is on bit 0 — the state the layout exists to end.
+## Once props moved to the prop layer a mask of 1 was a player who walks through every
+## crate on the map, and nothing would have said so: a sweep that hits nothing is a
+## sweep, not an error.
+##
+## Called by `ArenaGame` once the stack is up, because the layout is the stack's.
+func use_collision_mask(mask: int) -> void:
+	if controller == null or controller.tunables == null:
+		return
+
+	controller.tunables.collision_mask = mask
+
+
+## Scales this player's movement by their class.
+##
+## [b]Against a kept base, not against whatever the tunables currently say.[/b] A class's
+## `move_speed_scale` is a multiplier, so applying it to an object that already carries it
+## compounds — four respawns as a 0.8-speed class is 0.41, arrived at silently. The base
+## is the tunables this player was built with, captured once.
+func apply_class_movement(def: DotPlayerClassDef) -> void:
+	if controller == null or controller.tunables == null or def == null:
+		return
+
+	if _class_base == null:
+		_class_base = controller.tunables.duplicate()
+
+	var _n := DotPlayerClassApply.to_movement(def, controller.tunables, _class_base)
 
 
 ## Movement that feels like an arena shooter rather than a modern one.

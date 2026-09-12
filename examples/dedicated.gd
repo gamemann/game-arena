@@ -201,10 +201,16 @@ func _test_module_loaded() -> void:
 		"while `game` is what changes the game, which is what dot-server's `map` used to do"
 	)
 
+	# It read "NOT typable in chat" until `sv_chat_commands` landed. Ending a round in
+	# progress is still a thing only CHANGEMAP does — what changed is that the flag is what
+	# says so, on the line where it was typed, instead of a prefix check that ran first and
+	# never looked at who was asking.
 	var map_command := _server.console.find_command("map")
 	_check(
-		map_command != null and not map_command.chat_allowed,
-		"and changing the map is NOT typable in chat, because it ends every round in progress"
+		map_command != null
+			and map_command.permission == DotAdminFlags.CHANGEMAP
+			and map_command.allows_chat(_server.console.chat_commands_are_open()),
+		"and changing the map is typable in chat by whoever holds changemap, and nobody else"
 	)
 
 

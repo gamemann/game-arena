@@ -479,6 +479,50 @@ Two bugs the interface checks found, both of which parsed cleanly:
   exactly what a client joining a match in progress sees, which is why the fix is
   `ArenaHud.catch_up()` rather than a reordered test.
 
+
+## Spawn protection was three mechanisms, two durations and one that had never run
+
+The mode sets `DotMatchRules.spawn_protection_sec` — 1.5 s in a free-for-all, 2.5 s in the
+horde. The effect table carried a hardcoded 2.0 s. dot-spawn's rules carried 0, and its
+ledger was drained every tick by `ArenaPlayerStack.tick` and **filled by nothing**, because
+`DotSpawnProtection.grant` is called inside `DotSpawnDirector.choose` and this game used
+dot-match's spawn point instead.
+
+All three read `spawn_protection_sec` now, `_on_respawn_due` asks the director (dot-match's
+points are still the source — `refresh_spawns` copies them in), and
+`ArenaPlayerStack.blocks_damage` is consulted from `ArenaEffects.adjust_damage`, which is
+the one hook `DotDamageResolver` offers and which this game already owns.
+
+`protection_breaks_on_attack` is **off**, and not because breaking on attack is wrong — it
+is what a deathmatch wants. Only one of the three records can be revoked: `DotHealth`
+counts to a tick and the effect expires on its own, and neither has a "somebody shot"
+input. Revoking the ledger alone makes a player who fired stop being protected by the
+resolver and stay protected by the other two, which is worse than either answer.
+
+**`ArenaEffects.on_spawn` was called by nothing**, so `arena_protected` had never been
+applied to anybody and a player who died burning respawned still burning. It is called from
+the respawn now.
+
+**The collision layout is worn rather than named.** `DotPhysicsWorld.setup` writes the
+layer names into ProjectSettings for the inspector; every body here stayed on Godot's
+default layer 1. The level is classified `world` — on the client, which is what draws it
+and therefore what puts it in the physics space — props are classified `prop`, which is
+what lets two of them collide, and `DotFpsTunables.collision_mask` comes from the layout
+rather than from its default of `1`. An `ArenaPlayer` is a `Node3D` with no collider and is
+deliberately **not** classified: its movement is a shape query, which is this game's model.
+
+**The class's loadout is the arsenal's source.** `DotPlayerClassDef.loadout_id` reached
+nothing and every player got the pistol-and-rifle pair written into
+`ArenaPlayer.give_default_loadout`. `DotWeaponPlayerBridge.give_class_loadout` reads the
+field and looks it up in `ArenaPlayerStack.LOADOUT_WEAPONS`, which is the game's table
+because dot-weapon deliberately does not own the id space between a loadout and a weapon.
+The hardcoded pair is the fallback for a game with no catalogue.
+
+**Third person is deliberately not here.** game-playground runs
+`DotTpsController` over a `DotPlayerControllerSwitch`; this game does not, and the reason is
+the one that shapes everything else in it — the movement is analytic and lag-compensated,
+and the server and its clients agree because there is exactly one motor to agree about.
+
 ## Validating changes
 
 ```bash
@@ -496,7 +540,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-268 + 40 + 116 + 91 checks.
+268 + 56 + 116 + 91 checks.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -698,6 +742,29 @@ playing free-for-all is worse than one that refused, because an operator believe
 the put-back is guarded against its own `changed` signal, which would otherwise be a
 second mode change that fails for the same reason and undoes itself.
 
+## The chat box, and the line that was drawn as `": "`
+
+This game could be talked to and could not talk back. `DotChatClient` held the history, the HUD drew the notice line, and there was no key anywhere that opened anything to type in. The note this replaces called that "a level of ambition rather than an oversight" on the grounds that a scrolling window with an input field is a `DotScreen` — and it is not. A screen is modal and takes the whole display; a chat box is eight lines in a corner that has to leave the game visible behind it, which is a HUD widget. It is `DotChatWindow`, in dot-ui, and `ArenaPresentation` builds it beside the console.
+
+**And what it was drawing was blank.** `ArenaClientExtras.receive_wire` hands dot-server's payload to `DotChatClient.receive`, expecting it to refuse — the comment said "the fallback is not a failure path, it is the other deployment" — and `DotChatMessage.from_dictionary` gave every field a default, so `{kind, userid, name, text, admin}` parsed as a perfectly valid message with no text, no sender and no channel. `receive` returned ok, the fallback never ran, and **every line any player typed reached the HUD as `": "`**. Nothing errored, because nothing was wrong: the receiving code was handed a message that had parsed. dot-chat refuses a dictionary with no `m` now, and the fallback that had been unreachable since it was written is what draws chat here.
+
+Three settings decide the box, all `ACCOUNT`-scoped because which key opens chat is about the person rather than the machine:
+
+| | |
+| --- | --- |
+| `chat_window` | `auto` / `on` / `off`. `auto` hides the box on a server already carrying chat somewhere the player can see it; `on` draws it regardless, which is how a relayed server and an in-game box run at once; `off` never draws it. |
+| `chat_open_key` | `Y` by default. |
+| `chat_team_key` | `U` by default. |
+
+**Off never means "you are out of the conversation".** The log keeps drawing what other people said in all three cases; what the setting decides is whether there is anywhere to type.
+
+**`auto` is answered by the server, because only the server can answer it.** `ArenaServices` points `DotChatManager.watch_relay` at the relay it built, dot-server tells each joining client, and `ArenaClientExtras` turns that payload into `chat_relay_changed`. A client cannot work out on its own whether the room it is in also exists on a web page.
+
+Two lines of wiring in `ArenaClient` that are not obvious:
+
+- **`ArenaPresentation.swallows_input()` covers the box as well as the console**, for the reason the console note already gives: typing `noclip` walking the player forward is the single most reported bug in every game that ships a console and forgets it. Chat is that bug with a much wider audience.
+- **`DotFpsSampler.suspended` is set on `opened` and cleared on `closed`**, and `swallows_input` is not enough on its own. Movement here is *polled* — `sample()` reads the device every physics frame and does not care what consumed an event — so without it, typing "sw" walks you backwards off whatever you were standing on. The field is documented in dot-player-controller as "for a chat box or a menu" and nothing in this game had ever set it.
+
 ## The website chat relay
 
 `ArenaServices` builds a `DotChatRelay` when `relay_config.enabled` is set, joining this
@@ -849,7 +916,7 @@ saying so is better than continuing wrongly.
 
 ## The menus, rendered and looked at
 
-`tools/screenshot_menus.sh` renders the pause menu, the rebinder and the scoreboard — the screens dot-ui does not own. It is separate from `screenshot.sh`, which renders maps: a map wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it, and one script doing both would spend itself deciding which it was doing.
+`tools/screenshot_menus.sh` renders the pause menu, the rebinder, the scoreboard — the screens dot-ui does not own — and the HUD with the chat box over it. That last frame is about where the two are relative to *each other*: the box goes in the bottom-left corner by default and so do health and armour, so it is placed at `margin_bottom = 110` to clear them, and the only thing that can tell you whether 110 is the right number is the picture. It is separate from `screenshot.sh`, which renders maps: a map wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it, and one script doing both would spend itself deciding which it was doing.
 
 It found three things on its first run, none of which any assertion here could reach:
 
@@ -904,10 +971,6 @@ filter nobody has run, and adding the first map that answers no found two things
   weapon in your own hands.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
-- **A chat window.** `DotChatClient` holds the history, the channels and the unread
-  counts on the client the moment anybody writes one; what the player gets today is
-  the HUD's notice line. A scrolling window with an input field is a `DotScreen`, and
-  nobody has written it.
 - **A master server.** `DotBrowserSourceBackbone` reads a listing that nothing is yet
   publishing, and there is no heartbeat — so the browser finds what somebody typed
   into it and nothing else. That gap is the family's rather than this game's.

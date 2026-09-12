@@ -166,23 +166,28 @@ class ControlsScreen extends DotScreen:
 
 		panel = DotBindingsPanel.new()
 		panel.config = config
-		# `dot_fps_`, not `arena_`, and the difference is the whole screen.
+		# `dot_fps_` FIRST, and `arena_` beside it, and the pair is the whole screen.
 		#
-		# `prefix` filters the InputMap, and THERE HAS NEVER BEEN AN `arena_` ACTION. This
-		# game's bindable actions are the movement ones, registered by
-		# `DotFpsSampler.register_default_actions` in `ArenaClient._build_interface` and
-		# therefore named `dot_fps_forward`, `dot_fps_jump` and so on. Everything else this
-		# client reads -- fire, reload, the scoreboard -- is matched on a keycode in
-		# `_unhandled_input` and is not an action at all.
+		# `prefix` filters the InputMap, and for the whole life of this screen it was set
+		# to `arena_` when there was no `arena_` action at all. This game's movement is
+		# registered by `DotFpsSampler.register_default_actions` in
+		# `ArenaClient._build_interface` and is therefore named `dot_fps_forward`,
+		# `dot_fps_jump` and so on; fire, reload and the scoreboard are matched on a
+		# keycode in `_unhandled_input` and are not actions at all. So the rebinder listed
+		# nothing: a Controls menu with a title, a Defaults button, a Back button and no
+		# controls. Nothing errored, because a filter that matches nothing is a legitimate
+		# filter and an empty list is a legitimate list. A rendered frame is what showed it.
 		#
-		# So the rebinder listed nothing, for the whole life of this screen: a Controls
-		# menu with a title, a Defaults button, a Back button and no controls. Nothing
-		# errored, because a filter that matches nothing is a legitimate filter and an
-		# empty list is a legitimate list. A rendered frame is what showed it.
+		# `arena_` is real now -- `ArenaPresentation._build_chat` creates `arena_chat` and
+		# `arena_chat_team` -- and a panel that could filter on only one prefix would show
+		# the movement and silently drop the chat keys, which is the same bug one namespace
+		# along: a binding a player cannot find on any screen. `also_prefixed` is what lets
+		# one panel carry both.
 		#
-		# game-hungario's `hungry_` is correct by contrast -- `HungryInput._register_actions`
-		# really does create `hungry_split`, `hungry_throw` and the rest.
+		# game-hungario needs no second prefix: everything it binds, chat included, is
+		# already `hungry_`.
 		panel.prefix = "dot_fps_"
+		panel.also_prefixed = PackedStringArray(["arena_"])
 		column.add_child(panel)
 		panel.build()
 		panel.load_saved()

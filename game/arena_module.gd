@@ -786,10 +786,12 @@ func _on_map_over(_map: DotMapDef, reason: StringName) -> void:
 ## server actually has.
 func _add_extra_commands() -> void:
 	if maps != null:
-		# Console-only, like g2gfast's. A map change ends every round in progress, so it
-		# is not something a player types mid-match — the console, RCON or the vote.
-		# A relayed website command arrives as `Source.CHAT` and is refused here too;
-		# `DotChatRelayConfig.command_source` is the operator's switch for that.
+		# CHANGEMAP and nothing else, like g2gfast's. A map change ends every round in
+		# progress — which is an argument about who may do it, not about where they typed
+		# it, and the flag is what settles that on every source alike. It was console-only
+		# once, and the refusal that produced landed on operators holding the flag rather
+		# than on the players it was written for. `sv_chat_commands 0` puts that back for a
+		# deployment that wants it.
 		add_command(
 			"arena_map", _cmd_map,
 			"Change the map: arena_map <id>", DotAdminFlags.CHANGEMAP
@@ -803,10 +805,11 @@ func _add_extra_commands() -> void:
 		# maps, that is the one thing an operator typing `map` does not mean. dot-server's
 		# game change is `changelevel`, `game` and `gamechange` now.
 		#
-		# `allow_chat_change` stays OFF, matching `arena_map` beside it: a map change ends
-		# every round in progress, so it is the console, RCON or the vote. A relayed
-		# website command arrives as `Source.CHAT` and is refused here too;
-		# `DotChatRelayConfig.command_source` is the operator's switch for that.
+		# `allow_chat_change` is left at its default, which is ON, matching `arena_map`
+		# beside it: CHANGEMAP decides who may end a round in progress, wherever the line
+		# was typed. A relayed website command arrives as `Source.CHAT` and now reaches it
+		# on the same terms; `DotChatRelayConfig.command_source` still promotes a relay to
+		# RCON for an operator who wants their site admins treated as administrators.
 		# The SYNC HOST as the changer, not the session: a map change on this server has to
 		# reach the clients, and `ArenaMapDirector.session` on its own swaps the world in
 		# this process and tells nobody -- which is the absence dot-map's own notes call

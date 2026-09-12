@@ -299,6 +299,19 @@ func _test_effects() -> void:
 		"dot-combat's per-hit hook is filled, which nothing in this game had ever done"
 	)
 
+	# [b]Out of the spawn window first, and it is not a nicety.[/b] Both players were
+	# respawned by the round going live, and a freshly spawned player is protected —
+	# `DotHealth`'s window, the `PROTECTED` effect and dot-spawn's ledger all say so, and
+	# all three now run off the mode's one `spawn_protection_sec`. Hitting inside it
+	# measures the protection rather than the scaling this section is about.
+	#
+	# It passed before because none of that was reachable from here: the effect was
+	# never applied to anybody, dot-spawn's ledger was never granted, and `_hit` asks the
+	# resolver rather than `DotHealth`. A check that was right about its subject for the
+	# wrong reason.
+	for _protect in range(game.match_node.spawn_protection_ticks() + 2):
+		game.tick({})
+
 	# The hit, with nothing on either end.
 	var plain := _hit(game, 700, 701, 40.0)
 	_check(
@@ -1818,14 +1831,30 @@ func _test_map_change() -> void:
 			0
 		)
 
+		# [b]And out of dot-spawn's ledger, which `victim.spawn(..., 0)` does not
+		# clear.[/b] The zero above is `DotHealth`'s window; the map change respawned
+		# everybody through `_on_respawn_due` and that is what grants the session-scoped
+		# protection the resolver now asks about. Two records of one idea, and hand-
+		# spawning somebody only clears the one it was handed.
+		if _game.player_stack != null and _game.player_stack.spawns.protection != null:
+			_game.player_stack.spawns.protection.revoke(
+				str(victim.player_id), _game.current_tick()
+			)
+
 		var before := _game.progress.session_values(shooter.player_id).get_value(
 			ArenaStats.DAMAGE_DEALT, 0.0
 		)
 
-		var damage := _game.combat.apply_damage(DotDamage.make(
+		# Stamped, because an unstamped `DotDamage` is tick 0 and every gate that
+		# compares a tick against a window refuses it for ever. `ArenaEffects` carries
+		# the same warning and names where this family found it the first time.
+		var event := DotDamage.make(
 			shooter.player_id, victim.player_id, 10.0,
 			_game.combat.damage_type(ArenaContent.DAMAGE_BULLET)
-		))
+		)
+		event.tick = _game.current_tick()
+
+		var damage := _game.combat.apply_damage(event)
 
 		var after := _game.progress.session_values(shooter.player_id).get_value(
 			ArenaStats.DAMAGE_DEALT, 0.0

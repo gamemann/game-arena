@@ -19,6 +19,8 @@ const OUT_DIR := "res://screenshots"
 const SETTLE := 3
 
 var _stack: DotScreenStack = null
+var _hud: ArenaHud = null
+var _chat: DotChatWindow = null
 var _shots: Array[Dictionary] = []
 var _at := 0
 var _wait := SETTLE
@@ -42,6 +44,13 @@ func _initialize() -> void:
 	# picture from the bug this tool found, where the filter named a prefix nothing used.
 	# `ArenaClient` calls the same function; this is the same state a player is in.
 	DotFpsSampler.register_default_actions()
+
+	# And this game's own two, which `ArenaPresentation._build_chat` creates in a real
+	# session. The Controls screen filters on `dot_fps_` AND `arena_`, so a fixture that
+	# registered only the movement would draw a rebinder that is missing exactly the
+	# actions the second prefix was added for.
+	DotInputBinding.ensure_action(&"arena_chat", "Y")
+	DotInputBinding.ensure_action(&"arena_chat_team", "U")
 
 	var ui_config := DotUiConfig.new()
 
@@ -81,11 +90,53 @@ func _initialize() -> void:
 	scoreboard.set("_me", "p1")
 	_stack.register(scoreboard)
 
+	_build_hud()
+
 	_shots = [
 		{"id": &"pause", "file": "menu_pause.png"},
 		{"id": &"controls", "file": "menu_controls.png"},
 		{"id": &"scoreboard", "file": "menu_scoreboard.png"},
+		# Nothing pushed, so what is drawn is the HUD and the chat box over it. This one
+		# is about where they are relative to EACH OTHER: the box sits in the same corner
+		# as health and armour, and at the default inset it draws its log through both.
+		{"id": &"", "file": "hud_chat.png"},
 	]
+
+
+## This game's own HUD, with the chat box over it, both at the real offsets.
+func _build_hud() -> void:
+	_hud = ArenaHud.new()
+	_hud.name = "Hud"
+	# Assigned rather than left to `DotHud._ready` to fill in: nothing added during
+	# `SceneTree._initialize` is inside the tree yet, so no `_ready` has run and
+	# `ArenaHud.build` would read `config.feed_lines` off a null.
+	_hud.config = DotUiConfig.new()
+	root.add_child(_hud)
+	_hud.build(null)
+
+	_chat = DotChatWindow.new()
+	_chat.name = "Chat"
+	_chat.register_actions = false
+	# Nothing expires in a screenshot: under software rendering a frame takes the better
+	# part of a second, so a lifetime is spent before the grab and the picture is of an
+	# empty log — which looks exactly like a log that cannot draw.
+	_chat.lifetime_sec = 0.0
+	_chat.margin_left = 24.0
+	_chat.margin_bottom = 110.0
+	_chat.channels = [
+		{"id": &"all", "label": "Say", "colour": Color(0.88, 0.90, 0.94)},
+		{"id": &"team", "label": "Say (TEAM)", "colour": Color(0.55, 0.85, 0.60), "team": true},
+	]
+	_hud.add_child(_chat)
+
+	_chat.add_text("Welcome to the server.", Color(0.80, 0.82, 0.86))
+	_chat.add_said("gamemann", "anybody up for a round on the atrium map?")
+	_chat.add_said(
+		"a_very_long_display_name",
+		"a line long enough to have to wrap, which is the ordinary case in chat"
+	)
+	_chat.add_said("quiet_one", "rotating B, need one more", Color(0.55, 0.85, 0.60))
+	_chat.open(&"team")
 
 
 func _process(_delta: float) -> bool:
@@ -100,6 +151,11 @@ func _process(_delta: float) -> bool:
 
 	if _wait == SETTLE:
 		_stack.clear()
+
+		if str(shot["id"]) == "":
+			# The HUD frame: nothing on the stack, so the HUD below it is what draws.
+			_wait -= 1
+			return false
 
 		var opened := _stack.push(StringName(shot["id"]))
 

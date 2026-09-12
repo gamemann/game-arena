@@ -810,6 +810,12 @@ func add_player(
 	)
 	add_child(player)
 
+	# The layout's player mask, rather than `DotFpsTunables`' default of 1. See
+	# `ArenaPlayer.use_collision_mask` — with props on their own layer, 1 is a player
+	# who walks through crates.
+	if player_stack != null:
+		player.use_collision_mask(player_stack.player_collision_mask())
+
 	player.join_combat(combat)
 	_players[id] = player
 
@@ -1091,13 +1097,45 @@ func _on_respawn_due(key: String, spawn: DotSpawnPoint, tick: int) -> void:
 	if player == null:
 		return
 
-	var at := (
-		spawn.spawn_transform() if spawn != null
-		else Transform3D(Basis.IDENTITY, Vector3(0.0, 1.0, 0.0))
-	)
+	# [b]The director chooses; dot-match's point is the fallback.[/b] Both read the same
+	# markers — `ArenaPlayerStack.refresh_spawns` copies dot-match's own `DotSpawnPoint`s
+	# into the director — so this is not a second set of spawns, it is a better choice
+	# among one set: enemy distance, line of sight, occupancy and a per-site cooldown,
+	# none of which dot-match models.
+	#
+	# It is also where spawn protection is granted, which is the half that has to go
+	# through here. `DotSpawnProtection.grant` is called inside `choose` and nowhere
+	# else, so a game that took dot-match's point and skipped this has an empty ledger
+	# and a `protection.advance()` that does nothing — which is what this one had.
+	var at := Transform3D(Basis.IDENTITY, Vector3(0.0, 1.0, 0.0))
+
+	if spawn != null:
+		at = spawn.spawn_transform()
+
+	if player_stack != null:
+		var chosen := player_stack.choose_spawn(id)
+
+		if chosen.ok:
+			at = (chosen.value as DotSpawnChoice).transform
+		elif spawn == null:
+			# No point from either. Worth a line: the fallback below is the origin, and
+			# a player standing at (0, 1, 0) on every respawn is a map with no usable
+			# spawns rather than a player who found a strange corner.
+			DotLog.warn(CHANNEL, "nothing chose a spawn", {
+				"key": key, "why": chosen.error.message
+			})
 
 	player.hitboxes.enabled = true
 	player.spawn(at, tick, match_node.spawn_protection_ticks())
+
+	# [b]`ArenaEffects.on_spawn` was written, documented, and called by nothing.[/b] It
+	# clears what survived the last life, stands the player up, and applies `PROTECTED` —
+	# so until this line the arena's own spawn-protection effect had never been applied
+	# to anybody, and a player who died burning respawned still burning. The family's
+	# "a value produced correctly and consumed by nothing", for the third time in this
+	# one respawn path.
+	if effects != null:
+		effects.on_spawn(id)
 
 	_apply_loadout_deferred(id)
 
@@ -1116,7 +1154,18 @@ func _apply_loadout_deferred(id: int) -> void:
 		return
 
 	if player.arsenal.slots().is_empty():
-		player.give_default_loadout()
+		# The class's loadout first: `DotPlayerClassDef.loadout_id` is the field a mode
+		# changes to change what everybody spawns holding, and it reached nothing until
+		# this line. The hardcoded pair below is the fallback for a game with no
+		# catalogue, which is what `give_default_loadout` always was.
+		var from_class := (
+			player_stack != null and player_stack.give_class_loadout(player)
+		)
+
+		if from_class:
+			player.arsenal.select(2, player.controller.state.tick)
+		else:
+			player.give_default_loadout()
 
 	apply_loadout(id)
 
