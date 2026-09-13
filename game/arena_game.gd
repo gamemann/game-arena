@@ -1,6 +1,19 @@
 @tool
-class_name ArenaGame
 extends Node
+
+const ArenaContent := preload("res://game/arena_content.gd")
+const ArenaEffects := preload("res://game/arena_effects.gd")
+const ArenaHorde := preload("res://game/arena_horde.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaModes := preload("res://game/arena_modes.gd")
+const ArenaObjectives := preload("res://game/arena_objectives.gd")
+const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaPlayerStack := preload("res://game/arena_player_stack.gd")
+const ArenaProgress := preload("res://game/arena_progress.gd")
+const ArenaProjectiles := preload("res://game/arena_projectiles.gd")
+const ArenaProps := preload("res://game/arena_props.gd")
+const ArenaSpectate := preload("res://game/arena_spectate.gd")
 
 ## The deathmatch itself: a match, a combat manager, a map, and some players.
 ##

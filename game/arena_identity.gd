@@ -1,5 +1,6 @@
-class_name ArenaIdentity
 extends Node
+
+const ArenaAvatars := preload("res://game/arena_avatars.gd")
 
 ## Who a player is: content delivery, a profile, an avatar, and one admission flow.
 ##

@@ -1,5 +1,6 @@
-class_name ArenaBrowser
 extends Node
+
+const ArenaBrowser := preload("res://game/arena_browser.gd")
 
 ## The server browser: dot-browser's client half, on a screen a player can open.
 ##

@@ -1,5 +1,16 @@
 extends Node
 
+const ArenaEvent := preload("res://game/arena_event.gd")
+const ArenaEvents := preload("res://game/arena_events.gd")
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMapSession := preload("res://game/arena_map_session.gd")
+const ArenaMaps := preload("res://game/arena_maps.gd")
+const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
+const ArenaNetCommand := preload("res://game/arena_net_command.gd")
+const ArenaNetLink := preload("res://game/arena_net_link.gd")
+const ArenaPlayerNet := preload("res://game/arena_player_net.gd")
+
 ## Two clients, one server, one process, and a lossy wire between them.
 ##
 ## [b]This is the first time anything in this family runs netcode over more than one

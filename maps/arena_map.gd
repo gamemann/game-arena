@@ -1,5 +1,6 @@
-class_name ArenaMap
 extends RefCounted
+
+const ArenaMap := preload("res://maps/arena_map.gd")
 
 ## A level as a list of boxes, and the three things that list becomes.
 ##

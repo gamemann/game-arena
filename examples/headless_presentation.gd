@@ -1,5 +1,9 @@
 extends Node
 
+const ArenaParty := preload("res://game/arena_party.gd")
+const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaPresentation := preload("res://game/arena_presentation.gd")
+
 ## Settings, audio, effects, the console and the private-match party.
 ##
 ## [codeblock]

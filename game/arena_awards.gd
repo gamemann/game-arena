@@ -1,5 +1,6 @@
-class_name ArenaAwards
 extends RefCounted
+
+const ArenaStats := preload("res://game/arena_stats.gd")
 
 ## What a player can earn here, as a document rather than as code.
 ##

@@ -1,6 +1,9 @@
 @tool
-class_name ArenaPlayer
 extends Node3D
+
+const ArenaAvatars := preload("res://game/arena_avatars.gd")
+const ArenaContent := preload("res://game/arena_content.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
 
 ## One player: movement, weapons, health and hitboxes, assembled.
 ##

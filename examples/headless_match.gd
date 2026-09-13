@@ -1,5 +1,23 @@
 extends Node
 
+const ArenaBoards := preload("res://game/arena_boards.gd")
+const ArenaContent := preload("res://game/arena_content.gd")
+const ArenaEffects := preload("res://game/arena_effects.gd")
+const ArenaEvents := preload("res://game/arena_events.gd")
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaHorde := preload("res://game/arena_horde.gd")
+const ArenaHud := preload("res://game/arena_hud.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMapDirector := preload("res://game/arena_map_director.gd")
+const ArenaMaps := preload("res://game/arena_maps.gd")
+const ArenaMenus := preload("res://game/arena_menus.gd")
+const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaModes := preload("res://game/arena_modes.gd")
+const ArenaNpcs := preload("res://game/arena_npcs.gd")
+const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaProps := preload("res://game/arena_props.gd")
+const ArenaStats := preload("res://game/arena_stats.gd")
+
 ## A whole deathmatch, played out headlessly, with nothing called by hand.
 ##
 ## [codeblock]

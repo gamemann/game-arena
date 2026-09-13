@@ -1,5 +1,8 @@
-class_name ArenaVote
 extends Node
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMapDirector := preload("res://game/arena_map_director.gd")
+const ArenaVoteSource := preload("res://game/arena_vote_source.gd")
 
 ## The players decide what plays next.
 ##

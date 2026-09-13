@@ -1,4 +1,3 @@
-class_name ArenaProjectiles
 extends RefCounted
 
 ## Rockets in flight, and what happens where they land.

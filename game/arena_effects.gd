@@ -1,5 +1,7 @@
-class_name ArenaEffects
 extends Node
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
 
 ## Status effects in the arena, and the one line that makes them count.
 ##

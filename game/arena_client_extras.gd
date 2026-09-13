@@ -1,5 +1,10 @@
-class_name ArenaClientExtras
 extends Node
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMapSession := preload("res://game/arena_map_session.gd")
+const ArenaMaps := preload("res://game/arena_maps.gd")
+const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
+const ArenaServices := preload("res://game/arena_services.gd")
 
 ## The client halves of chat, voice and map changes.
 ##

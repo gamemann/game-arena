@@ -1,5 +1,10 @@
-class_name ArenaHorde
 extends Node
+
+const ArenaContent := preload("res://game/arena_content.gd")
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaNpcs := preload("res://game/arena_npcs.gd")
+const ArenaStats := preload("res://game/arena_stats.gd")
 
 ## Monsters in the arena: dot-npc, dot-npc-ai and dot-npc-ai-director, joined to
 ## dot-combat.

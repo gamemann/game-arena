@@ -1,5 +1,10 @@
-class_name ArenaMapSession
 extends DotMapSession
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMaps := preload("res://game/arena_maps.gd")
+const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaModes := preload("res://game/arena_modes.gd")
 
 ## A [DotMapSession] whose maps are built rather than loaded.
 ##

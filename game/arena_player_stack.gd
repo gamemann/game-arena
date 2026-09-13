@@ -1,5 +1,8 @@
-class_name ArenaPlayerStack
 extends Node
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaPlayer := preload("res://game/arena_player.gd")
 
 ## The player-facing addons, stood up once and bound to the game.
 ##

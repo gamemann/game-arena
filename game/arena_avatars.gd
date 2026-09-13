@@ -1,4 +1,3 @@
-class_name ArenaAvatars
 extends RefCounted
 
 ## What a player looks like, as a document a server can check without loading a mesh.

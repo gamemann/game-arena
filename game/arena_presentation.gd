@@ -1,4 +1,3 @@
-class_name ArenaPresentation
 extends Node
 
 ## Settings, audio, effects and a console, on the client.

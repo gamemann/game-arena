@@ -1,5 +1,11 @@
-class_name ArenaVoteSource
 extends DotVoteSource
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaMapDirector := preload("res://game/arena_map_director.gd")
+const ArenaMaps := preload("res://game/arena_maps.gd")
+const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaModes := preload("res://game/arena_modes.gd")
+const ArenaVoteSource := preload("res://game/arena_vote_source.gd")
 
 ## What the players of this server get to choose: the map, and the mode.
 ##

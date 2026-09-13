@@ -1,4 +1,3 @@
-class_name ArenaParty
 extends Node
 
 ## A private deathmatch among friends, with nothing persistent coming out of it.

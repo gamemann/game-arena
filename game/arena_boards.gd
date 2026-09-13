@@ -1,5 +1,6 @@
-class_name ArenaBoards
 extends RefCounted
+
+const ArenaStats := preload("res://game/arena_stats.gd")
 
 ## The boards this game orders players on, and the scope every one of them is cut by.
 ##

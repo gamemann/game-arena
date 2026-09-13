@@ -1,5 +1,7 @@
-class_name ArenaEvent
 extends DotNetMessage
+
+const ArenaEvent := preload("res://game/arena_event.gd")
+const ArenaEvents := preload("res://game/arena_events.gd")
 
 ## Anything the authority tells a client that is not a snapshot. Reliable, to clients.
 ##

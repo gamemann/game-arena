@@ -1,5 +1,16 @@
-class_name ArenaModule
 extends DotModule
+
+const ArenaBoards := preload("res://game/arena_boards.gd")
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaIdentity := preload("res://game/arena_identity.gd")
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMapDirector := preload("res://game/arena_map_director.gd")
+const ArenaModes := preload("res://game/arena_modes.gd")
+const ArenaModule := preload("res://game/arena_module.gd")
+const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
+const ArenaServices := preload("res://game/arena_services.gd")
+const ArenaStats := preload("res://game/arena_stats.gd")
+const ArenaVote := preload("res://game/arena_vote.gd")
 
 ## Binds an [ArenaGame] to a [DotServer].
 ##

@@ -1,4 +1,3 @@
-class_name ArenaStats
 extends RefCounted
 
 ## Every per-player number this game counts, declared in one place.

@@ -1,5 +1,7 @@
-class_name ArenaRequest
 extends DotNetMessage
+
+const ArenaEvents := preload("res://game/arena_events.gd")
+const ArenaRequest := preload("res://game/arena_request.gd")
 
 ## A client asking the server for something. Reliable, rare, and never trusted.
 ##

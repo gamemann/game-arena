@@ -1,4 +1,3 @@
-class_name ArenaContent
 extends RefCounted
 
 ## Every weapon, item, damage type and ruleset the game ships, built in code.

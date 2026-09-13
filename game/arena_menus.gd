@@ -1,5 +1,6 @@
-class_name ArenaMenus
 extends RefCounted
+
+const ArenaGame := preload("res://game/arena_game.gd")
 
 ## The in-game menus: pause, settings, controls, scoreboard.
 ##

@@ -1,5 +1,7 @@
-class_name ArenaMaps
 extends RefCounted
+
+const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMode := preload("res://game/arena_mode.gd")
 
 ## This game's maps as dot-map content: a catalogue, a rotation and a vote can address.
 ##

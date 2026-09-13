@@ -1,5 +1,7 @@
 extends SceneTree
 
+const ArenaMap := preload("res://maps/arena_map.gd")
+
 ## Renders a map to a PNG so a person can look at it.
 ##
 ## [b]A map is a rendered thing and this family has shipped a 0 x 0 Control twice and a

@@ -1,5 +1,8 @@
 extends Node
 
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaPlayerStack := preload("res://game/arena_player_stack.gd")
+
 ## The player stack, run against a real arena rather than against a stub.
 ##
 ## [codeblock]

@@ -1,5 +1,6 @@
-class_name ArenaMode
 extends Resource
+
+const ArenaMode := preload("res://game/arena_mode.gd")
 
 ## What is being played: the rules, the sides, and what damage does.
 ##

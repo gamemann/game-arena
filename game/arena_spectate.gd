@@ -1,5 +1,7 @@
-class_name ArenaSpectate
 extends Node
+
+const ArenaGame := preload("res://game/arena_game.gd")
+const ArenaPlayer := preload("res://game/arena_player.gd")
 
 ## Where a dead player looks.
 ##
