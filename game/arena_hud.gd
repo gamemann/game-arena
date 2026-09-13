@@ -1,8 +1,8 @@
 @tool
 extends DotHud
 
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaPlayer := preload("arena_player.gd")
 
 ## The in-game display: crosshair, health, armour, ammo, kill feed, round timer.
 ##

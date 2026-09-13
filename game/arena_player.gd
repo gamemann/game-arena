@@ -1,9 +1,9 @@
 @tool
 extends Node3D
 
-const ArenaAvatars := preload("res://game/arena_avatars.gd")
-const ArenaContent := preload("res://game/arena_content.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaAvatars := preload("arena_avatars.gd")
+const ArenaContent := preload("arena_content.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
 
 ## One player: movement, weapons, health and hitboxes, assembled.
 ##

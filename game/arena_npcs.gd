@@ -1,6 +1,6 @@
 extends RefCounted
 
-const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
 
 ## The monsters this game can spawn, and the navigation graph they walk on.
 ##

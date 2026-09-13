@@ -1,19 +1,19 @@
 @tool
 extends Node
 
-const ArenaContent := preload("res://game/arena_content.gd")
-const ArenaEffects := preload("res://game/arena_effects.gd")
-const ArenaHorde := preload("res://game/arena_horde.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaMode := preload("res://game/arena_mode.gd")
-const ArenaModes := preload("res://game/arena_modes.gd")
-const ArenaObjectives := preload("res://game/arena_objectives.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
-const ArenaPlayerStack := preload("res://game/arena_player_stack.gd")
-const ArenaProgress := preload("res://game/arena_progress.gd")
-const ArenaProjectiles := preload("res://game/arena_projectiles.gd")
-const ArenaProps := preload("res://game/arena_props.gd")
-const ArenaSpectate := preload("res://game/arena_spectate.gd")
+const ArenaContent := preload("arena_content.gd")
+const ArenaEffects := preload("arena_effects.gd")
+const ArenaHorde := preload("arena_horde.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaMode := preload("arena_mode.gd")
+const ArenaModes := preload("arena_modes.gd")
+const ArenaObjectives := preload("arena_objectives.gd")
+const ArenaPlayer := preload("arena_player.gd")
+const ArenaPlayerStack := preload("arena_player_stack.gd")
+const ArenaProgress := preload("arena_progress.gd")
+const ArenaProjectiles := preload("arena_projectiles.gd")
+const ArenaProps := preload("arena_props.gd")
+const ArenaSpectate := preload("arena_spectate.gd")
 
 ## The deathmatch itself: a match, a combat manager, a map, and some players.
 ##

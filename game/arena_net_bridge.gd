@@ -1,13 +1,13 @@
 extends Node
 
-const ArenaEvent := preload("res://game/arena_event.gd")
-const ArenaEvents := preload("res://game/arena_events.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaNetCommand := preload("res://game/arena_net_command.gd")
-const ArenaNetLink := preload("res://game/arena_net_link.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
-const ArenaPlayerNet := preload("res://game/arena_player_net.gd")
-const ArenaRequest := preload("res://game/arena_request.gd")
+const ArenaEvent := preload("arena_event.gd")
+const ArenaEvents := preload("arena_events.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaNetCommand := preload("arena_net_command.gd")
+const ArenaNetLink := preload("arena_net_link.gd")
+const ArenaPlayer := preload("arena_player.gd")
+const ArenaPlayerNet := preload("arena_player_net.gd")
+const ArenaRequest := preload("arena_request.gd")
 
 ## Joins [ArenaGame] to a [DotNetManager]. The netcode seam, and the only file in
 ## game-arena that names both.

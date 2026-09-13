@@ -1,6 +1,6 @@
 extends RefCounted
 
-const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaMode := preload("arena_mode.gd")
 
 ## Every mode this game ships, by id.
 ##

@@ -1,8 +1,8 @@
 extends DotNetBehaviour
 
-const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
-const ArenaNetCommand := preload("res://game/arena_net_command.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaNetCommand := preload("arena_net_command.gd")
+const ArenaPlayer := preload("arena_player.gd")
 
 ## The thirty lines dot-player-controller and dot-combat each say belong in the game.
 ##

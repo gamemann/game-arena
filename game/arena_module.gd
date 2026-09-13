@@ -1,16 +1,16 @@
 extends DotModule
 
-const ArenaBoards := preload("res://game/arena_boards.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaIdentity := preload("res://game/arena_identity.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaMapDirector := preload("res://game/arena_map_director.gd")
-const ArenaModes := preload("res://game/arena_modes.gd")
-const ArenaModule := preload("res://game/arena_module.gd")
-const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
-const ArenaServices := preload("res://game/arena_services.gd")
-const ArenaStats := preload("res://game/arena_stats.gd")
-const ArenaVote := preload("res://game/arena_vote.gd")
+const ArenaBoards := preload("arena_boards.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaIdentity := preload("arena_identity.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaMapDirector := preload("arena_map_director.gd")
+const ArenaModes := preload("arena_modes.gd")
+const ArenaModule := preload("arena_module.gd")
+const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaServices := preload("arena_services.gd")
+const ArenaStats := preload("arena_stats.gd")
+const ArenaVote := preload("arena_vote.gd")
 
 ## Binds an [ArenaGame] to a [DotServer].
 ##

@@ -1,6 +1,6 @@
 extends SceneTree
 
-const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
 
 ## Renders a map to a PNG so a person can look at it.
 ##

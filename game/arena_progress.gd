@@ -1,9 +1,9 @@
 extends Node
 
-const ArenaAwards := preload("res://game/arena_awards.gd")
-const ArenaBoards := preload("res://game/arena_boards.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaStats := preload("res://game/arena_stats.gd")
+const ArenaAwards := preload("arena_awards.gd")
+const ArenaBoards := preload("arena_boards.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaStats := preload("arena_stats.gd")
 
 ## What a player keeps when the match ends: statistics, achievements and boards.
 ##

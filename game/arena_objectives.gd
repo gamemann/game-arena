@@ -1,7 +1,7 @@
 extends Node
 
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
 
 ## What the round is about, when the mode says it is about something.
 ##

@@ -1,9 +1,9 @@
 extends Node
 
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaMapSession := preload("res://game/arena_map_session.gd")
-const ArenaMaps := preload("res://game/arena_maps.gd")
-const ArenaMode := preload("res://game/arena_mode.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaMapSession := preload("arena_map_session.gd")
+const ArenaMaps := preload("arena_maps.gd")
+const ArenaMode := preload("arena_mode.gd")
 
 ## Maps as content: a catalogue, a rotation, a clock, and a change that reaches clients.
 ##

@@ -1,7 +1,7 @@
 extends Node
 
-const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
-const ArenaNetLink := preload("res://game/arena_net_link.gd")
+const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaNetLink := preload("arena_net_link.gd")
 
 ## The four remote calls this game needs, on one node that exists on both ends.
 ##

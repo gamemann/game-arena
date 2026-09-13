@@ -1,6 +1,6 @@
 extends DotNetInput
 
-const ArenaNetCommand := preload("res://game/arena_net_command.gd")
+const ArenaNetCommand := preload("arena_net_command.gd")
 
 ## One tick of a player's intent, on the wire.
 ##

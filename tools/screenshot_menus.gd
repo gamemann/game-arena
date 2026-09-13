@@ -1,7 +1,7 @@
 extends SceneTree
 
-const ArenaHud := preload("res://game/arena_hud.gd")
-const ArenaMenus := preload("res://game/arena_menus.gd")
+const ArenaHud := preload("../game/arena_hud.gd")
+const ArenaMenus := preload("../game/arena_menus.gd")
 
 ## Renders this game's own screens to `screenshots/` so a person can look at them.
 ##

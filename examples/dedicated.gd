@@ -1,12 +1,12 @@
 extends Node
 
-const ArenaAvatars := preload("res://game/arena_avatars.gd")
-const ArenaBrowser := preload("res://game/arena_browser.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaModule := preload("res://game/arena_module.gd")
-const ArenaServices := preload("res://game/arena_services.gd")
-const ArenaVoteSource := preload("res://game/arena_vote_source.gd")
+const ArenaAvatars := preload("../game/arena_avatars.gd")
+const ArenaBrowser := preload("../game/arena_browser.gd")
+const ArenaGame := preload("../game/arena_game.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaModule := preload("../game/arena_module.gd")
+const ArenaServices := preload("../game/arena_services.gd")
+const ArenaVoteSource := preload("../game/arena_vote_source.gd")
 
 ## A real [DotServer], listening, with the arena loaded into it.
 ##

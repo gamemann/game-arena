@@ -1,16 +1,16 @@
 extends Node
 
-const ArenaAvatars := preload("res://game/arena_avatars.gd")
-const ArenaBrowser := preload("res://game/arena_browser.gd")
-const ArenaClientExtras := preload("res://game/arena_client_extras.gd")
-const ArenaEvents := preload("res://game/arena_events.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaHud := preload("res://game/arena_hud.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaMenus := preload("res://game/arena_menus.gd")
-const ArenaNetBridge := preload("res://game/arena_net_bridge.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
-const ArenaPresentation := preload("res://game/arena_presentation.gd")
+const ArenaAvatars := preload("arena_avatars.gd")
+const ArenaBrowser := preload("arena_browser.gd")
+const ArenaClientExtras := preload("arena_client_extras.gd")
+const ArenaEvents := preload("arena_events.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaHud := preload("arena_hud.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaMenus := preload("arena_menus.gd")
+const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaPlayer := preload("arena_player.gd")
+const ArenaPresentation := preload("arena_presentation.gd")
 
 ## A playable game-arena: one local player, a camera, a HUD, menus and the keys.
 ##

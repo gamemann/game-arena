@@ -1,8 +1,8 @@
 extends Node
 
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaPlayer := preload("arena_player.gd")
 
 ## The player-facing addons, stood up once and bound to the game.
 ##

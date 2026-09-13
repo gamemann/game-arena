@@ -1,9 +1,9 @@
 extends Node
 
-const ArenaEvents := preload("res://game/arena_events.gd")
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaMap := preload("res://maps/arena_map.gd")
-const ArenaStats := preload("res://game/arena_stats.gd")
+const ArenaEvents := preload("arena_events.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaStats := preload("arena_stats.gd")
 
 ## Physics props in the arena, and the two tools that move them.
 ##

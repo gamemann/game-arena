@@ -1,8 +1,8 @@
 extends Node
 
-const ArenaGame := preload("res://game/arena_game.gd")
-const ArenaNetLink := preload("res://game/arena_net_link.gd")
-const ArenaPlayer := preload("res://game/arena_player.gd")
+const ArenaGame := preload("arena_game.gd")
+const ArenaNetLink := preload("arena_net_link.gd")
+const ArenaPlayer := preload("arena_player.gd")
 
 ## Chat, voice and moderation on a dedicated arena server.
 ##
