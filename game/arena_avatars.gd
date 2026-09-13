@@ -108,7 +108,7 @@ static func _part(id: StringName, slot: StringName) -> DotAvatarPart:
 
 static func catalogue() -> DotAvatarCatalogue:
 	var out := DotAvatarCatalogue.new()
-	out.builtin_prefix = ArenaPaths.rebase("res://avatars/")
+	out.builtin_prefix = ArenaPaths.rebase(ArenaPaths.rebase("res://avatars/"))
 	out.builtin_suffix = ".tscn"
 	return out
 

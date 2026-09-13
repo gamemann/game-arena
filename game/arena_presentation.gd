@@ -24,7 +24,7 @@ const CHANNEL := "arena.presentation"
 const SCHEMA_VERSION := 1
 
 const SOUND_DIR := "res://audio"
-static var FX_DIR := ArenaPaths.rebase("res://scenes/fx")
+static var FX_DIR := ArenaPaths.rebase(ArenaPaths.rebase("res://scenes/fx"))
 
 var settings: DotSettingsManager = null
 var audio: DotAudioManager = null

@@ -37,7 +37,7 @@ const FACTION := &"monster"
 ## Where the brain every one of them uses lives. A PATH, because a brain in a mounted
 ## dot-cloud pack cannot resolve a `class_name` — measured, in this family, as "every
 ## cross-file type reference inside a pack fails to compile".
-static var BRAIN_PATH := ArenaPaths.rebase("res://game/arena_npc_brain.gd")
+static var BRAIN_PATH := ArenaPaths.rebase(ArenaPaths.rebase("res://game/arena_npc_brain.gd"))
 
 
 static func catalogue() -> DotNpcCatalogue:
@@ -85,7 +85,7 @@ static func limits() -> DotNpcLimits:
 
 
 static func _grunt() -> DotNpcDef:
-	var def := DotNpcDef.make(GRUNT, ArenaPaths.rebase("res://npcs/arena_grunt.tscn"))
+	var def := DotNpcDef.make(GRUNT, ArenaPaths.rebase(ArenaPaths.rebase("res://npcs/arena_grunt.tscn")))
 	def.display_name = "Grunt"
 	def.category = &"monster"
 	def.faction = FACTION
@@ -103,7 +103,7 @@ static func _grunt() -> DotNpcDef:
 
 
 static func _brute() -> DotNpcDef:
-	var def := DotNpcDef.make(BRUTE, ArenaPaths.rebase("res://npcs/arena_brute.tscn"))
+	var def := DotNpcDef.make(BRUTE, ArenaPaths.rebase(ArenaPaths.rebase("res://npcs/arena_brute.tscn")))
 	def.display_name = "Brute"
 	def.category = &"monster"
 	def.faction = FACTION
@@ -124,7 +124,7 @@ static func _brute() -> DotNpcDef:
 
 
 static func _stalker() -> DotNpcDef:
-	var def := DotNpcDef.make(STALKER, ArenaPaths.rebase("res://npcs/arena_stalker.tscn"))
+	var def := DotNpcDef.make(STALKER, ArenaPaths.rebase(ArenaPaths.rebase("res://npcs/arena_stalker.tscn")))
 	def.display_name = "Stalker"
 	def.category = &"monster"
 	def.faction = FACTION
