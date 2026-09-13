@@ -1,5 +1,7 @@
 extends DotModule
 
+const ArenaPaths := preload("arena_paths.gd")
+
 const ArenaBoards := preload("arena_boards.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaIdentity := preload("arena_identity.gd")
@@ -479,7 +481,7 @@ func _register_game() -> void:
 	var descriptor := DotGameDescriptor.new()
 	descriptor.game_id = "arena"
 	descriptor.display_name = "Arena"
-	descriptor.scene = "res://scenes/arena_server.tscn"
+	descriptor.scene = ArenaPaths.rebase("res://scenes/arena_server.tscn")
 
 	# [b]`metadata["module"]`, not `descriptor.module`. There is no such property.[/b]
 	# This line read `descriptor.module = "res://game/arena_module.gd"` and Godot
@@ -494,7 +496,7 @@ func _register_game() -> void:
 	# `metadata` is where a module path goes, and dot-server-deploy's host reads
 	# it from precisely there.
 	descriptor.metadata = {
-		"module": "res://game/arena_module.gd",
+		"module": ArenaPaths.rebase("res://game/arena_module.gd"),
 		"kind": "arena",
 	}
 

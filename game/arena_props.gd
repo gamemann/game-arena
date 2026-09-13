@@ -1,5 +1,7 @@
 extends Node
 
+const ArenaPaths := preload("arena_paths.gd")
+
 const ArenaEvents := preload("arena_events.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
@@ -181,7 +183,7 @@ static func catalogue() -> DotPropCatalogue:
 
 
 static func _crate() -> DotPropDef:
-	var def := DotPropDef.make(CRATE, "res://props/arena_crate.tscn")
+	var def := DotPropDef.make(CRATE, ArenaPaths.rebase("res://props/arena_crate.tscn"))
 	def.display_name = "Crate"
 	def.category = &"cover"
 	def.size = DotPropDef.Size.SMALL
@@ -191,7 +193,7 @@ static func _crate() -> DotPropDef:
 
 
 static func _barrel() -> DotPropDef:
-	var def := DotPropDef.make(BARREL, "res://props/arena_barrel.tscn")
+	var def := DotPropDef.make(BARREL, ArenaPaths.rebase("res://props/arena_barrel.tscn"))
 	def.display_name = "Barrel"
 	def.category = &"cover"
 	def.size = DotPropDef.Size.MEDIUM
@@ -201,7 +203,7 @@ static func _barrel() -> DotPropDef:
 
 
 static func _ball() -> DotPropDef:
-	var def := DotPropDef.make(BALL, "res://props/arena_ball.tscn")
+	var def := DotPropDef.make(BALL, ArenaPaths.rebase("res://props/arena_ball.tscn"))
 	def.display_name = "Ball"
 	def.category = &"toy"
 	def.size = DotPropDef.Size.SMALL
@@ -215,7 +217,7 @@ static func _ball() -> DotPropDef:
 
 
 static func _pallet() -> DotPropDef:
-	var def := DotPropDef.make(PALLET, "res://props/arena_pallet.tscn")
+	var def := DotPropDef.make(PALLET, ArenaPaths.rebase("res://props/arena_pallet.tscn"))
 	def.display_name = "Pallet"
 	def.category = &"cover"
 	def.size = DotPropDef.Size.LARGE

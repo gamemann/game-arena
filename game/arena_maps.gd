@@ -1,5 +1,7 @@
 extends RefCounted
 
+const ArenaPaths := preload("arena_paths.gd")
+
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMode := preload("arena_mode.gd")
 
@@ -29,7 +31,7 @@ const ArenaMode := preload("arena_mode.gd")
 const CHANNEL := "arena.maps"
 
 ## The file that builds every map in this catalogue.
-const BUILDER_PATH := "res://maps/arena_map.gd"
+static var BUILDER_PATH := ArenaPaths.rebase("res://maps/arena_map.gd")
 
 ## Everything below is version 1 of itself. Bumped per map when its geometry changes:
 ## a record and a rotation cooldown are both about a map at a version, and geometry

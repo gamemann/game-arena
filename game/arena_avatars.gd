@@ -1,5 +1,7 @@
 extends RefCounted
 
+const ArenaPaths := preload("arena_paths.gd")
+
 ## What a player looks like, as a document a server can check without loading a mesh.
 ##
 ## [b]The point of dot-user-avatar is that an avatar is data, not a model.[/b] A server
@@ -106,7 +108,7 @@ static func _part(id: StringName, slot: StringName) -> DotAvatarPart:
 
 static func catalogue() -> DotAvatarCatalogue:
 	var out := DotAvatarCatalogue.new()
-	out.builtin_prefix = "res://avatars/"
+	out.builtin_prefix = ArenaPaths.rebase("res://avatars/")
 	out.builtin_suffix = ".tscn"
 	return out
 

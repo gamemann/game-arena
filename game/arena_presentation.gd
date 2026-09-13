@@ -1,5 +1,7 @@
 extends Node
 
+const ArenaPaths := preload("arena_paths.gd")
+
 ## Settings, audio, effects and a console, on the client.
 ##
 ## [b]This is the game where audio was the sharpest gap in the family, and the reason is
@@ -22,7 +24,7 @@ const CHANNEL := "arena.presentation"
 const SCHEMA_VERSION := 1
 
 const SOUND_DIR := "res://audio"
-const FX_DIR := "res://scenes/fx"
+static var FX_DIR := ArenaPaths.rebase("res://scenes/fx")
 
 var settings: DotSettingsManager = null
 var audio: DotAudioManager = null
