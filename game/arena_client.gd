@@ -1066,36 +1066,46 @@ func _hear_the_local_player() -> void:
 		player.health.damaged.connect(_on_local_damaged)
 		player.health.died.connect(_on_local_died)
 
-	if player.arsenal != null and not player.arsenal.fired.is_connected(_on_local_fired):
-		# The PREDICTED shot, on the client that fired it. Waiting for the server's
+	if not player.used.is_connected(_on_local_used):
+		# The PREDICTED use, on the client that made it. Waiting for the server's
 		# confirmation would put the bang a round trip after the click, which is the one
 		# piece of feedback a player judges the whole game's responsiveness by -- and it
 		# is safe to predict for exactly the reason dot-fx is built the way it is: a sound
 		# never changes the simulation, so a shot the server later refuses cost a noise.
-		player.arsenal.fired.connect(_on_local_fired)
+		#
+		# ArenaPlayer.used rather than arsenal.used, because ArenaPlayer already forwards
+		# it and is the one node this client is handed. Going through the arsenal means
+		# reaching two levels into somebody else's addon for a signal the player above it
+		# re-emits unchanged.
+		player.used.connect(_on_local_used)
 
 
-func _on_local_fired(shot: DotShot) -> void:
-	if presentation == null:
+## One tick of weapon use, predicted. An outcome rather than a shot, because a use is
+## not always one: a rocket produces a spawn and no shot at all, and a burst produces
+## several shots that are all one trigger pull.
+func _on_local_used(outcome: DotWeaponOutcome) -> void:
+	if presentation == null or outcome == null or not outcome.used:
 		return
-	var muzzle := Transform3D.IDENTITY
-	muzzle.origin = shot.origin
-	# The weapon's id rather than a slot number. A slot is where a player put something;
-	# an id is what it is, and a sound catalogue keyed on a slot would play the rifle
-	# whenever anybody put a shotgun in slot one.
-	var weapon_id: StringName = shot.weapon.id if shot.weapon != null else &"rifle"
-	presentation.on_fired(weapon_id, muzzle, true)
 
-	# Where the pellets landed, from the client's own prediction. Impacts are a list
-	# because a shotgun is one shot with several of them, and a single impact sound for
-	# eight pellets is a shotgun that sounds like a rifle.
-	for at in shot.impacts:
-		var hit := Transform3D.IDENTITY
-		hit.origin = at
-		presentation.on_impact(hit, false)
+	for shot in outcome.shots:
+		var muzzle := Transform3D.IDENTITY
+		muzzle.origin = shot.origin
+		# The weapon's id rather than a slot number. A slot is where a player put
+		# something; an id is what it is, and a sound catalogue keyed on a slot would
+		# play the rifle whenever anybody put a shotgun in slot one.
+		var weapon_id: StringName = shot.weapon_id if shot.weapon_id != &"" else &"rifle"
+		presentation.on_fired(weapon_id, muzzle, true)
 
-	if not shot.damages.is_empty():
-		presentation.on_hit_confirmed()
+		# Where the pellets landed, from the client's own prediction. Impacts are a list
+		# because a shotgun is one shot with several of them, and a single impact sound
+		# for eight pellets is a shotgun that sounds like a rifle.
+		for at in shot.impacts:
+			var hit := Transform3D.IDENTITY
+			hit.origin = at
+			presentation.on_impact(hit, false)
+
+		if not shot.damages.is_empty():
+			presentation.on_hit_confirmed()
 
 
 func _on_local_damaged(damage: DotDamage) -> void:
