@@ -49,7 +49,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 268
+const CHECKS := 275
 
 var _passed := 0
 var _failed := 0
@@ -1456,6 +1456,17 @@ func _test_interface() -> void:
 	_check(pause != null, "the menus install")
 	_check(stack.registered_ids().size() == 4, "all four screens register",
 		str(stack.registered_ids()))
+	# [b]The browser screen was registered and nothing ever pushed it.[/b] A whole server
+	# list — sources, a filter, favourites and a join — built on every launch of the client
+	# and unreachable from anywhere. There is a Servers button now, and it is greyed here
+	# because this fixture has no browser, which is the same rule the Settings button
+	# follows. `ArenaClient` calls `note_screens` once its list has come up.
+	var servers_button := pause.button(&"servers")
+	_check(servers_button != null, "the pause menu has a Servers button")
+	_check(
+		servers_button != null and servers_button.disabled,
+		"greyed where there is no browser, rather than opening nothing"
+	)
 
 	stack.push(&"scoreboard")
 	var scoreboard := stack.screen(&"scoreboard") as ArenaMenus.ScoreboardScreen
@@ -1484,19 +1495,35 @@ func _test_interface() -> void:
 	# interface scale.
 	stack.push(&"interface")
 	_check(stack.top_id() == &"interface", "the interface screen opens over the pause menu")
-	var settings := stack.screen(&"interface") as ArenaMenus.SettingsScreen
+	var settings := stack.screen(&"interface") as DotSettingsScreen
 	_check(
-		settings.panel.editor_for("scale") != null,
+		settings != null and settings.panel.editor_for("scale") != null,
 		"and generated a control for the UI scale"
 	)
 	_check(
 		stack.screen(&"settings") == null,
 		"while `settings` is the player's own, which this fixture has no manager for"
 	)
-	var settings_button := pause.get_node_or_null("Panel/Column/Settings") as Button
+	var settings_button := pause.button(&"settings")
 	_check(
 		settings_button != null and settings_button.disabled,
 		"so its button is greyed out rather than opening nothing"
+	)
+
+	# dot-ui's screens rather than copies of them. This game carried its own pause menu and
+	# its own settings screen for as long as `DotPauseScreen` and `DotSettingsScreen` have
+	# existed, which is the duplication that addon was written to end -- and it is also the
+	# only client in the family with TWO settings screens in one stack, which is exactly the
+	# case `id_override` exists for.
+	_check(pause is DotPauseScreen, "the pause screen is the shared one")
+	_check(
+		pause.ids() == ([&"resume", &"settings", &"interface", &"controls", &"servers",
+			ArenaMenus.LEAVE] as Array[StringName]),
+		"and its ids come from its labels (%s)" % [pause.ids()]
+	)
+	_check(
+		settings != null and settings.title_text == "Interface",
+		"the interface screen says Interface on it, not Settings"
 	)
 
 	stack.pop()
@@ -2171,11 +2198,17 @@ func _test_horde() -> void:
 
 	# --- The id space -----------------------------------------------------
 
-	var entity := ArenaHorde.entity_id_for(monster)
+	# A lookup now, not a static formula: the id comes out of the game's table, which
+	# is what stopped two monsters a million instance ids apart from sharing one.
+	var entity := horde.entity_id_for(monster)
 	_check(
 		ArenaHorde.is_npc_entity(entity),
-		"a monster's combat entity id is in the monster range",
-		"%d" % entity
+		"a monster's combat entity id says it names a monster",
+		DotEntity.describe_id(entity)
+	)
+	_check(
+		DotEntity.is_kind(entity, DotEntity.KIND_NPC),
+		"which is a kind carried in the id, not a range it falls in"
 	)
 
 	var clashes := PackedStringArray()
@@ -2188,6 +2221,32 @@ func _test_horde() -> void:
 		clashes.is_empty(),
 		"and no player id is in it",
 		", ".join(clashes)
+	)
+
+	# The property the old scheme did not have. It was
+	# `ENTITY_BASE + (instance_id % ENTITY_BASE)`, so two monsters whose engine
+	# instance ids differ by exactly a million shared an id -- and the second
+	# `register_health` overwrote the first, leaving one of them unkillable with no
+	# error anywhere. Assert uniqueness over every monster alive rather than trusting
+	# the arithmetic, because trusting the arithmetic is what shipped the bug.
+	var ids := {}
+	var duplicated := PackedStringArray()
+
+	for alive_npc in horde.spawner.all_npcs():
+		var other_entity := horde.entity_id_for(alive_npc)
+
+		if other_entity == 0:
+			continue
+
+		if ids.has(other_entity):
+			duplicated.append(DotEntity.describe_id(other_entity))
+
+		ids[other_entity] = true
+
+	_check(
+		duplicated.is_empty(),
+		"and every monster alive has an id of its own (%d)" % ids.size(),
+		", ".join(duplicated)
 	)
 
 	_check(

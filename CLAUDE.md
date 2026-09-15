@@ -363,11 +363,9 @@ live at once. It is a real game — monsters make the middle of the map expensiv
 and movable cover is the only answer a player can build — and it is also the only place
 the four run together.
 
-**A monster's combat entity id is its instance id plus `ArenaHorde.ENTITY_BASE`.**
-`ArenaPlayer` uses the dot-server session id as its entity id, which is a small integer;
-a monster using its own would eventually collide with one, and the symptom of that
-collision is a shot at a monster killing a player. That is the fourth id space in this
-project and the only one that is not the player id, which is why it is a constant.
+**A monster's combat entity id is allocated now, by the `DotEntityTable` the game holds as `entities`.** It used to be `ENTITY_BASE + (npc.instance_id % ENTITY_BASE)` with `ENTITY_BASE = 1_000_000`, and the reasoning written here was about the wrong collision: the worry was a monster colliding with a *player*, and what actually collides is a monster with another monster. Godot's instance ids are neither small nor dense, so two a million apart produce one entity id; the second `register_health` overwrites the first and the loser is shootable, hittable and unkillable, with no error anywhere. An id from the table is `kind * 10^12 + serial`, so `is_npc_entity` asks the id what it names instead of comparing it against a constant, and `headless_match` asserts every monster alive has an id of its own rather than trusting the arithmetic.
+
+**`ArenaPlayer` still uses the dot-server session id as its entity id, and that half is deliberately not converted.** In this game an entity id *is* a session id, and seven things depend on it: dot-match's scoreboard keys, dot-effects' per-entity scales, dot-stats rows, dot-spectate, the player-stack roster, the kill feed on the wire, and the client that rebuilds one from two ints it was sent. dot-effects is the one that makes it indivisible — it is keyed from **both** spaces today, `damage_taken_scale(damage.victim)` against `move_speed_scale(session_id)` — so a half-done conversion is an effect layer that silently stops applying to damage. Monsters were the half that was broken and they are the half that moved; the other half is a measured piece of work, not an oversight. The two cannot collide meanwhile, because a table id is above 10^12 and a session id is not.
 
 Two things fell out of putting a non-player entity into dot-combat, and both were bugs
 that had been latent since the combat manager was wired:
@@ -540,7 +538,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-268 + 56 + 116 + 91 checks.
+273 + 56 + 116 + 91 checks.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -910,13 +908,24 @@ saying so is better than continuing wrongly.
 
 `DotUiConfig` is the scale, the safe area, the transition time and how many chat lines the HUD keeps. All of those are real settings and **not one of them is what a player means by the word** — the volume, the field of view and the sensitivity are in `ArenaPresentation.settings`, a `DotSettingsManager`. So a player who opened the pause menu to turn the game down found a slider for the interface scale.
 
-`settings` is the player's document now, on dot-ui's shared `DotSettingsScreen`; the old screen is `interface` and has its own button. This file listed "A settings screen" under *things deliberately not here* on the grounds that `to_config()` made one a single `DotSettingsPanel` away — which was true, and the half that was missing is the way back: `to_config()` hands out a **snapshot**, so a screen that called only the panel's apply would report success and change nothing. `absorb_config()` is the second step and had no caller anywhere in the family.
+`settings` is the player's document now, on dot-ui's shared `DotSettingsScreen`; the old screen is `interface` and has its own button — **also `DotSettingsScreen`, which is what `id_override` and `title_text` exist for.** This client is the only one in the family with two settings screens in one stack, and it is the case that made those settings configurable at all; carrying a hand-written copy for the second of them was the duplication dot-ui had already been written to end. This file listed "A settings screen" under *things deliberately not here* on the grounds that `to_config()` made one a single `DotSettingsPanel` away — which was true, and the half that was missing is the way back: `to_config()` hands out a **snapshot**, so a screen that called only the panel's apply would report success and change nothing. `absorb_config()` is the second step and had no caller anywhere in the family.
 
 **With no manager the button is greyed out** rather than opening nothing, which is what `headless_match` drives: that fixture builds the menus without a presentation layer, and asserting the disabled button is what stops the missing case from silently becoming an empty screen.
 
+## The pause menu is dot-ui's now, and two of its buttons went nowhere
+
+dot-ui grew `DotPauseScreen` because four clients here had written the same forty lines — a centred `PanelContainer`, a heading, a column of `Button`s, a focus path — and differed only in the words on the buttons. **Three of the four never moved onto it, and this was one of them.** What is this game's own is `ArenaMenus.PAUSE_BUTTONS` and what happens when one is pressed; the ids are derived from the labels, because a list of labels and a parallel list of ids is two lists that can disagree.
+
+Doing that made two things visible that had been true since the client was written, both of them this family's own "a value produced correctly and consumed by nothing":
+
+- **Leave was wired to nothing.** `ArenaClient` ended `_build_menus` with `var _unused := pause` — the button was drawn, pressed, and answered by nobody. It emits `leave_requested` now, announced rather than acted on for the lobby's reason: what leaving means belongs to whatever loaded this client, and a client that called `get_tree().quit()` itself would be one that cannot be embedded in anything.
+- **Nothing could open the server browser.** `ArenaBrowser.BrowserScreen` registers under `&"servers"` and **no `push(&"servers")` existed anywhere in this repository** — a whole server list, with sources, a filter, favourites and a join, built on every launch and unreachable. There is a Servers button now.
+
+**The Servers button is greyed until there is a browser, and that needs a second pass.** The browser is built *after* the menus and only when its list came up, so `install` cannot know; `ArenaMenus.note_screens` re-checks every button against the stack and the client calls it once the screen is registered. Greyed rather than removed, because a button that is absent on one build and present on another is a menu whose shape a player cannot learn, while one that is there and dimmed says this client does not have that thing.
+
 ## The menus, rendered and looked at
 
-`tools/screenshot_menus.sh` renders the pause menu, the rebinder, the scoreboard — the screens dot-ui does not own — and the HUD with the chat box over it. That last frame is about where the two are relative to *each other*: the box goes in the bottom-left corner by default and so do health and armour, so it is placed at `margin_bottom = 110` to clear them, and the only thing that can tell you whether 110 is the right number is the picture. It is separate from `screenshot.sh`, which renders maps: a map wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it, and one script doing both would spend itself deciding which it was doing.
+`tools/screenshot_menus.sh` renders the pause menu, the **interface** screen, the rebinder, the scoreboard and the HUD with the chat box over it. The interface screen was not in that list and is the one that most needed to be: it is generated from a document rather than laid out, so the only thing that can be wrong with it is its *shape* — and `DotUiConfig` is eleven rows across four groups, the longest document any screen in this family binds. dot-ui's own screenshot found exactly that case, a panel growing past the bottom of the window and taking Apply, Revert and Back with it, with every property correct throughout. That last frame is about where the two are relative to *each other*: the box goes in the bottom-left corner by default and so do health and armour, so it is placed at `margin_bottom = 110` to clear them, and the only thing that can tell you whether 110 is the right number is the picture. It is separate from `screenshot.sh`, which renders maps: a map wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it, and one script doing both would spend itself deciding which it was doing.
 
 It found three things on its first run, none of which any assertion here could reach:
 

@@ -382,7 +382,22 @@ func give_loadout(entries: Array[Dictionary]) -> void:
 		var res := arsenal.give(item.id)
 
 		if not res.ok:
-			push_warning(res.error.message)
+			# [b]`DotLog`, not `push_warning`.[/b] A loadout entry the arsenal refused is
+			# a RUNTIME condition an operator would want to see -- somebody spawned
+			# without the weapon they picked -- so it belongs in the log file, on a
+			# channel, with the item that caused it. `push_warning` reaches only the
+			# editor's Errors dock, and the engine staples an unsuppressible backtrace to
+			# it, which on a dedicated server is eight lines of stderr that read like a
+			# crash and never reach the log at all.
+			DotLog.warn(
+				CHANNEL,
+				"a loadout item could not be given",
+				{
+					"item": String(item.id),
+					"player": player_id,
+					"detail": res.error.message,
+				}
+			)
 			continue
 
 		var slot := catalogue.get_def(item.id).slot

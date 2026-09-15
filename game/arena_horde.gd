@@ -16,13 +16,13 @@ const ArenaStats := preload("arena_stats.gd")
 ## they are these — plus one rule about id spaces that is the whole reason this works
 ## at all.
 ##
-## [b]An NPC's combat entity id is its Godot instance id plus an offset.[/b]
-## [ArenaPlayer] uses the dot-server session id as its entity id, which is a small
-## integer; a monster using its own instance id would eventually collide with one, and
-## the symptom of that collision is a shot at a monster killing a player. So monsters
-## live above [constant ENTITY_BASE] and [method is_npc_entity] is the one test
-## anything needs. That is the fourth id space in this project and it is the only one
-## that is not the player id, which is why it is a constant rather than a convention.
+## [b]An NPC's combat entity id comes from [DotEntityTable] and carries its kind.[/b]
+## [ArenaPlayer] still uses the dot-server session id as its entity id, which is a
+## small integer; a monster used to use its own engine instance id modulo a million,
+## which collides with another monster rather than with a player -- and the symptom of
+## that is a monster that stops taking damage, not a shot that kills somebody else.
+## Table serials cannot collide and [method is_npc_entity] asks the id what it is
+## instead of comparing it against a constant.
 ##
 ## [codeblock]
 ## var horde := ArenaHorde.new()
@@ -41,12 +41,37 @@ const CHANNEL := "arena.horde"
 ## The registry name a brain reaches this through. See `arena_npc_brain.gd`.
 const SERVICE := &"arena_horde"
 
-## Combat entity ids for monsters start here.
+## Where a monster's combat entity id comes from. See [DotEntityTable].
 ##
-## Above any plausible dot-server session id and below the point where a float would
-## stop counting integers exactly, because an entity id travels through a
-## [DotDamage] and a scoreboard key as text and back.
-const ENTITY_BASE := 1_000_000
+## [b]This replaces a scheme that could collide, silently, and lose a monster its
+## health.[/b] It was `ENTITY_BASE + (npc.instance_id % ENTITY_BASE)` with
+## `ENTITY_BASE = 1_000_000` -- and the engine's instance ids are neither small nor
+## dense, so two monsters whose ids differ by a multiple of a million produce one
+## entity id. The second `register_health` then overwrites the first and the loser
+## simply stops taking damage. Nothing errors, and nothing could: a health record
+## registered twice under one key is a legitimate thing for a dictionary to hold.
+##
+## Serials from a table cannot do that, and they carry their kind, so
+## [method is_npc_entity] is a real question rather than a range check.
+##
+## [b]The old comment's constraint still holds and is worth keeping.[/b] An entity id
+## travels through a [DotDamage] and a scoreboard key as text and back, so it has to
+## stay below the point where a float stops counting integers exactly. A monster id is
+## `2 * 10^12 + serial`; the limit is 2^53, about 9 * 10^15, which leaves three orders
+## of magnitude. It is also a million times further above any plausible session id than
+## the old constant was, which is what keeps the player half of this game -- where an
+## entity id IS a session id -- unable to collide with it.
+##
+## [b]The player half is deliberately NOT converted, and that is a measured decision
+## rather than an oversight.[/b] In this game an entity id and a session id are the
+## same integer, and seven things depend on it: dot-match scoreboard keys, dot-effects'
+## per-entity scales, dot-stats rows, dot-spectate, the player-stack roster, the kill
+## feed on the wire, and the client that rebuilds one from two ints it was sent.
+## Moving players onto the table means translating at every one of those boundaries in
+## the same pass -- and dot-effects is keyed from BOTH spaces today
+## (`damage_taken_scale(damage.victim)` against `move_speed_scale(session_id)`), so a
+## half-done conversion is an effect layer that silently stops applying to damage.
+## Monsters were the half that was broken; they are the half that moved.
 
 ## A monster died. Carries the killer's player id, or 0 for the world.
 signal npc_killed(npc: DotNpcInstance, killer_id: int)
@@ -312,14 +337,25 @@ func _rebuild_candidates() -> void:
 
 # --- Combat ----------------------------------------------------------------
 
-## The combat entity id for a monster.
-static func entity_id_for(npc: DotNpcInstance) -> int:
-	return ENTITY_BASE + (npc.instance_id % ENTITY_BASE) if npc != null else 0
+## The combat entity id for a monster, or 0 when it has none.
+##
+## [b]A lookup now, not a formula.[/b] It was derived from the node's engine instance
+## id, which is what made two monsters able to share an id; the table holds the
+## node -> id direction so nothing has to derive anything.
+func entity_id_for(npc: DotNpcInstance) -> int:
+	if npc == null or game == null:
+		return 0
+
+	return game.entities.id_for_node(npc.node)
 
 
 ## Whether an entity id belongs to a monster rather than to a player.
+##
+## [b]A kind test rather than a range check.[/b] The id says what it names; this used
+## to be `entity_id >= ENTITY_BASE`, which is a promise about a constant rather than a
+## fact about the id, and it was the only thing standing between the two id spaces.
 static func is_npc_entity(entity_id: int) -> bool:
-	return entity_id >= ENTITY_BASE
+	return DotEntity.is_kind(entity_id, DotEntity.KIND_NPC)
 
 
 ## A monster hitting a player. Called by the brain, through [DotRegistry].
@@ -359,7 +395,26 @@ func npc_attack(npc: DotNpcInstance, victim_key: StringName, amount: float) -> v
 ## resolver and once to the spawner — so [method _on_health_changed] is the only writer
 ## on the dot-npc side.
 func _register_combat(npc: DotNpcInstance) -> void:
-	var entity := entity_id_for(npc)
+	var opened := game.entities.open(
+		DotEntity.KIND_NPC,
+		npc.node,
+		&"",
+		&"",
+		float(game.current_tick()) / float(maxi(game.tick_rate, 1))
+	)
+
+	if not opened.ok:
+		# The table refuses a node that is already an entity, which is the collision
+		# the old scheme produced in silence. Refusing to register a second time is
+		# the whole point; registering anyway is what used to cost a monster its
+		# health.
+		DotLog.error(CHANNEL, "could not open an entity for a monster", {
+			"npc": String(npc.def.id) if npc.def != null else "?",
+			"why": opened.error.message,
+		})
+		return
+
+	var entity: int = (opened.value as DotEntityHandle).id
 	var def := npc.def
 
 	var set_node := DotHitboxSet.new()
@@ -409,8 +464,18 @@ func _register_combat(npc: DotNpcInstance) -> void:
 func _forget_combat(npc: DotNpcInstance) -> void:
 	var entity := entity_id_for(npc)
 
+	if entity == 0:
+		return
+
 	if game != null and game.combat != null and is_instance_valid(game.combat):
 		game.combat.forget(entity)
+
+	# After the two erases read it, and after dot-combat has been told. The lookup
+	# above goes through the table, so closing first would make `entity` unreachable
+	# for everything below -- which is the ordering dot-entity's own notes warn about
+	# and the reason `close()` never frees a node itself.
+	if game != null:
+		game.entities.close(entity, DotEntityTable.REASON_KILLED)
 
 	_by_entity.erase(entity)
 	_hitboxes.erase(entity)
@@ -432,8 +497,8 @@ func _on_died(npc: DotNpcInstance, by: StringName) -> void:
 
 	# The kill counts for the player who made it, and only for a player. A monster
 	# that killed another monster — splash damage does this — must not be credited to
-	# anybody, and `to_int()` on a monster's entity id gives a number above
-	# ENTITY_BASE, which is what the test is for.
+	# anybody, and `to_int()` on a monster's entity id gives a number whose KIND is
+	# NPC, which is what the test is for.
 	if game != null and game.progress != null and killer > 0 and not is_npc_entity(killer):
 		if game.player_for(killer) != null:
 			game.progress.record(killer, ArenaStats.NPC_KILLS)

@@ -163,7 +163,9 @@ func _build() -> bool:
 	if not _check(booted.ok, "the server boots and listens on %d" % PORT, str(booted.error)):
 		return false
 
-	var loaded := _server.modules.load_module("res://game/arena_module.gd")
+	var loaded: DotResult = await _server.modules.load_module(
+		"res://game/arena_module.gd"
+	)
 
 	if not _check(loaded.ok, "the arena module loads into it", str(loaded.error)):
 		return false
@@ -753,7 +755,9 @@ func _test_unload() -> void:
 	_check(not _server.modules.has_module("arena"), "and is no longer listed")
 
 	# Reloading has to work, because that is what a live configuration change does.
-	var again := _server.modules.load_module("res://game/arena_module.gd")
+	var again: DotResult = await _server.modules.load_module(
+		"res://game/arena_module.gd"
+	)
 	_check(again.ok, "and it loads again cleanly", str(again.error))
 	_check(
 		_server.console.find_command("arena_status") != null,

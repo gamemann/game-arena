@@ -281,7 +281,12 @@ func _build_identity() -> DotResult:
 	# dot-platform's module falls back to `DotRegistry.get_service(DotPlatformHub.SERVICE)`
 	# for exactly this, which is why `ArenaIdentity` registers the hub.
 	if server.modules != null and not server.modules.has_module("platform"):
-		var loaded_module := server.modules.load_module(PLATFORM_MODULE_PATH)
+		# Awaited: loading a module runs its `_module_load`, which is allowed to be a
+		# coroutine. An un-awaited one returns at its first suspension, and the line
+		# below then reads `.ok` off null.
+		var loaded_module: DotResult = await server.modules.load_module(
+			PLATFORM_MODULE_PATH
+		)
 
 		if not loaded_module.ok:
 			return loaded_module.wrap("The platform module would not load")

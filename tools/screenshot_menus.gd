@@ -57,9 +57,10 @@ func _initialize() -> void:
 
 	var ui_config := DotUiConfig.new()
 
-	var pause := ArenaMenus.PauseScreen.new()
+	var pause := DotPauseScreen.new()
 	pause.name = "Pause"
-	pause.build()
+	pause.half_size = Vector2(160.0, 160.0)
+	pause.build(PackedStringArray(ArenaMenus.PAUSE_BUTTONS))
 	_stack.register(pause)
 
 	var controls := ArenaMenus.ControlsScreen.new()
@@ -95,8 +96,24 @@ func _initialize() -> void:
 
 	_build_hud()
 
+	# [b]The interface screen was not in this list and is the one that most needed to be.[/b]
+	# It is generated from a document rather than laid out, so the only thing that can be
+	# wrong with it is its SHAPE -- and the shape is what no assertion reaches. dot-ui's own
+	# screenshot found the case: a panel as tall as somebody's `@export` list grows past the
+	# bottom of the window and takes Apply, Revert and Back with it, with every property
+	# correct throughout. `DotUiConfig` is eleven rows across four groups, which is the
+	# longest document any screen in this family binds.
+	var interface_screen := DotSettingsScreen.new()
+	interface_screen.name = "Interface"
+	interface_screen.id_override = &"interface"
+	interface_screen.title_text = "Interface"
+	interface_screen.half_size = Vector2(280.0, 220.0)
+	interface_screen.build(ui_config)
+	_stack.register(interface_screen)
+
 	_shots = [
 		{"id": &"pause", "file": "menu_pause.png"},
+		{"id": &"interface", "file": "menu_interface.png"},
 		{"id": &"controls", "file": "menu_controls.png"},
 		{"id": &"scoreboard", "file": "menu_scoreboard.png"},
 		# Nothing pushed, so what is drawn is the HUD and the chat box over it. This one

@@ -12,131 +12,20 @@ const ArenaGame := preload("arena_game.gd")
 
 const CHANNEL := "arena.menus"
 
-
-## The pause menu. Opaque, so the HUD goes away behind it.
-class PauseScreen extends DotScreen:
-	signal resume_pressed()
-	signal settings_pressed()
-	signal interface_pressed()
-	signal controls_pressed()
-	signal quit_pressed()
-
-	func _screen_id() -> StringName:
-		return &"pause"
-
-	func build() -> void:
-		hides_below = true
-		blocks_input = true
-		mouse_mode = DotScreen.Mouse.VISIBLE
-
-		var panel := PanelContainer.new()
-		panel.name = "Panel"
-		panel.set_anchors_preset(Control.PRESET_CENTER)
-		panel.offset_left = -160.0
-		panel.offset_right = 160.0
-		panel.offset_top = -160.0
-		panel.offset_bottom = 160.0
-		add_child(panel)
-
-		var column := VBoxContainer.new()
-		column.name = "Column"
-		panel.add_child(column)
-
-		var title := Label.new()
-		title.text = "Paused"
-		title.theme_type_variation = &"DotHeading"
-		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		column.add_child(title)
-
-		_add_button(column, "Resume", func() -> void: resume_pressed.emit())
-		_add_button(column, "Settings", func() -> void: settings_pressed.emit())
-		_add_button(column, "Interface", func() -> void: interface_pressed.emit())
-		_add_button(column, "Controls", func() -> void: controls_pressed.emit())
-		_add_button(column, "Leave", func() -> void: quit_pressed.emit())
-
-		# Without this the menu opens with nothing focused and cannot be used with a
-		# gamepad at all -- which is invisible to anyone testing with a mouse.
-		#
-		# A path by name, not `button.get_path()`: this runs before the screen is
-		# registered with a stack, so it is not in the tree yet and get_path() pushes
-		# an error and returns nothing.
-		initial_focus = NodePath("Panel/Column/Resume")
-
-	func _add_button(into: Control, text: String, action: Callable) -> Button:
-		var button := Button.new()
-		button.name = text
-		button.text = text
-		button.pressed.connect(action)
-		into.add_child(button)
-		return button
-
-
-## The INTERFACE's own settings, generated from [DotUiConfig].
+## What is on the pause menu, top to bottom.
 ##
-## [b]Registered as `interface`, not `settings`, and that rename is the point.[/b] This
-## screen offers the scale, the safe area, the transition time and how many chat lines the
-## HUD keeps — real settings, and not one of them is what a player means by the word. The
-## volume, the field of view and the sensitivity live in the presentation layer's
-## [code]DotSettingsManager[/code], and until `settings` pointed at that, a player who
-## opened this menu to turn the game down found a slider for the interface scale.
+## A list of LABELS and no list of ids beside it: [DotPauseScreen] derives the id from the
+## label, because two parallel lists are the shape this tree has paid for more than any
+## other. `"Interface"` is `&"interface"`, which is the id that screen registers under.
 ##
-## The panel reads the config's own `@export` annotations, so this screen never
-## restates a setting and cannot drift from one.
-class SettingsScreen extends DotScreen:
-	var panel: DotSettingsPanel = null
+## (`const` rather than a `PackedStringArray(...)` call, which is not a constant expression
+## in GDScript. It is converted at the one place it is handed over.)
+const PAUSE_BUTTONS: Array[String] = [
+	"Resume", "Settings", "Interface", "Controls", "Servers", "Leave",
+]
 
-	func _screen_id() -> StringName:
-		return &"interface"
-
-	func build(config: DotConfig) -> void:
-		hides_below = false
-		blocks_input = true
-
-		var container := PanelContainer.new()
-		container.set_anchors_preset(Control.PRESET_CENTER)
-		container.offset_left = -280.0
-		container.offset_right = 280.0
-		container.offset_top = -220.0
-		container.offset_bottom = 220.0
-		add_child(container)
-
-		var column := VBoxContainer.new()
-		container.add_child(column)
-
-		var title := Label.new()
-		title.text = "Settings"
-		title.theme_type_variation = &"DotHeading"
-		column.add_child(title)
-
-		panel = DotSettingsPanel.new()
-		# Edits are held until Apply. A live panel would call validate() on a
-		# half-edited config, which can legitimately be invalid on its way to being
-		# valid.
-		panel.live = false
-		column.add_child(panel)
-		panel.bind(config)
-
-		var buttons := HBoxContainer.new()
-		column.add_child(buttons)
-
-		var apply := Button.new()
-		apply.text = "Apply"
-		apply.pressed.connect(func() -> void:
-			var res := panel.apply()
-			if not res.ok:
-				DotLog.result(CHANNEL, "settings", res)
-		)
-		buttons.add_child(apply)
-
-		var revert := Button.new()
-		revert.text = "Revert"
-		revert.pressed.connect(panel.revert)
-		buttons.add_child(revert)
-
-		var back := Button.new()
-		back.text = "Back"
-		back.pressed.connect(close)
-		buttons.add_child(back)
+## The id of the button the client acts on itself. See [method install].
+const LEAVE := &"leave"
 
 
 ## Key bindings, with conflict detection and a file that survives a restart.
@@ -287,16 +176,48 @@ static func install(
 	game: ArenaGame,
 	ui_config: DotUiConfig,
 	player_settings: Object = null
-) -> PauseScreen:
-	var pause := PauseScreen.new()
+) -> DotPauseScreen:
+	# [b]dot-ui's pause screen, and it used to be a copy of it.[/b] That addon grew
+	# `DotPauseScreen` because four clients here had written the same forty lines -- a
+	# centred `PanelContainer`, a heading, a column of `Button`s and a focus path -- and
+	# this file went on being one of them. What is this game's own is the label list above
+	# and what happens when one is pressed.
+	var pause := DotPauseScreen.new()
 	pause.name = "Pause"
-	pause.build()
+	pause.half_size = Vector2(160.0, 160.0)
+
+	var built_pause := pause.build(PackedStringArray(PAUSE_BUTTONS))
+
+	if not built_pause.ok:
+		DotLog.result(CHANNEL, "the pause screen", built_pause)
+		pause.free()
+		return null
+
 	stack.register(pause)
 
-	var interface_screen := SettingsScreen.new()
+	# [b]Registered as `interface`, not `settings`, and that distinction is the point.[/b]
+	# This screen offers the scale, the safe area, the transition time and how many chat
+	# lines the HUD keeps -- real settings, and not one of them is what a player means by
+	# the word. The volume, the field of view and the sensitivity are the player's own
+	# document, on the screen below; until `settings` pointed at that, a player who opened
+	# this menu to turn the game down found a slider for the interface scale.
+	#
+	# Also dot-ui's screen rather than a second copy of one, which is what `id_override`
+	# and `title_text` are for: two of these in one stack is exactly the case that made
+	# that setting configurable.
+	var interface_screen := DotSettingsScreen.new()
 	interface_screen.name = "Interface"
-	interface_screen.build(ui_config)
-	stack.register(interface_screen)
+	interface_screen.id_override = &"interface"
+	interface_screen.title_text = "Interface"
+	interface_screen.half_size = Vector2(280.0, 220.0)
+
+	var built_interface := interface_screen.build(ui_config)
+
+	if built_interface.ok:
+		stack.register(interface_screen)
+	else:
+		DotLog.result(CHANNEL, "the interface screen", built_interface)
+		interface_screen.free()
 
 	# The player's own settings, on dot-ui's shared screen rather than a fourth copy of
 	# one. Optional, because a suite that drives the menus without a presentation layer is
@@ -309,17 +230,10 @@ static func install(
 
 		if built.ok:
 			stack.register(player_screen)
-			pause.settings_pressed.connect(func() -> void: stack.push(&"settings"))
 		else:
 			DotLog.result(CHANNEL, "the settings screen", built)
 			player_screen.free()
-			var button := pause.get_node_or_null("Panel/Column/Settings") as Button
-			if button != null:
-				button.disabled = true
-	else:
-		var button := pause.get_node_or_null("Panel/Column/Settings") as Button
-		if button != null:
-			button.disabled = true
+
 
 	var controls := ControlsScreen.new()
 	controls.name = "Controls"
@@ -331,8 +245,44 @@ static func install(
 	scoreboard.build(game.match_node.scoreboard)
 	stack.register(scoreboard)
 
-	pause.resume_pressed.connect(func() -> void: stack.pop(&"pause"))
-	pause.interface_pressed.connect(func() -> void: stack.push(&"interface"))
-	pause.controls_pressed.connect(func() -> void: stack.push(&"controls"))
+	# [b]Greyed rather than removed.[/b] A button that is absent on one build and present
+	# on another is a menu whose shape a player cannot learn; one that is there and dimmed
+	# says this client does not have that thing, which is the truth.
+	note_screens(stack, pause)
+
+	# Every button but Leave is about the stack and nothing else. What LEAVE means belongs
+	# to the client -- an embedded one cannot leave and a single-process test must not --
+	# so that one is left for the caller.
+	pause.chosen.connect(func(id: StringName) -> void:
+		match id:
+			&"resume":
+				stack.pop(&"pause")
+			&"settings", &"interface", &"controls", &"servers":
+				# The button id IS the screen id, which is what the label list buys: a
+				# parallel table of "which button opens which screen" is two lists that can
+				# disagree, and this one cannot. A screen that failed to build is absent
+				# rather than empty, and its button is already greyed.
+				if stack.screen(id) != null:
+					stack.push(id)
+	)
 
 	return pause
+
+
+## Re-checks which buttons have a screen behind them.
+##
+## [b]For `servers`, which is registered after [method install] returns.[/b] The browser is
+## the one screen here that is about something other than this game, so the client builds it
+## itself and only when its list came up -- which is after the menus exist. Without this the
+## button would be greyed on a client that has a perfectly good server browser.
+static func note_screens(stack: DotScreenStack, pause: DotPauseScreen) -> void:
+	if stack == null or pause == null:
+		return
+
+	for id: StringName in pause.ids():
+		var button := pause.button(id)
+
+		if button == null or id in [&"resume", LEAVE]:
+			continue
+
+		button.disabled = stack.screen(id) == null

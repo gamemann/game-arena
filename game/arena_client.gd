@@ -33,6 +33,16 @@ const ArenaPresentation := preload("arena_presentation.gd")
 
 const CHANNEL := "arena.client"
 
+## The player pressed Leave on the pause menu.
+##
+## [b]Announced rather than acted on, and it used to be neither.[/b] What "leave" means
+## belongs to whatever loaded this client — the shell goes back to its own menu, an embedded
+## page closes the frame — so a client that called `get_tree().quit()` itself would be one
+## that cannot be embedded in anything. What it did before was nothing at all: the button
+## existed, emitted its signal, and the only thing this file did with the pause menu was
+## `var _unused := pause`.
+signal leave_requested()
+
 ## Where a dot-server client link publishes itself.
 const LINK_SERVICE := &"dot_client_link"
 
@@ -260,7 +270,26 @@ func _build_interface() -> void:
 		browser.listing_changed.connect(screen.redraw)
 		screen.join_pressed.connect(_on_join_requested)
 
-		var _unused := pause
+		# [b]And now something opens it.[/b] The browser screen was registered under
+		# `&"servers"` and **nothing anywhere pushed it** — a whole server list, with
+		# sources, a filter, favourites and a join, built on every launch and unreachable.
+		# The pause menu has a Servers button now and this is the line that lights it up,
+		# which has to happen here rather than in `install` because the browser is built
+		# after the menus and only when its list came up.
+		ArenaMenus.note_screens(menus, pause)
+
+	# Leave was wired to nothing at all. `var _unused := pause` is what stood here, so the
+	# button was drawn, pressed, and answered by nobody.
+	pause.chosen.connect(func(id: StringName) -> void:
+		if id != ArenaMenus.LEAVE:
+			return
+
+		# Closed first, so a client that cannot actually leave — an embedded one, a
+		# single-process test — is not left staring at a pause menu over a game that
+		# carried on running behind it.
+		menus.pop(&"pause")
+		leave_requested.emit()
+	)
 
 
 # --- Offline ---------------------------------------------------------------

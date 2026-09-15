@@ -140,6 +140,20 @@ signal map_changed(map: ArenaMap)
 
 var map: ArenaMap = null
 var match_node: DotMatch = null
+## Every world object this game has a combat entity id for. See [DotEntityTable].
+##
+## [b]Monsters only, today.[/b] A player's entity id in this game IS their dot-server
+## session id, and seven things depend on that identity — dot-match's scoreboard keys,
+## dot-effects' per-entity scales, dot-stats rows, dot-spectate, the player-stack
+## roster, the kill feed on the wire, and the client that rebuilds one from two ints.
+## [ArenaHorde] carries the full reasoning and what converting the other half would
+## take; the short version is that dot-effects is keyed from both spaces at once, so
+## the two halves cannot move separately.
+##
+## What the table already buys is the half that was wrong: monster ids used to be
+## derived from engine instance ids and could collide with each other in silence.
+var entities := DotEntityTable.new()
+
 var combat: DotCombatManager = null
 var loadouts: DotLoadoutManager = null
 
