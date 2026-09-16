@@ -33,10 +33,28 @@ const CHANNEL := "arena.maps"
 ## The file that builds every map in this catalogue.
 static var BUILDER_PATH := ArenaPaths.rebase(ArenaPaths.rebase("res://maps/arena_map.gd"))
 
-## Everything below is version 1 of itself. Bumped per map when its geometry changes:
-## a record and a rotation cooldown are both about a map at a version, and geometry
-## that moved under one id is a different map wearing the same name.
+## What a map is at, when nothing says otherwise.
+##
+## Every map starts here and leaves when its geometry moves.
 const MAP_VERSION := "1.0.0"
+
+## Per-map versions, for the maps that have moved on from [constant MAP_VERSION].
+##
+## [b]Per map, not one constant for the catalogue, and that distinction is the whole
+## point of the field.[/b] A record and a rotation cooldown are both about a map AT a
+## version, so geometry that moved under one id is a different map wearing the same
+## name and has to say so. A single shared constant could only say it about all three
+## at once — bumping it because `dm_atrium` grew an arcade would also declare `dm_box`
+## and `dm_pit` to be new maps, which invalidates two sets of records to describe a
+## change neither map had.
+##
+## A map absent from here is at [constant MAP_VERSION]; that is the common case and it
+## is why this is a lookup rather than a column every map has to fill in.
+const MAP_VERSIONS := {
+	# 1.1.0: the south arcade, the stair onto its roof, and the doorway cut in the
+	# bunker's east wall to reach it (2026-09-16).
+	&"dm_atrium": "1.1.0",
+}
 
 
 ## Every built-in map, as dot-map content.
@@ -80,7 +98,7 @@ static func catalogue() -> DotMapCatalogue:
 static func _def_for(id: StringName, map: ArenaMap) -> DotMapDef:
 	var def := DotMapDef.new()
 	def.id = id
-	def.version = MAP_VERSION
+	def.version = MAP_VERSIONS.get(id, MAP_VERSION)
 	def.display_name = map.display_name
 	def.kind = DotMapDef.KIND_ARENA
 	def.scene_path = BUILDER_PATH

@@ -965,6 +965,62 @@ filter nobody has run, and adding the first map that answers no found two things
   order: a mode no map can host is a configuration mistake, and "the map did not change"
   says so where an empty rotation is a server that sits still and never explains why.
 
+## The south arcade, and the map that only had one answer to its own roof
+
+`dm_atrium` is built around three ways UP and, until the arcade, had nothing to say
+about being DOWN. The ring overhangs, sees the whole yard, and the south-west bunker was
+the only square of ground it cannot see — a corner to hide in with nowhere to go from
+it. The arcade is the missing half: 25 m of roofed ground running east from a doorway
+cut in that bunker's east wall to the foot of the south-east crates, so the route from
+the map's safest corner to its fastest way up is under cover for all of it.
+
+**A colonnade rather than a tunnel, and that is the whole balance of it.** The piers
+stand at the two long edges only, so the arcade is opaque from above and open from the
+sides: it beats the ring and it does not beat a player standing in the yard beside it. A
+solid box there would have been a safe corridor across the middle of the map, which is a
+worse map than no corridor at all. Its roof is the second thing it is for — top face
+3.6, deliberately 0.4 **under** the ring, so whoever holds the ring still holds the map
+and now has somewhere to be shot at from. Reached by a ten-tread stair at the back of
+the yard, or by stepping across from the crates.
+
+**No spawn was added, and that is a decision rather than an omission.** This map's
+spawns are tagged by the sign of z and are deliberately five red to five blue; the
+arcade is entirely in the south, so every spawn it could carry would be a blue one. A
+map whose two sides start six against five to describe a corridor is a worse trade than
+a corridor you walk to, and both the bunker and the crates already have a spawn near
+them.
+
+**Versions are per map now.** `ArenaMaps.MAP_VERSION` was one constant for the whole
+catalogue and its own comment said "bumped per map when its geometry changes" — which it
+could not do. A record and a rotation cooldown are both about a map *at* a version, so
+bumping one shared constant for the arcade would have declared `dm_box` and `dm_pit` to
+be new maps as well, invalidating two sets of records to describe a change neither map
+had. `MAP_VERSIONS` is the per-map override and `dm_atrium` is at `1.1.0`; a map absent
+from it is at `MAP_VERSION`, which is the common case.
+
+## What a bot in here actually travels at
+
+**9.00 m/s holding forward. 1.20 m/s holding forward and jump.** Measured on this map's
+open yard, printed by `headless_match` under *what a bot actually travels at*, and it is
+a factor of seven and a half that nothing in this family had ever put a number on.
+
+The mechanism is not a bug and must not be "fixed". With `auto_hop` on and jump **held**,
+the player leaves the ground on the tick it lands, so `accelerate` never gets a grounded
+tick to work in; and air acceleration cannot make up the difference because
+`max_air_wish_speed` is 1.2 — which is exactly the cap that makes air-strafing a skill,
+and is what `arena_tunables()` already documents as the classic formula. A bot holding
+one direction cannot strafe, so it bleeds to the cap. 1.20 m/s is the cap, to the
+centimetre.
+
+What is wrong is only ever the **assertion** written on top of it. A check of the form
+"the bot hopped" passes for a bot crawling at a metre a second, and a map check that
+assumes a bot covers ground is weaker than it reads. **So the rule for this project is
+that an arena bot that has to cover ground does not hold jump** — every map check here
+drives a walking bot, and that measurement is what says why. The number is printed
+rather than only asserted, because a check's detail line is shown only when it fails and
+an assertion alone would hide the measurement again the moment it started passing.
+
+
 ## Things deliberately not here
 
 - **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and

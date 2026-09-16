@@ -49,7 +49,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 275
+const CHECKS := 289
 
 var _passed := 0
 var _failed := 0
@@ -80,6 +80,7 @@ func _run() -> void:
 	_test_map()
 	_test_pit()
 	await _test_atrium()
+	_test_bot_ground_speed()
 	_test_modes()
 	await _test_team_deathmatch()
 
@@ -1085,6 +1086,110 @@ func _test_pit() -> void:
 
 	holder.queue_free()
 	remove_child(holder)
+
+
+## What a bot driven the way every bot in this family is driven actually MOVES at.
+##
+## [b]This is a measurement rather than a feature, and it is here because every "the bot
+## hopped" check in this family has been passing for the wrong reason.[/b] Every bot in
+## every game here is driven with `move = Vector2(0, 1)`, and several of them hold
+## [constant DotFpsCommand.BUTTON_JUMP] as well. Those two commands produce speeds that
+## differ by a factor of seven, and nothing anywhere had ever printed either number — so
+## a map check that says "a bot crossed the level" and a map check that says "a bot
+## crawled four metres and the assertion was loose enough not to care" are the same
+## check until somebody measures it.
+##
+## The mechanism is not a bug and must not be "fixed". With `auto_hop` on and jump HELD,
+## the player leaves the ground on the tick it lands, so [code]accelerate[/code] never
+## gets a grounded tick to work in; and air acceleration cannot make up the difference
+## because [member DotFpsTunables.max_air_wish_speed] is 1.2, which is precisely the cap
+## that makes air-strafing a skill. A bot holding one direction cannot strafe, so it
+## bleeds to the cap. That pair is deliberate — `arena_tunables()` documents it as the
+## classic formula — and what is wrong is only ever the ASSERTION written on top of it.
+##
+## [b]So the rule for this project, written down here because this is where it is
+## proved: an arena bot that has to cover ground does not hold jump.[/b] Every map check
+## above drives a walking bot for exactly this reason, and this is the number that says
+## why.
+func _test_bot_ground_speed() -> void:
+	_group("what a bot actually travels at")
+
+	var map := ArenaMap.dm_atrium()
+	var tunables := ArenaPlayer.arena_tunables()
+
+	var holder := Node3D.new()
+	holder.name = "SpeedBot"
+	add_child(holder)
+
+	var bot := ArenaPlayer.HeadlessController.new()
+	bot.name = "Movement"
+	bot.flat_body = map.to_fps_body()
+	bot.drive = DotFpsController.Drive.EXTERNAL
+	bot.tick_rate = TICK_RATE
+	bot.tunables = tunables
+	bot.register_service = false
+	bot.register_default_actions = false
+	bot.body_ref = DotNodeRef.of_path(NodePath(".."))
+	holder.add_child(bot)
+
+	var delta := 1.0 / float(TICK_RATE)
+	var walked := _top_speed(bot, false, delta, 0)
+	var hopped := _top_speed(bot, true, delta, TICK_RATE * 4)
+
+	# Printed rather than only asserted. This group exists BECAUSE nobody had ever seen
+	# these two numbers side by side, and a check's detail line is only shown when it
+	# fails — so an assertion alone would hide the measurement again the moment it
+	# started passing, which is how this got missed in the first place.
+	print("  ..    walking %.2f m/s, hopping %.2f m/s, max_speed %.2f, air cap %.2f"
+		% [walked, hopped, tunables.max_speed, tunables.max_air_wish_speed])
+
+	_check(
+		walked >= tunables.max_speed - 0.5,
+		"a bot holding forward on open ground reaches the speed the tunables promise",
+		"%.2f m/s against max_speed %.2f" % [walked, tunables.max_speed]
+	)
+	_check(
+		hopped < walked * 0.5,
+		"and the same bot holding jump does not, which is why no map check here holds it",
+		"%.2f m/s, bled to max_air_wish_speed %.2f" % [hopped, tunables.max_air_wish_speed]
+	)
+
+	holder.queue_free()
+	remove_child(holder)
+
+
+## The highest horizontal speed [param bot] reaches in two seconds of holding forward.
+##
+## Started on the flat empty south of `dm_atrium`'s yard and driven east, which is 30 m
+## of nothing — long enough to reach a steady state and short enough not to reach the
+## perimeter. The first half second is discarded, because every run starts at rest and
+## the question is what the command is worth once it is going.
+##
+## [b]The best speed rather than the last one, deliberately.[/b] The claim being made
+## about the hopping bot is that it CANNOT go fast, and the strongest form of that is
+## its own best moment over two seconds rather than wherever it happened to be on the
+## final tick.
+func _top_speed(
+	bot: DotFpsController, jumping: bool, delta: float, tick_base: int
+) -> float:
+	bot.teleport(Vector3(0.0, 0.2, 24.0), 0.0, 0.0)
+
+	var speed := 0.0
+
+	for tick in range(TICK_RATE * 2):
+		var command := DotFpsCommand.new()
+		command.yaw = 0.0
+		command.pitch = 0.0
+		command.move = Vector2(1.0, 0.0)
+		command.set_button(DotFpsCommand.BUTTON_JUMP, jumping)
+		bot.apply_command(command)
+		bot.simulate_tick(tick_base + tick, delta)
+
+		if tick >= TICK_RATE / 2:
+			var v: Vector3 = bot.state.velocity
+			speed = maxf(speed, Vector2(v.x, v.z).length())
+
+	return speed
 
 
 ## The first mode in this game that needs tagged spawns, or null if there is none.
@@ -2731,6 +2836,154 @@ func _test_atrium() -> void:
 		landed.x > start.x + 4.0,
 		"and it got there by moving along the stair rather than up a wall",
 		"x %.1f -> %.1f" % [start.x, landed.x]
+	)
+
+	# --- The south arcade ---------------------------------------------------
+	#
+	# [b]The arcade is a piece of COVER, and cover is the one thing a box count cannot
+	# check.[/b] Thirty-eight boxes in the right places and thirty-eight in a heap read
+	# identically to every assertion above; what makes this one an arcade is that the
+	# sky is not visible from under it and is visible from beside it. Both halves
+	# matter — a roof that covered the whole south yard would pass the first check and
+	# would be a different, worse map.
+	var under_arcade := trace.ray(Vector3(0.0, 1.0, 15.5), Vector3.UP, 40.0)
+	var beside_arcade := trace.ray(Vector3(0.0, 1.0, 11.0), Vector3.UP, 40.0)
+	var above_arcade := trace.ray(Vector3(0.0, 4.0, 15.5), Vector3.UP, 40.0)
+
+	_check(
+		under_arcade.ok() and under_arcade.blocked,
+		"the south arcade is roofed against the ring above it"
+	)
+	_check(
+		not (beside_arcade.ok() and beside_arcade.blocked),
+		"and the yard two metres north of it is open sky"
+	)
+	_check(
+		not (above_arcade.ok() and above_arcade.blocked),
+		"and its own roof is a firing position rather than a crawlspace"
+	)
+
+	# The doorway cut in the bunker's east wall, checked from both sides of the cut. A
+	# doorway is a hole in a list of boxes and a hole is invisible: a wall built as one
+	# box from z 8 to 20.2 -- which is what was there before -- passes every other check
+	# on this map and makes the arcade unreachable from the bunker it exists to serve.
+	var through_door := trace.ray(Vector3(-18.0, 1.0, 15.5), Vector3.RIGHT, 8.0)
+	var into_wall := trace.ray(Vector3(-18.0, 1.0, 10.5), Vector3.RIGHT, 8.0)
+
+	_check(
+		not (through_door.ok() and through_door.blocked),
+		"the bunker's east wall is open where the arcade meets it"
+	)
+	_check(
+		into_wall.ok() and into_wall.blocked,
+		"and is still a wall either side of the doorway"
+	)
+
+	# [b]No spawn is inside a solid.[/b] The weaker version of this -- inside the room,
+	# above the floor -- is what `_test_map` checks, and a spawn buried in a stair tread
+	# passes it. This map has grown two stairs, ten piers and a roof slab since its
+	# spawns were placed, which is exactly the way a spawn ends up inside something: not
+	# by being put there, but by geometry arriving on top of it.
+	var buried := PackedStringArray()
+
+	for index in range(map.spawns.size()):
+		var at: Vector3 = map.spawns[index].origin
+		var column := AABB(at + Vector3(-0.4, -0.05, -0.4), Vector3(0.8, 1.8, 0.8))
+
+		for box in map.boxes:
+			if box.intersects(column):
+				buried.append("#%d at %s" % [index, str(at)])
+				break
+
+	_check(buried.is_empty(), "and no spawn is inside a solid", ", ".join(buried))
+
+	# [b]The map moved, so the map's version moved, and only this map's.[/b] A record
+	# and a rotation cooldown are both about a map AT a version. The failure this
+	# catches is the one a single shared constant makes unavoidable: bumping it for the
+	# arcade would declare `dm_box` and `dm_pit` to be new maps too, invalidating two
+	# sets of records to describe a change neither of them had.
+	var versions := ArenaMaps.catalogue()
+
+	_check(
+		versions.get_map(&"dm_atrium") != null
+			and versions.get_map(&"dm_atrium").version == "1.1.0",
+		"the catalogue carries dm_atrium at the version its geometry is at",
+		"" if versions.get_map(&"dm_atrium") == null
+			else versions.get_map(&"dm_atrium").version
+	)
+	_check(
+		versions.get_map(&"dm_box") != null
+			and versions.get_map(&"dm_box").version == ArenaMaps.MAP_VERSION
+			and versions.get_map(&"dm_pit").version == ArenaMaps.MAP_VERSION,
+		"and leaves the two maps that did not move where they were"
+	)
+
+	# [b]The stair onto the arcade roof, walked.[/b] Same shape as the north-west stair
+	# above and for the same reason: ten treads of 0.36 is a number that only means
+	# anything once something has climbed it. Driven north (-Z at yaw 0) from the back
+	# of the yard.
+	#
+	# The arrival is recorded DURING the run rather than read at the end, because the
+	# roof is only 5 m deep and a bot at 9 m/s crosses it in half a second — it reaches
+	# the roof and then walks off the far edge of it, which is correct behaviour for a
+	# bot holding one direction and would read as never having got there.
+	walker.controller.teleport(Vector3(-8.0, 0.5, 28.0))
+
+	var north := DotFpsCommand.new()
+	north.yaw = 0.0
+	north.move = Vector2(0.0, 1.0)
+
+	var roof_peak := 0.5
+	var on_roof := false
+
+	for tick in range(tick_rate * 4):
+		walker.controller.apply_command(north)
+		walker.controller.simulate_tick(tick_rate * 4 + tick, delta)
+
+		var at: Vector3 = walker.controller.state.position
+		roof_peak = maxf(roof_peak, at.y)
+
+		if at.y >= 3.5 and at.z >= 12.9 and at.z <= 18.1 and at.x >= -13.2 and at.x <= 12.0:
+			on_roof = true
+
+	_check(
+		on_roof,
+		"a bot walks the south stair onto the arcade roof",
+		"peaked at %.2f, roof is at 3.60" % roof_peak
+	)
+	_check(
+		roof_peak < 4.5,
+		"and the roof is a tier of its own below the ring rather than part of it",
+		"peaked at %.2f, ring is at 4.60" % roof_peak
+	)
+
+	# [b]The covered route, walked end to end.[/b] The arcade's whole reason is that a
+	# player can get from the bunker to the foot of the crates without the ring seeing
+	# them, so the check is a bot that starts inside the bunker, holds east, and comes
+	# out the far end — through the doorway, between two rows of piers, under 25 m of
+	# roof. Anything in the way of that lane is a corridor that is drawn and cannot be
+	# used, which no assertion about boxes can tell from one that can.
+	walker.controller.teleport(Vector3(-18.0, 0.5, 15.5))
+
+	var east := DotFpsCommand.new()
+	east.yaw = 0.0
+	east.move = Vector2(1.0, 0.0)
+
+	for tick in range(tick_rate * 6):
+		walker.controller.apply_command(east)
+		walker.controller.simulate_tick(tick_rate * 8 + tick, delta)
+
+	var emerged: Vector3 = walker.controller.state.position
+
+	_check(
+		emerged.x > 8.0,
+		"a bot crosses the arcade from the bunker to the crates without stopping",
+		"x -18.0 -> %.1f" % emerged.x
+	)
+	_check(
+		emerged.y < 1.0 and absf(emerged.z - 15.5) < 1.5,
+		"and does it on the ground, in the lane, rather than over the top",
+		"ended at %s" % str(emerged)
 	)
 
 	walker.queue_free()

@@ -129,7 +129,15 @@ static func dm_box() -> ArenaMap:
 ##
 ## The south-west bunker is the ground-level answer to all of it: three walls at chest
 ## height, open to the west, the one place a player can break line of sight from the
-## roof without leaving the yard.
+## roof without leaving the yard — and since the arcade was added, the one place that
+## leads somewhere.
+##
+## [b]The south arcade[/b] is the map's second layer and the reason the bunker is worth
+## walking to. A colonnade 25 m long and 5 m deep runs east from a doorway cut in the
+## bunker's east wall to the foot of the south-east crates, roofed at 3.6 and carried on
+## piers that stand only at its two long edges. It is cover from the ring and from
+## nothing else. Its roof is a firing position 0.4 m below the ring, reached by a ten
+## tread stair at the back of the yard or by stepping across from the crates.
 static func dm_atrium() -> ArenaMap:
 	var map := ArenaMap.new()
 	map.id = &"dm_atrium"
@@ -203,10 +211,75 @@ static func dm_atrium() -> ArenaMap:
 
 	# --- South-west bunker -------------------------------------------------
 	#
-	# Three walls at 2.5, open to the west. The only ground-level cover from the ring.
+	# Three walls at 2.5, open to the west. Was the only ground-level cover from the
+	# ring; since the arcade below it is the west end of a covered route rather than a
+	# dead end, and its east wall is split around a 4 m doorway at z 14..18 to let that
+	# route through. The doorway is exactly the arcade's clear span between piers, so a
+	# player leaving the bunker is under cover the moment they are through it.
 	map.add_box(AABB(Vector3(-24.0, 0.0, 8.0), Vector3(12.0, 2.5, 1.2)))
 	map.add_box(AABB(Vector3(-24.0, 0.0, 19.0), Vector3(12.0, 2.5, 1.2)))
-	map.add_box(AABB(Vector3(-13.2, 0.0, 8.0), Vector3(1.2, 2.5, 12.2)))
+	map.add_box(AABB(Vector3(-13.2, 0.0, 8.0), Vector3(1.2, 2.5, 6.0)))
+	map.add_box(AABB(Vector3(-13.2, 0.0, 18.0), Vector3(1.2, 2.5, 2.2)))
+
+	# --- The south arcade --------------------------------------------------
+	#
+	# [b]Added because the map had one answer to the roof and it was "do not be in the
+	# yard".[/b] Everything above is a way UP; the ring overhangs, sees the whole yard,
+	# and the bunker was the only square of ground it cannot see -- a corner to hide in
+	# with nowhere to go from it. The arcade is the missing half: 25 m of roofed ground
+	# running east from that bunker to the foot of the south-east crates, so the route
+	# from the map's safest corner to its fastest way up is under cover for all of it.
+	#
+	# [b]A colonnade rather than a tunnel, and that is the whole balance of it.[/b] The
+	# piers stand at the two long edges only, so the arcade is opaque from ABOVE and
+	# open from the SIDES: it beats the ring and it does not beat a player standing in
+	# the yard beside it. A solid box here would have been a safe corridor across the
+	# middle of the map, which is a worse map than no corridor at all.
+	#
+	# Its roof is the second thing it is for. The top face is 3.6 -- deliberately 0.4
+	# UNDER the building's ring at 4.0 -- so the arcade roof is a firing position that
+	# overlooks the south yard and is itself overlooked. Whoever holds the ring still
+	# holds the map; they now have somewhere to be shot at from.
+	#
+	# Three ways on and off it, and none of them is the same as another:
+	#
+	# - [b]the south stair[/b], ten treads of 0.36, walked rather than jumped, out in
+	#   the open at the back of the yard and the slowest thing on the map;
+	# - [b]the east end[/b], a step across and down onto the second south-east crate,
+	#   which joins the arcade to the existing three-jump route to the ring;
+	# - [b]down[/b], anywhere, which is what stops the roof being a place to camp.
+	const ARC_X := -13.2
+	const ARC_W := 25.2
+	const ARC_Z := 13.0
+	const ARC_D := 5.0
+	const ARC_Y := 3.0
+	const ARC_T := 0.6
+	const PIER := 1.5
+
+	map.add_box(AABB(Vector3(ARC_X, ARC_Y, ARC_Z), Vector3(ARC_W, ARC_T, ARC_D)))
+
+	# Five piers on each long edge. 3.9 m of daylight between them, which is wider than
+	# the building's doorways -- the arcade is meant to be shot into, and a colonnade
+	# you cannot see through is the tunnel this is not.
+	for index in range(5):
+		var pier_x := -11.0 + float(index) * 5.375
+
+		map.add_box(AABB(Vector3(pier_x, 0.0, ARC_Z), Vector3(PIER, ARC_Y, PIER)))
+		map.add_box(AABB(
+			Vector3(pier_x, 0.0, ARC_Z + ARC_D - PIER), Vector3(PIER, ARC_Y, PIER)
+		))
+
+	# The south stair. Ten treads of 0.36 climbing north, the last one's north face
+	# flush with the arcade roof's south edge at z 18 -- a stair that stops half a metre
+	# short is a stair with a hole at the top of it, which reads as falling through the
+	# map. 0.36 rather than anything larger for the reason the north-west stair gives:
+	# it is under `DotFpsTunables.step_height`, so it is WALKED, and a bot holding
+	# forward climbs it instead of stopping dead against the first tread.
+	for index in range(10):
+		map.add_box(AABB(
+			Vector3(-10.0, 0.0, 26.1 - float(index) * 0.9),
+			Vector3(4.0, 0.36 * float(index + 1), 0.9)
+		))
 
 	map.add_perimeter()
 
