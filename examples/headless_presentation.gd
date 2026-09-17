@@ -19,7 +19,7 @@ const ArenaPresentation := preload("../game/arena_presentation.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 56
+const CHECKS := 60
 
 var _passed := 0
 var _failed := 0
@@ -157,6 +157,45 @@ func _test_audio_is_a_firefight() -> void:
 	_check(
 		sink.count_of(&"fire_rifle") == 0,
 		"and a shot four hundred metres away costs nothing at all"
+	)
+
+	# --- Every id has a noise, and every noise has an id --------------------
+	#
+	# This game shipped a complete, argued-over catalogue pointing at nine `.ogg` files
+	# nobody has produced, and was therefore silent while every check about its audio
+	# passed. The two directions below are the ones that can go wrong without erroring:
+	# an id with no recipe is one sound that stays silent for ever, and a recipe naming an
+	# id the catalogue does not have is a decision that reaches nothing. Neither is
+	# visible from any assertion about the catalogue on its own.
+	var recipes := ArenaPresentation.sound_recipes()
+	var uncovered: Array[String] = []
+	for id in cat.ids():
+		if not recipes.has(id):
+			uncovered.append(String(id))
+	_check(
+		uncovered.is_empty(),
+		"every id in the catalogue has a stand-in voice (missing: %s)" % str(uncovered)
+	)
+
+	var stray: Array[String] = []
+	for id in recipes.keys():
+		if cat.find(StringName(id)) == null:
+			stray.append(String(id))
+	_check(stray.is_empty(), "and no recipe names an id that is not there (%s)" % str(stray))
+
+	# The bank is what the real sink would be given. Baking it here is the only place a
+	# headless run can tell "the game would make a noise" from "the game has a table".
+	var bank := DotAudioSynth.bank(cat, recipes)
+	_check(
+		bank.has(&"fire_rifle") and bank.has("res://audio/fire_rifle.ogg"),
+		"the bank answers under both the id and the path the def names"
+	)
+	_check(
+		(
+			(bank[&"fire_rail"] as AudioStreamWAV).data
+			!= (bank[&"fire_rifle"] as AudioStreamWAV).data
+		),
+		"and a rail is a different noise from a rifle, not a quieter one"
 	)
 
 	p.queue_free()

@@ -275,6 +275,38 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	return c
 
 
+## Which synthesised voice stands in for each id until real audio is dropped into
+## [constant SOUND_DIR].
+##
+## [b]This game made every audio decision months ago and has been silent anyway.[/b] The
+## catalogue above says what a shot is worth, how far away it stops mattering, how many may
+## overlap and what loses to what — and every one of its paths names an `.ogg` that nobody
+## has produced, so firing has had no sound at all. The crosshair and the ammunition
+## counter were the only feedback in a game whose whole argument for positional audio is
+## that a shot you cannot hear the direction of is a shot you cannot answer.
+##
+## [b]A table rather than a guess inside dot-audio.[/b] Which noise belongs to which id is
+## this game's decision, the same way the distances above are — an addon that inferred
+## "rail sounds tonal" from an id called `fire_rail` would be an addon guessing at
+## vocabulary it does not own.
+##
+## The three weapons deliberately get three DIFFERENT voices. A rail that is a quieter
+## rifle is the one thing weapon audio must not be: the point of hearing somebody else's
+## shot is knowing what they are holding before you come round the corner.
+static func sound_recipes() -> Dictionary:
+	return {
+		&"fire_rifle": DotAudioSynth.Voice.SHOT,
+		&"fire_shotgun": DotAudioSynth.Voice.SHOT_HEAVY,
+		&"fire_rail": DotAudioSynth.Voice.SHOT_TIGHT,
+		&"impact": DotAudioSynth.Voice.IMPACT,
+		&"hit_marker": DotAudioSynth.Voice.BLIP,
+		&"hurt": DotAudioSynth.Voice.HURT,
+		&"died": DotAudioSynth.Voice.DIE,
+		&"spawned": DotAudioSynth.Voice.SPAWN,
+		&"pickup": DotAudioSynth.Voice.PICKUP,
+	}
+
+
 func _build_audio() -> DotResult:
 	audio = DotAudioManager.new()
 	audio.name = "Audio"
@@ -291,6 +323,20 @@ func _build_audio() -> DotResult:
 	var res := audio.setup()
 	if not res.ok:
 		return res.wrap("the arena's audio")
+
+	# Only on a real sink, and only after setup: the manager decides whether there is a
+	# device, and on a headless server there is nothing to bake for. Building the bank
+	# anyway would be a few hundred milliseconds of arithmetic per dedicated server
+	# startup for streams no process on that machine can play.
+	var godot_sink := audio.sink as DotAudioSinkGodot
+	if godot_sink != null:
+		godot_sink.bank = DotAudioSynth.bank(audio.catalogue, sound_recipes())
+		DotLog.info(
+			CHANNEL,
+			"no audio files; synthesised stand-ins are in use",
+			{"ids": sound_recipes().size(), "dir": SOUND_DIR}
+		)
+
 	return DotResult.success(null)
 
 
