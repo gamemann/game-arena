@@ -1029,16 +1029,7 @@ an assertion alone would hide the measurement again the moment it started passin
 - **Pickups in the world.** dot-loadout ships `DotPickup` and `DotPickupField`; the map
   places none. An arena with weapon and armour pickups is most of what makes map
   control matter, and it is a level-design decision rather than a wiring one.
-- **Any actual audio files, and a viewmodel.** The catalogue is written and every id still
-  resolves to a path in `audio/` that does not exist — which is the right way round,
-  because what this game was missing was the decision rather than the files. It is no
-  longer silent, though: `sound_recipes()` maps each of the nine ids to a `DotAudioSynth`
-  voice, and `DotAudioSinkGodot` falls through to that bank when a path resolves to
-  nothing. The three weapons deliberately get three *different* voices, because a rail
-  that is a quieter rifle is the one thing weapon audio must not be — the point of hearing
-  somebody else's shot is knowing what they are holding before you come round the corner.
-  Dropping nine `.ogg`s in still changes nothing else, and now it also switches the
-  stand-ins off one id at a time. Nothing is still drawn for the weapon in your own hands.
+- **Any actual audio files, and a viewmodel.** The catalogue is written and every id still resolves to a path in `audio/` that does not exist — which is the right way round, because what this game was missing was the decision rather than the files. It is no longer silent, though: `sound_recipes()` maps each of the nine ids to a `DotAudioSynth` voice, and `DotAudioSinkGodot` falls through to that bank when a path resolves to nothing. The three weapons deliberately get three *different* voices, because a rail that is a quieter rifle is the one thing weapon audio must not be — the point of hearing somebody else's shot is knowing what they are holding before you come round the corner. Dropping nine `.ogg`s in still changes nothing else, and now it also switches the stand-ins off one id at a time. Nothing is still drawn for the weapon in your own hands.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
 - **A master server.** `DotBrowserSourceBackbone` reads a listing that nothing is yet
