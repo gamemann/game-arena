@@ -358,6 +358,11 @@ static func dm_atrium() -> ArenaMap:
 ##
 ## Down is free everywhere, which is what keeps the pit from being a trap: the ring is
 ## worth holding for as long as nobody has decided to drop on you.
+##
+## [b]Extended 2026-09-18.[/b] A second bridge east to west makes the middle a
+## crossing rather than a chord, and a shelf in the south-west corner carries a perch
+## at 5.4 — the map's third tier, two 0.9 m hops up from the ring. Nine spawns now,
+## and still none of them tagged.
 static func dm_pit() -> ArenaMap:
 	var map := ArenaMap.new()
 	map.id = &"dm_pit"
@@ -382,6 +387,14 @@ static func dm_pit() -> ArenaMap:
 	# The bridge, north to south through the middle at ring height. Flush with both
 	# ends of the ring, so crossing it is a decision rather than a jump.
 	map.add_box(AABB(Vector3(-1.0, RING_Y, -RING_IN), Vector3(2.0, RING_T, 22.0)))
+
+	# And its east-west twin, added 2026-09-18, which turns the ring's one shortcut
+	# into a crossing. With a single bridge the ring is a loop with a chord and the
+	# whole of the high ground is one decision wide; with two, the middle of the map
+	# is a junction four ways lead to and the island underneath is the only place on
+	# it out of everybody's sight. The two overlap in the middle by construction —
+	# overlapping boxes are fine here, and a hole cut between them would not be a box.
+	map.add_box(AABB(Vector3(-RING_IN, RING_Y, -1.0), Vector3(22.0, RING_T, 2.0)))
 
 	# --- The two stairs ----------------------------------------------------
 	#
@@ -427,6 +440,30 @@ static func dm_pit() -> ArenaMap:
 			Vector3(corner.x - 0.75, 0.0, corner.y - 0.75), Vector3(1.5, 2.2, 1.5)
 		))
 
+	# --- The south-west shelf and the perch --------------------------------
+	#
+	# A third tier, and the map's only one. The shelf is a 4 m block standing on the
+	# pit floor, FLUSH with the inner edges of the west and south arms — x = -11 and
+	# z = 11 — and that is the part worth stating rather than the height: set half a
+	# metre clear of them instead, it would leave a 0.5 m slot between the block and
+	# the catwalk, which is narrower than the 0.8 m a player is and is therefore a
+	# gap nothing that plays this map can pass. See `[gate-sweep-1]`: the second
+	# question a map has to answer is whether it contains a place its player cannot
+	# get to, and a slot is how one appears without anybody drawing it.
+	#
+	# Two rises of 0.9 — ring 3.6 to shelf 4.5 to perch 5.4 — both under the 1.25 m
+	# `arena_tunables()` jumps, so each is a hop rather than a route that needs the
+	# crates. The perch sees the whole pit and every metre of the ring sees the
+	# perch, which is the trade: it is the best view on the map and the worst place
+	# to be found standing still.
+	const SHELF_TOP := 4.5
+	const PERCH_TOP := 5.4
+
+	map.add_box(AABB(Vector3(-11.0, 0.0, 7.0), Vector3(4.0, SHELF_TOP, 4.0)))
+	map.add_box(AABB(
+		Vector3(-11.0, SHELF_TOP, 9.0), Vector3(2.0, PERCH_TOP - SHELF_TOP, 2.0)
+	))
+
 	map.add_perimeter()
 
 	# --- Spawns ------------------------------------------------------------
@@ -444,6 +481,9 @@ static func dm_pit() -> ArenaMap:
 		Vector3(-12.5, 3.7, -6.0),
 		Vector3(12.5, 3.7, 6.0),
 		Vector3(0.0, 3.7, -12.5),
+		# On the shelf. Nine now, and still not one of them tagged — the property
+		# this map exists for survives anything added to it or it is not a property.
+		Vector3(-8.5, 4.6, 8.5),
 	]
 
 	for at in points:

@@ -538,7 +538,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-273 + 56 + 116 + 91 checks.
+294 + 56 + 116 + 91 checks.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -934,6 +934,34 @@ It found three things on its first run, none of which any assertion here could r
 - **The rebinder's rows were in interned-pointer order.** Also dot-ui's, and the same trap that gave two peers two different wire ids in dot-net.
 
 **The tool refuses to save a grey rectangle.** If `push` fails it says so and skips the shot, because a picture of an empty viewport is indistinguishable from a renderer that is not working — which is exactly how dot-ui's blank pause menu looked before the cause was found.
+
+## `dm_pit` gained a crossing and a third tier
+
+**Extended 2026-09-18.** A second bridge east to west turns the ring's one chord into a
+crossing: with a single bridge the high ground is one decision wide and the middle of
+the map is a place you pass through, and with two it is a junction four ways lead to,
+with the island underneath as the only square on it out of everybody's sight.
+
+And a **shelf** in the south-west corner carrying a **perch** at 5.4 — the map's third
+tier, two 0.9 m hops up from the ring, which is under the 1.25 m `arena_tunables()`
+jumps. The perch sees the whole pit and every metre of the ring sees the perch, which
+is the trade. Nine spawns now, one of them on the shelf, and **still not one of them
+tagged** — the property this map exists for has to survive anything added to it or it is
+not a property.
+
+**The one number in it that is load-bearing is not a height.** The shelf is flush with
+the inner edges of the west and south arms, at x = -11 and z = 11. Set half a metre
+clear of them instead — which looks tidier written down — it leaves a 0.5 m slot between
+the block and the catwalk, and 0.5 m is narrower than the 0.8 m a player is. That is a
+gap nothing that plays this map can pass, it looks from above exactly like a corridor,
+and it is `[gate-sweep-1]`'s second question: not "can the player get through every
+gap" but "is there anywhere here the player cannot reach at all". `headless_match`
+measures both offsets off the map's own boxes rather than trusting the constants.
+
+The east-west gantry is driven by a bot **separately** from the north-south one rather
+than assumed from it: they are different boxes meeting different arms of the ring, and
+this family's whole `[gate-sweep-1]` file is times a shape was checked in one instance
+and believed about the others.
 
 ## `dm_pit`, and the filter that had never said no
 

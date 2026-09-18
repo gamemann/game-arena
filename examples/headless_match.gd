@@ -49,7 +49,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 289
+const CHECKS := 294
 
 var _passed := 0
 var _failed := 0
@@ -935,7 +935,7 @@ func _test_pit() -> void:
 	var map := ArenaMap.dm_pit()
 
 	_check(map.boxes.size() > 24, "the map has geometry", str(map.boxes.size()))
-	_check(map.spawns.size() == 8, "and eight spawns", str(map.spawns.size()))
+	_check(map.spawns.size() == 9, "and nine spawns", str(map.spawns.size()))
 
 	# The invariant every map here is built around, restated for this one.
 	_check(
@@ -1084,8 +1084,99 @@ func _test_pit() -> void:
 		"ended at %s" % str(bot.state.position)
 	)
 
+	# --- The crossing, added 2026-09-18 ------------------------------------
+	#
+	# The east-west gantry, driven the same way and for the same reason. Asked
+	# SEPARATELY rather than assumed from the north-south one passing: the two are
+	# different boxes meeting different arms of the ring, and `[gate-sweep-1]` is the
+	# whole file of times this family checked one instance of a shape and believed
+	# the answer about the others.
+	bot.teleport(Vector3(-10.0, 3.9, 0.0), -90.0, 0.0)
+
+	var gantried := false
+
+	for tick in range(int(TICK_RATE * 4)):
+		var command := DotFpsCommand.new()
+		# -90 is +X in Godot's -Z-forward convention, which is the way this one runs.
+		command.yaw = -90.0
+		command.pitch = 0.0
+		command.move = Vector2(0.0, 1.0)
+		bot.apply_command(command)
+		bot.simulate_tick(int(TICK_RATE * 8) + tick, delta)
+
+		if bot.state.position.x > 9.0 and bot.state.position.y > 3.0:
+			gantried = true
+			break
+
+	_check(
+		gantried,
+		"and crosses the new east-west gantry the same way",
+		"ended at %s" % str(bot.state.position)
+	)
+
 	holder.queue_free()
 	remove_child(holder)
+
+	# --- The shelf and the perch -------------------------------------------
+	#
+	# Two questions about the third tier, and neither is "is the box there".
+	#
+	# First: both rises have to be hops. A ledge 1.3 m up is drawn exactly like one
+	# 0.9 m up and is a tier no player reaches, which is `[gate-sweep-1]`'s second
+	# question — somewhere on the map the thing that plays it cannot get to.
+	var jump: float = ArenaPlayer.arena_tunables().jump_height
+
+	# Both boxes found by their footprint rather than by an index into the list:
+	# `add_box` order is an implementation detail and an index is a check that
+	# silently starts measuring a different box the day somebody inserts one.
+	var shelf := AABB()
+	var perch := AABB()
+	var found_shelf := false
+	var found_perch := false
+
+	for box in map.boxes:
+		if is_equal_approx(box.size.x, 4.0) and is_equal_approx(box.size.y, 4.5):
+			shelf = box
+			found_shelf = true
+		elif is_equal_approx(box.size.x, 2.0) and is_equal_approx(box.size.y, 0.9):
+			perch = box
+			found_perch = true
+
+	if _check(
+		found_shelf and found_perch, "the shelf and the perch are in the box list"
+	):
+		# Rises read off the geometry, not written down a second time here — the
+		# failure being caught is exactly a number changed there and not here.
+		var ring_top := 3.6
+		var shelf_top: float = shelf.position.y + shelf.size.y
+		var perch_top: float = perch.position.y + perch.size.y
+		var onto_shelf: float = shelf_top - ring_top
+		var onto_perch: float = perch_top - shelf_top
+
+		_check(
+			onto_shelf < jump and onto_perch < jump,
+			"both rises onto the third tier are hops rather than walls",
+			"%.2f m then %.2f m against a %.2f m jump"
+				% [onto_shelf, onto_perch, jump]
+		)
+		_check(
+			perch.position.y <= shelf_top + 0.001,
+			"and the perch stands ON the shelf rather than above a gap",
+			"perch starts at %.2f, shelf ends at %.2f"
+				% [perch.position.y, shelf_top]
+		)
+
+	if found_shelf:
+		var west_slot: float = absf(shelf.position.x - (-11.0))
+		var south_slot: float = absf(
+			(shelf.position.z + shelf.size.z) - 11.0
+		)
+
+		_check(
+			west_slot < 0.01 and south_slot < 0.01,
+			"and is flush with both arms of the ring rather than slotted off them",
+			"%.2f m west, %.2f m south" % [west_slot, south_slot]
+		)
 
 
 ## What a bot driven the way every bot in this family is driven actually MOVES at.
