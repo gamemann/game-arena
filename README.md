@@ -104,3 +104,7 @@ godot --headless --path . res://examples/dedicated.tscn
 `headless_net`: 62 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, and the two stay together under loss.
 
 `dedicated`: 21 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
