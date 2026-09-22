@@ -53,7 +53,21 @@ const MAP_VERSION := "1.0.0"
 const MAP_VERSIONS := {
 	# 1.1.0: the south arcade, the stair onto its roof, and the doorway cut in the
 	# bunker's east wall to reach it (2026-09-16).
-	&"dm_atrium": "1.1.0",
+	# 1.2.0: the south-east crates rebuilt from three steps of 1.5 m to five of 0.9,
+	# because a jump here peaks at 1.25 and the route had never been climbable
+	# (2026-09-22).
+	&"dm_atrium": "1.2.0",
+	# 1.1.0: the east-west bridge, the south-west shelf and the perch (2026-09-18).
+	# [b]Backdated.[/b] That change moved the geometry and did not move the version,
+	# so every record set on the one-bridge dm_pit is recorded against the two-bridge
+	# one. Nothing can un-mix them now; what this entry buys is that the runs from here
+	# are separable from both.
+	# 1.2.0: the north-east crates rebuilt from two steps of 1.4 and 1.2 to three of
+	# 0.9, same cause as dm_atrium's (2026-09-22).
+	&"dm_pit": "1.2.0",
+	# 1.1.0: three crates to each of the two ledges, which had been standable geometry
+	# with no way up since the map was written (2026-09-22).
+	&"dm_box": "1.1.0",
 }
 
 

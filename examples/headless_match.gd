@@ -49,7 +49,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 294
+const CHECKS := 300
 
 var _passed := 0
 var _failed := 0
@@ -81,6 +81,8 @@ func _run() -> void:
 	_test_pit()
 	await _test_atrium()
 	_test_bot_ground_speed()
+	_test_reach()
+	await _test_crate_climb()
 	_test_modes()
 	await _test_team_deathmatch()
 
@@ -1281,6 +1283,220 @@ func _top_speed(
 			speed = maxf(speed, Vector2(v.x, v.z).length())
 
 	return speed
+
+
+## Every climb on every map, against what the movement can actually do.
+##
+## [b]This is the check three maps in this game shipped without, and all three were
+## wrong.[/b] `dm_atrium`'s south-east crates rose 1.5 m a step, `dm_pit`'s first crate
+## was 1.4, and `dm_box`'s two ledges sat at 3.6 with a 1.0 m plinth as the highest
+## thing a player could stand on. A jump here PEAKS at 1.25 m. Not one of those routes
+## had ever been climbed, by a player or by a check, and every other assertion in this
+## file passed the whole time — a box count cannot tell a platform from a ceiling, the
+## three-representations check only says the three agree about a wall nobody can get
+## over, and "no spawn is inside a solid" is true of a map made entirely of walls.
+##
+## [b]The sweep is over `ArenaMap.climbs`, which is derived from the boxes.[/b] A climb
+## says only WHICH two boxes are a route; its rise and its gap are read off them, so
+## moving a crate moves the climb and this re-decides it. That is the difference
+## between this and a table of expected numbers, which is a fourth description of the
+## geometry and would go stale the first time somebody nudged a box.
+##
+## It does not attempt to FIND routes. A map is a heap of boxes and any two of them are
+## a climb if you are willing to call them one; which pairs a player is meant to use is
+## a design decision and the only part of this a human has to write down.
+func _test_reach() -> void:
+	_group("what a player can climb")
+
+	var tunables := ArenaPlayer.arena_tunables()
+
+	# The deliberate copy, and the check that the copies agree. A map is content —
+	# `by_id` is called from a catalogue listing with no player in the tree — so the
+	# numbers it sizes itself against cannot be read off the player class. The family's
+	# answer to that is this assertion rather than a shared constant.
+	_check(
+		is_equal_approx(ArenaMap.MOVE_SPEED, tunables.max_speed)
+		and is_equal_approx(ArenaMap.JUMP_HEIGHT, tunables.jump_height)
+		and is_equal_approx(ArenaMap.MOVE_GRAVITY, tunables.gravity)
+		and is_equal_approx(ArenaMap.STEP_HEIGHT, tunables.step_height),
+		"the numbers the maps are sized against are the ones the server applies",
+		"map %.2f/%.2f/%.2f/%.2f vs tunables %.2f/%.2f/%.2f/%.2f" % [
+			ArenaMap.MOVE_SPEED, ArenaMap.JUMP_HEIGHT, ArenaMap.MOVE_GRAVITY,
+			ArenaMap.STEP_HEIGHT, tunables.max_speed, tunables.jump_height,
+			tunables.gravity, tunables.step_height
+		]
+	)
+
+	# Printed rather than only asserted, for the reason `_test_bot_ground_speed` gives:
+	# a detail line is shown only when a check fails, so an assertion on its own hides
+	# the measurement again the moment it starts passing. These four numbers are the
+	# whole of what a map here may ask for.
+	print("  ..    a jump peaks at %.2f m; climb limit %.2f m; reach %.2f m flat, "
+		% [ArenaMap.JUMP_HEIGHT, ArenaMap.climb_limit(), ArenaMap.jump_reach(0.0)]
+		+ "%.2f m onto the limit" % ArenaMap.jump_reach(ArenaMap.climb_limit()))
+
+	var too_high := PackedStringArray()
+	var too_far := PackedStringArray()
+	var total := 0
+
+	for id in ArenaMap.ids():
+		var map := ArenaMap.by_id(id)
+
+		if map == null:
+			continue
+
+		for climb in map.climbs:
+			total += 1
+
+			# A rise at or under `step_height` is walked rather than jumped, and a
+			# walked rise has no airborne phase to spend on a gap — so it is only
+			# legal when the two boxes touch. Splitting the two cases matters: the
+			# route onto dm_atrium's ring is a 0.1 m step with no gap, and judging it
+			# by `jump_reach(0.1)` would call a stair a jump.
+			var walked: bool = climb.rise <= ArenaMap.STEP_HEIGHT and climb.gap <= 0.001
+
+			if walked:
+				continue
+
+			if climb.rise > ArenaMap.climb_limit():
+				too_high.append("%s rises %.2f m" % [climb.name, climb.rise])
+				continue
+
+			var reach := ArenaMap.jump_reach(climb.rise)
+
+			if climb.gap > reach:
+				too_far.append(
+					"%s crosses %.2f m with %.2f m of reach" % [climb.name, climb.gap, reach]
+				)
+
+	_check(total >= 20, "every map declares the climbs it expects", "%d climbs" % total)
+	_check(
+		too_high.is_empty(),
+		"and no climb on any map asks for more height than a jump has",
+		"; ".join(too_high)
+	)
+	_check(
+		too_far.is_empty(),
+		"and none asks a player to cross more air than they can carry",
+		"; ".join(too_far)
+	)
+
+
+## A bot driven up `dm_atrium`'s crates, start to roof.
+##
+## [b]The sweep above is arithmetic and this is the thing itself.[/b] Both are needed
+## and they fail differently: the sweep says a route is impossible without anybody
+## having to guess where the bot got stuck, and this says the route is actually
+## connected — that the crates overlap enough to land on, that nothing on the way up is
+## a slot narrower than a player, and that a bot holding one direction ends up on the
+## roof rather than in the corner beside it.
+##
+## [b]It holds jump, and this is the one check in the file that may.[/b] The rule
+## `_test_bot_ground_speed` writes down is that a bot which has to COVER GROUND does not
+## hold jump, because `max_air_wish_speed` is 1.2 and a bot cannot strafe. This bot has
+## to gain height rather than ground, `auto_hop` is on, and eighteen metres is short
+## enough that bleeding to the air cap does not stop it arriving.
+func _test_crate_climb() -> void:
+	_group("dm_atrium: the crates, climbed")
+
+	var map := ArenaMap.dm_atrium()
+
+	var climber := ArenaPlayer.new()
+	climber.name = "Climber"
+	add_child(climber)
+	climber.setup(ArenaPlayer.Mode.HEADLESS, map, 9002, "climber")
+
+	# On the yard floor south of the first crate. The column runs north up x 12.5..16,
+	# so the bot starts in the middle of it and holds north.
+	var start := Vector3(14.2, 0.5, 29.0)
+	climber.controller.teleport(start)
+
+	var tick_rate := 64
+	var delta := 1.0 / float(tick_rate)
+	var peak := start.y
+	var top_of_stack := false
+	var on_the_ring := false
+
+	# [b]Two held directions, and the switch is the honest part.[/b] The column climbs
+	# north and the ring is west of the top of it, so a single held key cannot finish
+	# this route — and re-aiming a bot continuously would make its arrival a statement
+	# about the steering rather than about the map. So: north and jump until it is up,
+	# then west and no jump. Each leg is one key, held, exactly as every other map
+	# check in this file drives one. `game-simple-lobby`'s gallery walk is driven the
+	# same way for the same reason.
+	# Twenty-four seconds. The climbing leg holds jump, and a bot holding jump travels
+	# at a fraction of walking pace — `_test_bot_ground_speed` measures exactly that —
+	# so eighteen metres of stack costs most of the budget and the walk along the roof
+	# gets what is left. At sixteen seconds it arrived on the ring with two ticks to
+	# spare and the check read like a failure of the map.
+	for tick in range(tick_rate * 24):
+		var command := DotFpsCommand.new()
+		command.yaw = 0.0
+		command.pitch = 0.0
+
+		if top_of_stack:
+			# [b]North-west, not west.[/b] The bot arrives at the landing's south-east
+			# corner, and the 4 m of roof ring adjacent to the landing is its northern
+			# half — so a bot that turns due west crosses x 10 a metre and a half south
+			# of anything and falls into the yard. One held direction still, just a
+			# diagonal one.
+			command.move = Vector2(-1.0, 1.0).normalized()
+		else:
+			command.move = Vector2(0.0, 1.0)
+			command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+
+		climber.controller.apply_command(command)
+		climber.controller.simulate_tick(tick, delta)
+
+		var at: Vector3 = climber.controller.state.position
+		peak = maxf(peak, at.y)
+
+		# [b]Standing on the top of the stack, which is `is_grounded` and not a height
+		# band.[/b] The first version of this asked for y above 4.45 below z 12 and
+		# passed on the JUMP from the fourth crate: that crate's top is 3.6 and an apex
+		# is 1.25 above wherever it left, so a bot that never reached the fifth crate
+		# at all crosses 4.45 twice on its way past. A height a player is briefly at is
+		# not a height a player got to — this is `[bonus-run-2]`'s "the check read the
+		# pad the respawn had put it back on" in a different costume.
+		if (
+			not top_of_stack
+			and climber.controller.state.is_grounded()
+			and at.y > 4.45
+			and at.z < 12.0
+		):
+			top_of_stack = true
+
+		# And then on the roof ring itself. The landing's top is 4.5 and the ring's is
+		# 4.6, so height alone is a tenth of a metre of daylight and not worth resting
+		# a check on; x is decisive, because the landing's west face IS the ring's east
+		# edge at x 10. Grounded, above the landing, west of it.
+		if (
+			top_of_stack
+			and climber.controller.state.is_grounded()
+			and at.y > 4.55
+			and at.x < 9.9
+		):
+			on_the_ring = true
+			break
+
+	var at: Vector3 = climber.controller.state.position
+
+	print("  ..    the climber reached y %.2f, ended at (%.1f, %.2f, %.1f)"
+		% [peak, at.x, at.y, at.z])
+
+	_check(
+		top_of_stack,
+		"a bot holding north and jump at the south-east crates climbs all five",
+		"peak y %.2f, ended at (%.1f, %.2f, %.1f)" % [peak, at.x, at.y, at.z]
+	)
+	_check(
+		on_the_ring,
+		"and walking west off the landing puts it on the roof ring",
+		"ended at (%.1f, %.2f, %.1f)" % [at.x, at.y, at.z]
+	)
+
+	climber.queue_free()
+	remove_child(climber)
 
 
 ## The first mode in this game that needs tagged spawns, or null if there is none.
@@ -2995,18 +3211,30 @@ func _test_atrium() -> void:
 	# sets of records to describe a change neither of them had.
 	var versions := ArenaMaps.catalogue()
 
+	# [b]All three moved on 2026-09-22, which is the first time that has happened and
+	# does not weaken the check.[/b] They moved for one cause — every climb on every
+	# map was above the jump apex — but they are still three separate changes to three
+	# separate maps, and a shared constant would have had to say "1.2.0" about dm_box,
+	# whose geometry moved by three crates and not by a rebuilt route.
+	var expected := {&"dm_atrium": "1.2.0", &"dm_pit": "1.2.0", &"dm_box": "1.1.0"}
+	var wrong := PackedStringArray()
+
+	for id: StringName in expected:
+		var def := versions.get_map(id)
+
+		if def == null or def.version != expected[id]:
+			wrong.append("%s at %s, wanted %s" % [
+				id, "absent" if def == null else def.version, expected[id]
+			])
+
 	_check(
-		versions.get_map(&"dm_atrium") != null
-			and versions.get_map(&"dm_atrium").version == "1.1.0",
-		"the catalogue carries dm_atrium at the version its geometry is at",
-		"" if versions.get_map(&"dm_atrium") == null
-			else versions.get_map(&"dm_atrium").version
+		wrong.is_empty(),
+		"the catalogue carries every map at the version its geometry is at",
+		"; ".join(wrong)
 	)
 	_check(
-		versions.get_map(&"dm_box") != null
-			and versions.get_map(&"dm_box").version == ArenaMaps.MAP_VERSION
-			and versions.get_map(&"dm_pit").version == ArenaMaps.MAP_VERSION,
-		"and leaves the two maps that did not move where they were"
+		versions.get_map(&"dm_box").version != versions.get_map(&"dm_atrium").version,
+		"and two maps that moved by different amounts do not share a version"
 	)
 
 	# [b]The stair onto the arcade roof, walked.[/b] Same shape as the north-west stair

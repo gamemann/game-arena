@@ -61,6 +61,151 @@ var id: StringName = &"dm_box"
 var display_name: String = "dm_box"
 
 
+## Every climb this map asks a player to make, derived from the boxes themselves.
+##
+## [b]Always append through [method add_climb], and never write this by hand.[/b] See
+## [method jump_reach] for why this list exists at all.
+var climbs: Array[Climb] = []
+
+
+## One step up a map expects a player to make, measured off the geometry it is made of.
+##
+## [b]Constructed from the two boxes rather than from two numbers.[/b] A climb written
+## as `add_climb("the crates", 1.5, 3.0, 0.5)` is a fourth description of geometry that
+## is already described three times, and it goes stale the first time somebody moves a
+## crate — which is the failure this whole class exists to catch, reintroduced one level
+## up. Reading the boxes means the declaration cannot disagree with the map: what is
+## declared is only WHICH two boxes are a route, and that is the one thing the geometry
+## genuinely does not say.
+class Climb:
+	extends RefCounted
+
+	## What to call it when the check fails.
+	var name: String = ""
+
+	## Metres gained, top face to top face.
+	var rise: float = 0.0
+
+	## Clear horizontal air between the two footprints. Zero when they touch or overlap,
+	## which is a step across rather than a jump.
+	var gap: float = 0.0
+
+	static func between(of_name: String, from_box: AABB, to_box: AABB) -> Climb:
+		var climb := Climb.new()
+		climb.name = of_name
+		climb.rise = to_box.end.y - from_box.end.y
+		climb.gap = maxf(
+			_clear_between(from_box.position.x, from_box.end.x, to_box.position.x, to_box.end.x),
+			_clear_between(from_box.position.z, from_box.end.z, to_box.position.z, to_box.end.z)
+		)
+		return climb
+
+	## The clear air between two intervals, or 0 when they overlap.
+	##
+	## [b]The larger of the two axes is the gap, not the diagonal.[/b] Two boxes offset
+	## on both axes are crossed by jumping along whichever axis separates them; the
+	## diagonal between their nearest corners is a distance no player travels, and using
+	## it would refuse routes that are comfortably crossable.
+	static func _clear_between(a_min: float, a_max: float, b_min: float, b_max: float) -> float:
+		if b_min >= a_max:
+			return b_min - a_max
+
+		if a_min >= b_max:
+			return a_min - b_max
+
+		return 0.0
+
+
+# --- What the movement can actually do -------------------------------------
+#
+# [b]The three numbers every gap on every map here is sized against, copied from
+# `ArenaPlayer.arena_tunables()` deliberately.[/b] A map is content: `by_id` is called
+# from a tool and from a catalogue listing with no player anywhere in the tree, and
+# reaching into the game's player class from a map would make content depend on the
+# game rather than the other way round. The family's answer to a deliberate copy is a
+# check that the copies agree, and `headless_match` asserts these three against the
+# tunables the server actually applies.
+
+## Ground speed, m/s. `DotFpsTunables.max_speed`.
+const MOVE_SPEED := 9.0
+
+## Metres. `DotFpsTunables.jump_height`, which is the PEAK of a standing jump and not
+## the height of something a player can climb onto by walking at it.
+const JUMP_HEIGHT := 1.25
+
+## m/s². `DotFpsTunables.gravity`. Not Godot's project default, which is 9.8.
+const MOVE_GRAVITY := 22.0
+
+## Metres. `DotFpsTunables.step_height`: a rise under this is WALKED, not jumped.
+const STEP_HEIGHT := 0.4
+
+## How much of the jump has to be left over at the top.
+##
+## A player landing at exactly [constant JUMP_HEIGHT] arrives with zero vertical speed
+## at the one instant of the arc where a tick either side of it is short — which is a
+## step that works when the tick lands right and does not when it does not. A map whose
+## routes are 90% of the apex is a map that works every time.
+const CLIMB_MARGIN := 0.9
+
+
+## The highest top face a player standing on flat ground can reach, in metres.
+##
+## [b]This is the number three maps in this game were built without.[/b] `jump_height`
+## reads like the height of a thing you can get onto and it is the apex of the arc, so
+## a crate at 1.5 with `jump_height` 1.25 looks like a 0.25 m stretch and is in fact a
+## wall. `dm_atrium`'s south-east crates were 1.5, 3.0 and 4.6 from the day the map was
+## written: a route the map's own documentation called "the fast way up" that nothing
+## has ever climbed, because nothing had ever been asked to.
+static func climb_limit() -> float:
+	return JUMP_HEIGHT * CLIMB_MARGIN
+
+
+## The clear air a player running at [constant MOVE_SPEED] crosses in one jump, landing
+## [param rise] metres higher than they left.
+##
+## [b]The landing height is the whole point of this function.[/b] The airtime everybody
+## writes down is the time to fall back to the height you jumped FROM, and it is the
+## wrong number for any route that climbs: at this game's numbers a player is airborne
+## for 0.67 s flat and 0.40 s onto a step 1.2 m up, which is 6.1 m of reach against
+## 3.6. `game-playground` sized a jump course with the first number, was 30% out, and
+## was unfinishable past platform three from the day it was built — see `[reach-1]` in
+## `nightly-todo.md`. This is that arithmetic for this game's movement.
+##
+## Returns 0.0 for a rise no jump reaches at all, which is the honest answer: there is
+## no gap you can cross onto something you cannot get on top of.
+static func jump_reach(rise: float) -> float:
+	var launch := sqrt(2.0 * MOVE_GRAVITY * JUMP_HEIGHT)
+	var remaining := launch * launch - 2.0 * MOVE_GRAVITY * rise
+
+	if remaining < 0.0:
+		return 0.0
+
+	# The DESCENDING root. The ascending one is the same height on the way up, which is
+	# a shorter jump that lands on the near lip rather than the far one.
+	return MOVE_SPEED * (launch + sqrt(remaining)) / MOVE_GRAVITY
+
+
+## Declares that [param to_box] is meant to be reached from [param from_box].
+##
+## [b]The only hand-written part is which two boxes are a route.[/b] Everything
+## measured about the climb comes off the boxes, so moving a crate moves the climb with
+## it and `headless_match`'s sweep re-decides it. A climb is not checked against
+## anything here — a map is content and content does not assert — it is checked in the
+## suite, where failing is useful.
+func add_climb(of_name: String, from_box: AABB, to_box: AABB) -> ArenaMap:
+	climbs.append(Climb.between(of_name, from_box.abs(), to_box.abs()))
+	return self
+
+
+## The ground plane as a box, so that "off the floor" is an ordinary climb.
+##
+## Wide enough that its footprint contains every map, which is what makes the gap of a
+## climb out of it zero — a player standing on the ground is already underneath whatever
+## they are about to jump onto, and the only thing that decides the jump is the rise.
+static func _floor_at(y: float) -> AABB:
+	return AABB(Vector3(-1000.0, y - 1.0, -1000.0), Vector3(2000.0, 1.0, 2000.0))
+
+
 ## The shipped arena: a square room, a raised centre, four pillars, two ledges.
 ##
 ## Symmetric on purpose. A symmetric map makes every spawn point score identically for
@@ -83,9 +228,64 @@ static func dm_box() -> ArenaMap:
 			Vector3(corner.x - 1.5, 0.0, corner.y - 1.5), Vector3(3.0, 5.0, 3.0)
 		))
 
-	# Two ledges along opposite walls, reachable from the pillars.
-	map.add_box(AABB(Vector3(-map.extent, 3.0, -18.0), Vector3(6.0, 0.6, 36.0)))
-	map.add_box(AABB(Vector3(map.extent - 6.0, 3.0, -18.0), Vector3(6.0, 0.6, 36.0)))
+	# Two ledges along opposite walls, top face at 3.6.
+	var west_ledge := AABB(Vector3(-map.extent, 3.0, -18.0), Vector3(6.0, 0.6, 36.0))
+	var east_ledge := AABB(Vector3(map.extent - 6.0, 3.0, -18.0), Vector3(6.0, 0.6, 36.0))
+
+	map.add_box(west_ledge)
+	map.add_box(east_ledge)
+
+	# --- Getting onto them -------------------------------------------------
+	#
+	# [b]This comment used to read "reachable from the pillars" and they were not
+	# reachable from anywhere.[/b] The pillars are 5 m tall against a 1.25 m jump
+	# APEX, so nothing has ever stood on one; the ledges are at 3.6 with the raised
+	# middle at 1.0 as the next highest thing on the map. Both ledges have been
+	# geometry a player can be shot from and cannot get to since the day dm_box was
+	# written, and every check over this map passed the whole time, because a box
+	# count cannot tell a platform from a ceiling. See [method jump_reach].
+	#
+	# Three crates to each ledge, 0.9 at a time to 2.7 and a fourth 0.9 onto the
+	# ledge itself — 72% of the apex per step, so each is a jump and none is a
+	# stretch. Each crate is 1.0 m of clear air north of the last, which at this rise
+	# is a quarter of what the movement crosses.
+	#
+	# [b]Mirrored, and that is not decoration.[/b] This map is symmetric so that every
+	# spawn scores identically for the spawn selector, which is the tie its name-based
+	# tie-break exists to break — it is the property dm_box ships FOR, and the reason
+	# the arcade went on dm_atrium instead. A route added to one wall and not the
+	# other would take that away for the sake of a shortcut.
+	for side in [-1.0, 1.0]:
+		var previous := AABB()
+
+		for step in range(3):
+			var top := 0.9 * float(step + 1)
+			var crate := AABB(
+				Vector3(
+					-17.0 if side < 0.0 else 14.5,
+					0.0,
+					# Mirrored about z 0 through the CENTRE, not the corner: signing a
+					# corner reflects the box onto the wrong side of itself and the two
+					# walls stop being each other's mirror, which is the one thing this
+					# map may not lose.
+					side * (6.25 - float(step) * 3.5) - 1.25
+				),
+				Vector3(2.5, top, 2.5)
+			)
+			map.add_box(crate)
+
+			if step == 0:
+				map.add_climb("dm_box: the floor onto the first crate", _floor_at(0.0), crate)
+			else:
+				map.add_climb("dm_box: crate %d onto crate %d" % [step, step + 1], previous, crate)
+
+			previous = crate
+
+		map.add_climb(
+			"dm_box: the top crate onto the %s ledge" % ["west" if side < 0.0 else "east"],
+			previous,
+			west_ledge if side < 0.0 else east_ledge
+		)
 
 	map.add_perimeter()
 
@@ -121,8 +321,9 @@ static func dm_box() -> ArenaMap:
 ##
 ## - [b]the north-west stair[/b], eight steps, walkable, the route that costs nothing
 ##   and is the one everybody can see you take;
-## - [b]the south-east crates[/b], three jumps, faster, and it leaves you on the far
-##   side from the stair;
+## - [b]the south-east crates[/b], five jumps, faster, and it leaves you on the far
+##   side from the stair. [b]Three jumps until 2026-09-22, and unclimbable for every
+##   one of those days[/b] — the steps were 1.5 m against a 1.25 m jump apex;
 ## - [b]the north-east perch[/b], reached only from the roof by three 0.7 m hops. It
 ##   looks over the shaft from above the ring, and it is the only place on the map with
 ##   no cover at all — the trade the height is paid for.
@@ -167,8 +368,10 @@ static func dm_atrium() -> ArenaMap:
 	# The roof, as a ring 4 m wide with a 12 x 12 shaft open in the middle. Overhangs
 	# the wall inward by 2.5 m, so a player on the ring is standing over the room and
 	# a player in the room has to step out from under it to shoot back.
+	var ring_south := AABB(Vector3(-10.0, WALL_H, 6.0), Vector3(20.0, 0.6, 4.0))
+
 	map.add_box(AABB(Vector3(-10.0, WALL_H, -10.0), Vector3(20.0, 0.6, 4.0)))
-	map.add_box(AABB(Vector3(-10.0, WALL_H, 6.0), Vector3(20.0, 0.6, 4.0)))
+	map.add_box(ring_south)
 	map.add_box(AABB(Vector3(-10.0, WALL_H, -6.0), Vector3(4.0, 0.6, 12.0)))
 	map.add_box(AABB(Vector3(6.0, WALL_H, -6.0), Vector3(4.0, 0.6, 12.0)))
 
@@ -194,20 +397,97 @@ static func dm_atrium() -> ArenaMap:
 
 	# --- South-east crates -------------------------------------------------
 	#
-	# 1.5, 3.0, 4.6 — the last flush with the roof ring's top face. Three jumps instead
-	# of eight steps, and it puts you on the opposite corner from whoever took the
-	# stair.
-	map.add_box(AABB(Vector3(14.0, 0.0, 12.0), Vector3(3.5, 1.5, 3.5)))
-	map.add_box(AABB(Vector3(13.0, 0.0, 7.0), Vector3(3.5, 3.0, 3.5)))
-	map.add_box(AABB(Vector3(10.0, 0.0, 4.0), Vector3(3.5, 4.6, 3.5)))
+	# [b]Rebuilt 2026-09-22, because the route this map advertises as its fast way up
+	# has never once been climbed.[/b] It was three crates at 1.5, 3.0 and 4.6, and
+	# every one of those steps is a 1.5 m rise against a jump whose APEX is 1.25 — so
+	# a player could not get onto the first crate, let alone the roof. Nothing caught
+	# it in the year it stood there: the box count was right, the three
+	# representations agreed, no spawn was buried in it, and not one check in the
+	# suite had ever asked a bot to climb it. See [method jump_reach] and `[reach-1]`.
+	#
+	# Five crates now, 0.9 m apart, each 0.5 m of clear air north of the last. That is
+	# 72% of [method climb_limit] per step and a tenth of the reach per gap, so the
+	# route is a rhythm rather than a series of stretches — which is what "the fast way
+	# up" was always supposed to mean. It costs two more crates and it is the first
+	# version of this route a player can use.
+	#
+	# The stack climbs NORTH up the east side rather than north-west across the corner,
+	# for the join below: the fourth crate's top is 3.6, the arcade roof's top is 3.6,
+	# and they stand 0.5 m apart. The arcade's east end is a step across at the same
+	# height in both directions, which is what that route was always documented to be
+	# and what a stack of the wrong heights had quietly made one-way.
+	# [b]A straight column rather than a diagonal across the corner, and that was a
+	# bot's doing.[/b] The first rebuild stepped 1 m west as well as 4 m north per
+	# crate, which is a 14° diagonal, and a bot aimed down it reached the third crate
+	# and walked off the west edge of the fourth — 2.5 m of shared face is plenty to
+	# land on and not enough to keep walking along when the surface under you keeps
+	# moving sideways. A column is a route a player can hold one key down and climb,
+	# which is what "the fast way up" has to mean before it can mean anything else.
+	var crates: Array[AABB] = []
+
+	for step in range(4):
+		crates.append(AABB(
+			Vector3(12.5, 0.0, 24.0 - float(step) * 4.0),
+			Vector3(3.5, 0.9 * float(step + 1), 3.5)
+		))
+		map.add_box(crates[step])
+
+	# [b]The landing: the fifth step up, and a platform rather than a fifth crate.[/b]
+	# It is 6 m by 5.5 at 4.5, filling the outside of the building's south-east corner
+	# and touching the roof ring along the whole 4 m of its south arm that reaches x
+	# 10. A crate the size of the other four would have been the same height and still
+	# useless: a bot that climbed it stood at z 11.4 — a metre and a half south of the
+	# band of the ring that is actually adjacent — and walked west off it into the
+	# yard, which is exactly what happened on the first attempt at this. A route's last
+	# step has to overlap what it joins, not merely reach its height near it.
+	#
+	# It must not be wider still: the column has to stand clear of the arcade's east
+	# end, and a box reaching further south would bury the last pier and grow through
+	# the arcade roof.
+	var landing := AABB(Vector3(10.0, 0.0, 6.0), Vector3(6.0, 4.5, 5.5))
+
+	map.add_box(landing)
+
+	map.add_climb("dm_atrium: the yard onto the first crate", _floor_at(0.0), crates[0])
+
+	for step in range(1, 4):
+		map.add_climb(
+			"dm_atrium: crate %d onto crate %d" % [step, step + 1],
+			crates[step - 1],
+			crates[step]
+		)
+
+	map.add_climb("dm_atrium: the top crate onto the landing", crates[3], landing)
 
 	# --- North-east perch --------------------------------------------------
 	#
 	# Only from the roof, and only by jumping: 4.6 -> 5.3 -> 6.0 -> 6.7. Nothing on the
 	# ground reaches it, which is what stops it being the place everyone stands.
-	map.add_box(AABB(Vector3(11.0, 0.0, -9.0), Vector3(2.5, 5.3, 3.0)))
-	map.add_box(AABB(Vector3(13.5, 0.0, -9.0), Vector3(2.5, 6.0, 3.0)))
-	map.add_box(AABB(Vector3(16.0, 0.0, -12.0), Vector3(5.0, 6.7, 8.0)))
+	var perch_boxes: Array[AABB] = [
+		AABB(Vector3(11.0, 0.0, -9.0), Vector3(2.5, 5.3, 3.0)),
+		AABB(Vector3(13.5, 0.0, -9.0), Vector3(2.5, 6.0, 3.0)),
+		AABB(Vector3(16.0, 0.0, -12.0), Vector3(5.0, 6.7, 8.0)),
+	]
+
+	for box in perch_boxes:
+		map.add_box(box)
+
+	# 4.6 -> 5.3 -> 6.0 -> 6.7, all off the ring's east arm. These three were the only
+	# climbs on this map that were ever inside what the movement can do, which is why
+	# the sweep in `headless_match` has to cover the routes that LOOK fine as well as
+	# the ones somebody is suspicious of.
+	map.add_climb(
+		"dm_atrium: the ring onto the first perch step",
+		AABB(Vector3(6.0, WALL_H, -6.0), Vector3(4.0, 0.6, 12.0)),
+		perch_boxes[0]
+	)
+	map.add_climb("dm_atrium: the perch's second step", perch_boxes[0], perch_boxes[1])
+	map.add_climb("dm_atrium: the perch itself", perch_boxes[1], perch_boxes[2])
+
+	# The top of the crates onto the roof ring's south-east corner. 0.1 m, which is
+	# under `step_height` and is therefore walked — a route that ends in a jump you
+	# might miss is a route that ends at the bottom of it.
+	map.add_climb("dm_atrium: the landing onto the roof ring", landing, ring_south)
 
 	# --- South-west bunker -------------------------------------------------
 	#
@@ -245,8 +525,8 @@ static func dm_atrium() -> ArenaMap:
 	#
 	# - [b]the south stair[/b], ten treads of 0.36, walked rather than jumped, out in
 	#   the open at the back of the yard and the slowest thing on the map;
-	# - [b]the east end[/b], a step across and down onto the second south-east crate,
-	#   which joins the arcade to the existing three-jump route to the ring;
+	# - [b]the east end[/b], a step across onto the fourth south-east crate, level with
+	#   it, which joins the arcade to the five-jump route to the ring;
 	# - [b]down[/b], anywhere, which is what stops the roof being a place to camp.
 	const ARC_X := -13.2
 	const ARC_W := 25.2
@@ -256,7 +536,19 @@ static func dm_atrium() -> ArenaMap:
 	const ARC_T := 0.6
 	const PIER := 1.5
 
-	map.add_box(AABB(Vector3(ARC_X, ARC_Y, ARC_Z), Vector3(ARC_W, ARC_T, ARC_D)))
+	var arcade_roof := AABB(Vector3(ARC_X, ARC_Y, ARC_Z), Vector3(ARC_W, ARC_T, ARC_D))
+
+	map.add_box(arcade_roof)
+
+	# [b]The east end, in both directions.[/b] The arcade roof's top is 3.6 and so is
+	# the fourth crate's, and they stand 0.5 m apart — declared as two climbs rather
+	# than one because a route is not symmetric just because its geometry is: a step
+	# ACROSS is a rise of zero each way here, and the day either top face moves this
+	# says so twice. Before the crates were rebuilt this join went down 0.6 onto a
+	# crate at 3.0 and could not be climbed back, which made the arcade a one-way
+	# street that the map's own notes described as a connection.
+	map.add_climb("dm_atrium: the arcade roof onto the crates", arcade_roof, crates[3])
+	map.add_climb("dm_atrium: the crates onto the arcade roof", crates[3], arcade_roof)
 
 	# Five piers on each long edge. 3.9 m of daylight between them, which is wider than
 	# the building's doorways -- the arcade is meant to be shot into, and a colonnade
@@ -353,8 +645,10 @@ static func dm_atrium() -> ArenaMap:
 ## - [b]the north-west stair[/b], ten treads of 0.36, walkable, slow, and in the open;
 ## - [b]the south-east stair[/b], its mirror, so the two long diagonals are symmetric
 ##   and nothing else on the map is;
-## - [b]the north-east crates[/b], two jumps and a third onto the ring, which is the
-##   fast way and the only one that does not announce itself.
+## - [b]the north-east crates[/b], three jumps and a fourth onto the ring, which is
+##   the fast way and the only one that does not announce itself. [b]Two jumps until
+##   2026-09-22, the first of them onto a 1.4 m crate, and a jump here peaks at
+##   1.25[/b] — so it was the fast way up for nobody.
 ##
 ## Down is free everywhere, which is what keeps the pit from being a trap: the ring is
 ## worth holding for as long as nobody has decided to drop on you.
@@ -423,10 +717,34 @@ static func dm_pit() -> ArenaMap:
 
 	# --- The north-east crates ---------------------------------------------
 	#
-	# 1.4, then 2.6, then the ring at 3.6. Two jumps and a hop, none of them over
-	# 1.2 m, and the last one crosses a 0.5 m gap onto the north arm.
-	map.add_box(AABB(Vector3(6.0, 0.0, -6.5), Vector3(2.5, 1.4, 2.5)))
-	map.add_box(AABB(Vector3(8.0, 0.0, -10.5), Vector3(2.5, 2.6, 2.5)))
+	# [b]Rebuilt 2026-09-22 alongside dm_atrium's, and for the same reason.[/b] It was
+	# 1.4 then 2.6 then the ring at 3.6, described in this file as "none of them over
+	# 1.2 m" — which was true of the second and third step and not of the first, and
+	# 1.2 would not have been climbable either. A jump's APEX here is 1.25, so the
+	# first crate was 0.15 m above everything a player on the pit floor can reach and
+	# the whole route started with a wall. The one route on this map that does not
+	# announce itself was the one route nobody could take.
+	#
+	# Three crates at 0.9 now, and the ring is a fourth 0.9 off the top one. Every gap
+	# is 0.5 m of clear air, and the last crate's north face is flush with the north
+	# arm's inner edge so the step onto the ring has no gap at all.
+	var pit_crates: Array[AABB] = [
+		AABB(Vector3(5.0, 0.0, -5.0), Vector3(2.5, 0.9, 2.5)),
+		AABB(Vector3(5.5, 0.0, -8.0), Vector3(2.5, 1.8, 2.5)),
+		AABB(Vector3(6.0, 0.0, -11.0), Vector3(2.5, 2.7, 2.5)),
+	]
+
+	for box in pit_crates:
+		map.add_box(box)
+
+	map.add_climb("dm_pit: the pit floor onto the first crate", _floor_at(0.0), pit_crates[0])
+	map.add_climb("dm_pit: crate 1 onto crate 2", pit_crates[0], pit_crates[1])
+	map.add_climb("dm_pit: crate 2 onto crate 3", pit_crates[1], pit_crates[2])
+	map.add_climb(
+		"dm_pit: the top crate onto the north arm",
+		pit_crates[2],
+		AABB(Vector3(-14.0, RING_Y, -14.0), Vector3(28.0, RING_T, 3.0))
+	)
 
 	# --- Cover in the pit --------------------------------------------------
 	#
@@ -459,10 +777,20 @@ static func dm_pit() -> ArenaMap:
 	const SHELF_TOP := 4.5
 	const PERCH_TOP := 5.4
 
-	map.add_box(AABB(Vector3(-11.0, 0.0, 7.0), Vector3(4.0, SHELF_TOP, 4.0)))
-	map.add_box(AABB(
+	var shelf := AABB(Vector3(-11.0, 0.0, 7.0), Vector3(4.0, SHELF_TOP, 4.0))
+	var perch := AABB(
 		Vector3(-11.0, SHELF_TOP, 9.0), Vector3(2.0, PERCH_TOP - SHELF_TOP, 2.0)
-	))
+	)
+
+	map.add_box(shelf)
+	map.add_box(perch)
+
+	map.add_climb(
+		"dm_pit: the west arm onto the shelf",
+		AABB(Vector3(-14.0, RING_Y, -RING_IN), Vector3(3.0, RING_T, 22.0)),
+		shelf
+	)
+	map.add_climb("dm_pit: the shelf onto the perch", shelf, perch)
 
 	map.add_perimeter()
 
