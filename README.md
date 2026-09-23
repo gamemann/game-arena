@@ -44,6 +44,7 @@ No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` regis
 godot --headless --path . res://examples/headless_match.tscn   # a whole deathmatch
 godot --headless --path . res://examples/headless_net.tscn     # the netcode
 godot --headless --path . res://examples/dedicated.tscn        # a real DotServer
+godot --headless --path . res://examples/headless_admin.tscn   # an admin's live tools on it
 ```
 
 Or, once [dot-serve](https://github.com/modcommunity/dot-serve) is installed:
@@ -109,13 +110,31 @@ done
 godot --headless --path . res://examples/headless_match.tscn
 godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
+godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match`: 75 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
+`headless_match`: 302 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
 
-`headless_net`: 62 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, and the two stay together under loss.
+`headless_net`: 123 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, and a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding.
 
-`dedicated`: 21 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+`dedicated`: 93 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+
+`headless_admin`: 32 checks over eight sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, and a player with no flags is refused.
+
+### The admin tools
+
+dot-moderation's live tools, with this game's verbs in `game/arena_mod_tools.gd`. Everything is typable in chat with a `!`:
+
+| Command | Flag | |
+| --- | --- | --- |
+| `noclip`, `god`, `buddha` `[player] [on\|off]` | `cheats` | bare, they act on you |
+| `hp <player> <n>`, `speed <player> <x>`, `gravity <player> <x>` | `cheats` | speed and gravity are steps from 0.25× to 3×, so the client can predict them |
+| `give <player> <weapon>`, `strip <player>` | `cheats` | |
+| `freeze <player> [seconds]`, `unfreeze`, `slay`, `slap <player> [damage]`, `respawn`, `rename`, `burn` | `slay` | |
+| `bring`, `goto`, `send <player> <to>`, `return` | `teleport` | |
+| `modtools [player]` | `generic` | what this game supports, or what is on somebody |
+
+Targets are anything `kick` takes, plus `@me`, `@all`, `@others`, `@alive`, `@dead` and `@team:<n>`. `blind` and `beacon` are refused, because the client draws nothing a server could turn on for them.
 
 ## Licence
 

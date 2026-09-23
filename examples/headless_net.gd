@@ -9,6 +9,7 @@ const ArenaMaps := preload("../game/arena_maps.gd")
 const ArenaNetBridge := preload("../game/arena_net_bridge.gd")
 const ArenaNetCommand := preload("../game/arena_net_command.gd")
 const ArenaNetLink := preload("../game/arena_net_link.gd")
+const ArenaPlayer := preload("../game/arena_player.gd")
 const ArenaPlayerNet := preload("../game/arena_player_net.gd")
 
 ## Two clients, one server, one process, and a lossy wire between them.
@@ -29,7 +30,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 116
+const CHECKS := 123
 
 var _passed := 0
 var _failed := 0
@@ -70,6 +71,7 @@ func _run() -> void:
 	_test_predicted_node_is_not_moved()
 	await _test_map_sync_wire()
 	_test_voice_wire()
+	_test_forced_noclip_is_predicted()
 	_test_disconnect()
 
 	print("")
@@ -720,9 +722,160 @@ func _test_disconnect() -> void:
 
 	# The remaining player must keep working, which is the thing a removal most often
 	# breaks: a stale entry in the command table would crash the next tick.
-	_server_bridge.server_tick(RUN_TICKS + 41)
-	_check(_server_game.current_tick() == RUN_TICKS + 41, "the server ticks on")
+	var next := _server_game.current_tick() + 1
+	_server_bridge.server_tick(next)
+	_check(_server_game.current_tick() == next, "the server ticks on")
 
+
+## An administrator noclips a player on the server, and the player's own client — which
+## has no noclip permission of its own — has to PREDICT it.
+##
+## [b]The symptom this exists for is rubber-banding, and no server-side check can see
+## it.[/b] Set naively — `state.mode = NOCLIP` on the server — the client's replay runs its
+## own noclip gate, which is closed, drops the player to AIR on every replayed tick, and is
+## pulled back by every snapshot: the player flickers between flying and falling while
+## every number on the server is right. So this flies the player straight up for a second
+## and compares, tick by tick, where the client predicted them against where the server
+## put them — once the shipped way and once the naive way, and requires the first to agree
+## and the second not to. Without the second half, "agrees" could be a window in which the
+## client was never asked to disagree.
+##
+## [b]Not `DotNetPredictor.correction_rate`.[/b] That was the first measure written here and
+## it read 0.0% for BOTH, with a worst error of 0.000 m across the whole run: it measures
+## the player NODE before and after a reconcile, and in this harness nothing moves the
+## node of a headless player between the two. A measure that cannot see the bug it is
+## pointed at is the family's "reports its healthy case while blind", so the comparison is
+## on the simulated state, which is what a player's camera follows.
+func _test_forced_noclip_is_predicted() -> void:
+	print("")
+	print("[an admin's noclip, predicted by the client it happens to]")
+
+	var entry: Dictionary = _clients[2]
+	var session := int(entry["session"])
+	var server_player: ArenaPlayer = _server_bridge.behaviour_for(session).player
+	var client_player: ArenaPlayer = (entry["bridge"] as ArenaNetBridge).behaviour_for(session).player
+
+	_check(
+		not client_player.controller.tunables.can_noclip,
+		"the client may not noclip on its own"
+	)
+
+	var on := DotFpsAdminModifiers.set_noclip(server_player.controller, true)
+	_check(on.ok, "the server holds player %d in noclip" % session, str(on.error))
+
+	var start_y: float = server_player.controller.state.position.y
+	var shipped := _flight_window(2, 64, DotFpsCommand.BUTTON_JUMP)
+
+	_check(
+		DotFpsAdminModifiers.is_noclipped(client_player.controller)
+		and client_player.controller.state.mode == DotFpsState.Mode.NOCLIP,
+		"the client learned it from the snapshots and is flying too"
+	)
+	_check(
+		server_player.controller.state.position.y > start_y + 5.0,
+		"the server's player rose into the air",
+		"y %.2f from %.2f" % [server_player.controller.state.position.y, start_y]
+	)
+	_check(
+		int(shipped["grounded_ticks"]) == 0,
+		"and the client never once predicted them out of noclip",
+		"%d of 64 ticks" % int(shipped["grounded_ticks"])
+	)
+	_check(
+		float(shipped["worst_gap"]) < 0.75,
+		"and never predicted them more than a hand's width from the server",
+		"worst %.2f m" % float(shipped["worst_gap"])
+	)
+
+	# Back to the ground, and then the version that does NOT work, for contrast.
+	var _off := DotFpsAdminModifiers.set_noclip(server_player.controller, false)
+	server_player.controller.teleport(Vector3(0.0, 0.1, 18.0))
+	var _settle := _flight_window(0, 24, 0)
+
+	server_player.controller.allow_noclip = true
+	server_player.controller.tunables.can_noclip = true
+	server_player.controller.state.mode = DotFpsState.Mode.NOCLIP
+
+	var naive := _flight_window(2, 64, DotFpsCommand.BUTTON_JUMP)
+	print("  measured: shipped %d ticks out of noclip, worst %.2f m; naive %d ticks, worst %.2f m" % [int(shipped["grounded_ticks"]), float(shipped["worst_gap"]), int(naive["grounded_ticks"]), float(naive["worst_gap"])])
+
+	_check(
+		int(naive["grounded_ticks"]) > 16 or float(naive["worst_gap"]) > 2.0,
+		"a mode set without the modifier is one the client does not predict: the rubber band",
+		"naive: %d ticks out of noclip, worst %.2f m — if this passes quietly, the checks above prove nothing"
+		% [int(naive["grounded_ticks"]), float(naive["worst_gap"])]
+	)
+
+	server_player.controller.allow_noclip = false
+	server_player.controller.tunables.can_noclip = false
+	server_player.controller.state.mode = DotFpsState.Mode.AIR
+	server_player.controller.teleport(Vector3(0.0, 0.1, 18.0))
+	var _land := _flight_window(0, 24, 0)
+
+
+## Runs [param ticks] more ticks with [param peer] holding [param buttons] and nothing else
+## (0 for nobody), and reports how far that peer's prediction of itself strayed from the
+## server's simulation of it: `{worst_gap, grounded_ticks}`, the second counting ticks the
+## client predicted it out of noclip.
+func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
+	var first := _server_game.current_tick() + 1
+	var worst := 0.0
+	var grounded := 0
+
+	# Measured only once a snapshot from inside the window has arrived. Until then the
+	# client cannot know anything the server did at the top of it — the first run of this
+	# measured 159 m, which was the client's copy still where an earlier section had
+	# parked it — and "the client has not heard yet" is latency, not rubber-banding.
+	var heard_before: int = (
+		int(_clients[peer]["net"].stats.packets_received) if peer != 0 else 0
+	)
+
+	for tick in range(first, first + ticks):
+		var commands := {}
+
+		for peer_id in _clients:
+			var pair := _commands_for(peer_id, tick)
+			if peer_id == peer:
+				var held := DotFpsCommand.new()
+				held.buttons = buttons
+				pair = [held, DotWeaponCommand.new()]
+			commands[peer_id] = pair
+
+			var packet: PackedByteArray = _clients[peer_id]["bridge"].encode_input(
+				tick, pair[0], pair[1]
+			)
+			_drop_up += 1
+			if _drop_up % LOSS_EVERY != 0:
+				_server_bridge.receive_input(peer_id, packet)
+
+		_server_bridge.server_tick(tick)
+
+		for entry_down in _downstream:
+			var target_peer: int = entry_down["peer"]
+			var targets: Array = _clients.keys() if target_peer == 0 else [target_peer]
+			for target in targets:
+				if _clients.has(target):
+					_clients[target]["bridge"].receive_snapshot(entry_down["bytes"])
+		_downstream.clear()
+
+		for peer_id in _clients:
+			var pair2: Array = commands[peer_id]
+			_clients[peer_id]["net"].clock.tick = tick
+			_clients[peer_id]["bridge"].client_tick(tick, pair2[0], pair2[1])
+
+		if peer == 0 or int(_clients[peer]["net"].stats.packets_received) == heard_before:
+			continue
+
+		var session := int(_clients[peer]["session"])
+		var predicted: ArenaPlayer = (_clients[peer]["bridge"] as ArenaNetBridge).behaviour_for(session).player
+		var actual: ArenaPlayer = _server_bridge.behaviour_for(session).player
+		worst = maxf(worst, predicted.controller.state.position.distance_to(
+			actual.controller.state.position
+		))
+		if predicted.controller.state.mode != DotFpsState.Mode.NOCLIP:
+			grounded += 1
+
+	return {"worst_gap": worst, "grounded_ticks": grounded}
 
 func _test_event_wire() -> void:
 	print("")

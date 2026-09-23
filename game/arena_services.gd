@@ -3,6 +3,7 @@ extends Node
 const ArenaGame := preload("arena_game.gd")
 const ArenaNetLink := preload("arena_net_link.gd")
 const ArenaPlayer := preload("arena_player.gd")
+const ArenaModTools := preload("arena_mod_tools.gd")
 
 ## Chat, voice and moderation on a dedicated arena server.
 ##
@@ -98,6 +99,10 @@ var chat: DotChatRouter = null
 var voice: DotVoiceRouter = null
 var moderation: DotModerationManager = null
 
+## dot-moderation's live tools — noclip, god, slay, bring and the rest — with this game's
+## handlers in them. [ArenaModule] puts their commands on the console.
+var mod_tools: DotModTools = null
+
 ## The website chat relay, when one is configured. See [method _build_relay].
 var relay: DotChatRelay = null
 
@@ -137,6 +142,9 @@ func setup(p_server: DotServer, p_game: ArenaGame, p_link: ArenaNetLink) -> DotR
 
 	if not moderated.ok:
 		return moderated
+
+	# After moderation so every action lands on the target's history.
+	_build_mod_tools()
 
 	var chatted := _build_chat()
 
@@ -328,6 +336,33 @@ func _build_moderation() -> DotResult:
 
 
 # --- Chat ------------------------------------------------------------------
+
+## The live tools, with this game's verbs. See `ArenaModTools` for what each one does.
+func _build_mod_tools() -> void:
+	mod_tools = DotModTools.new()
+	mod_tools.name = "ModTools"
+	# Two servers in one process — a test, a listen server — must not fight over one
+	# registry name, and nothing looks the tools up by it.
+	mod_tools.register_service = false
+	mod_tools.manager = moderation
+	mod_tools.immunity_fn = func(id: StringName) -> int:
+		var session := server.session_by_userid(String(id).to_int()) if String(id).is_valid_int() else null
+		return session.immunity if session != null else 0
+	mod_tools.position_fn = func(id: StringName) -> Variant:
+		return ArenaModTools.position_of(game, id)
+	mod_tools.teleport_fn = func(id: StringName, to: Variant) -> void:
+		ArenaModTools.teleport(game, id, to)
+
+	var table := ArenaModTools.handlers(game)
+	for action: Variant in table:
+		mod_tools.handlers[action] = table[action]
+
+	var refusals := ArenaModTools.unsupported()
+	for action: Variant in refusals:
+		mod_tools.unsupported_reasons[action] = refusals[action]
+
+	add_child(mod_tools)
+
 
 func _build_chat() -> DotResult:
 	chat = DotChatRouter.new()
@@ -683,6 +718,7 @@ func describe() -> Dictionary:
 		"chat": chat.describe() if chat != null else {},
 		"voice": voice.describe() if voice != null else {},
 		"moderation": moderation.describe() if moderation != null else {},
+		"mod_tools": mod_tools.describe() if mod_tools != null else {},
 	}
 
 
@@ -697,6 +733,9 @@ func describe_lines() -> PackedStringArray:
 
 	if moderation != null:
 		out.append_array(moderation.describe_lines())
+
+	if mod_tools != null:
+		out.append_array(mod_tools.describe_lines())
 
 	return out
 

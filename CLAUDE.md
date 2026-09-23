@@ -105,6 +105,7 @@ addons refuse to know about each other:
 | chat → server | `ArenaServices._on_player_chat`, which **cancels** dot-server's own |
 | voice → wire | `ArenaNetLink.send_voice`, on a channel of its own |
 | moderation → everything | two registry names nobody imports: `dot_mute_source`, `dot_ban_source` |
+| moderation → the world | `ArenaModTools.handlers`, one callable per admin ability; `DotModToolCommands` on the module for the commands |
 
 `_on_entity_killed` passes `""` for a world death rather than `"0"`. dot-match reads an
 empty killer key as "the world"; `"0"` would create a scoreboard record for a player
@@ -536,9 +537,10 @@ godot --headless --path . res://examples/headless_match.tscn
 godot --headless --path . res://examples/headless_presentation.tscn
 godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
+godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-302 + 70 + 116 + 93 checks, and `headless_stack` adds 54 over six sections.
+302 + 70 + 123 + 93 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 32 over eight.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1057,6 +1059,18 @@ drives a walking bot, and that measurement is what says why. The number is print
 rather than only asserted, because a check's detail line is shown only when it fails and
 an assertion alone would hide the measurement again the moment it started passing.
 
+
+## An administrator's live tools
+
+`ArenaModTools` is what dot-moderation's handler table means in a deathmatch, and **every verb in it is somebody else's seam**: noclip, freeze, speed and gravity are dot-player-controller's `DotFpsAdminModifiers`; god and buddha are `DotHealth.invulnerable` and `cannot_die`; slay and slap are ordinary `DotDamage` through the combat manager, so the kill feed, the scoreboard and the stats hear about an admin's slay exactly as they hear about a rocket; respawn is `ArenaGame.respawn_player`, which is the match's own respawn path with the queue cancelled; burn is `ArenaEffects.BURNING`. The commands are `DotModToolCommands`, installed on the module so they go when it does.
+
+Three decisions worth not undoing:
+
+- **`admin_abilities` is on for every `ArenaPlayer`, server and client alike.** The admin modifiers register after the game's own and their indices travel on the wire, so a client that had not registered them would read a forced noclip as some other modifier. `headless_net` measures what this buys: a player an admin noclips is predicted flying by their own client with no tick out of noclip and a worst gap of a quarter of a metre, where the same flight set as a bare `state.mode = NOCLIP` spends 61 of 64 ticks predicted falling, up to 2.9 m from the server. That second half is the check's negative control.
+- **A slay turns god, buddha and spawn protection off for exactly one damage event.** A slay that god mode refused would make god a way to be unslayable; the flags are put back, because the tools re-apply god on the respawn.
+- **A respawn clears a freeze and a noclip and keeps god**, through `player_spawned`, which fires for a match respawn and an admin's alike because `respawn_player` takes the same path.
+
+`headless_admin` is the suite, on a real `DotServer` with the module loaded by path. Two things it found while being written, neither a bug in the code under test and both worth knowing: **`dm_box` has a platform at the origin**, so a body teleported there is pushed out by the motor's depenetration and a frozen player appears to drift — every position check here starts on a spawn point; and **an adopted session has no peer**, so the netcode's own sends were 1,287 engine RPC errors in one run until the suite pointed `send_fn` at nothing.
 
 ## No message preloads itself
 

@@ -1169,6 +1169,27 @@ func _on_respawn_due(key: String, spawn: DotSpawnPoint, tick: int) -> void:
 	player_spawned.emit(player)
 
 
+## Puts a player back into the world now, alive, at a spawn the director chooses.
+##
+## An administrator's respawn, and the same path a queued respawn takes — so a player an
+## admin put back gets the director's spawn choice, spawn protection, a cleared effect
+## set and their loadout, exactly like one the match put back. Anything still queued for
+## them is cancelled first, or the queue would respawn them a second time moments later.
+func respawn_player(id: int) -> DotResult:
+	var player := player_for(id)
+
+	if player == null:
+		return DotResult.fail(DotError.CODE_INVALID, "Player %d is not in the match." % id)
+
+	var key := str(id)
+
+	if match_node.respawns != null:
+		match_node.respawns.cancel(key)
+
+	_on_respawn_due(key, match_node.choose_spawn(key, _tick), _tick)
+	return DotResult.success(player)
+
+
 ## Loadouts come from a store, which may be slow. A respawn may not be.
 ##
 ## The player is already in the world with whatever they had; the loadout arrives a

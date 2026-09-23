@@ -7,9 +7,11 @@ const ArenaGame := preload("arena_game.gd")
 const ArenaIdentity := preload("arena_identity.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMapDirector := preload("arena_map_director.gd")
+const ArenaModTools := preload("arena_mod_tools.gd")
 const ArenaModes := preload("arena_modes.gd")
 const ArenaModule := preload("arena_module.gd")
 const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaPlayer := preload("arena_player.gd")
 const ArenaServices := preload("arena_services.gd")
 const ArenaStats := preload("arena_stats.gd")
 const ArenaVote := preload("arena_vote.gd")
@@ -46,6 +48,9 @@ var bridge: ArenaNetBridge = null
 
 ## Chat, voice and moderation. See [ArenaServices] for why it is not this file.
 var services: ArenaServices = null
+
+## The live tools' commands. See [method _build_mod_commands].
+var mod_commands: DotModToolCommands = null
 
 ## Content, profiles, avatars and admission.
 var identity: ArenaIdentity = null
@@ -179,6 +184,9 @@ func _module_load() -> DotResult:
 
 	var serviced: DotResult = await _build_services()
 	DotLog.result(CHANNEL, "chat, voice and moderation", serviced)
+
+	if serviced.ok:
+		_build_mod_commands()
 
 	var mapped := _build_maps()
 	DotLog.result(CHANNEL, "the map director", mapped)
@@ -323,6 +331,36 @@ func _build_services() -> DotResult:
 	services.command_entered.connect(_on_chat_command)
 
 	return DotResult.success(services)
+
+
+## noclip, god, slay, bring and the rest, on this server's console and in chat.
+##
+## Through this module as the host, so every one of them is removed on unload like the
+## module's own commands. The handlers are `ArenaModTools`; the flags, the targets and the
+## immunity rule are dot-moderation's `DotModToolCommands`, and neither names the other.
+func _build_mod_commands() -> void:
+	if services == null or services.mod_tools == null:
+		return
+
+	mod_commands = DotModToolCommands.install(self, services.mod_tools, server)
+	mod_commands.alive_fn = func(id: StringName) -> bool:
+		var player := game.player_for(String(id).to_int()) if String(id).is_valid_int() else null
+		return player != null and player.is_alive()
+	mod_commands.team_fn = func(id: StringName) -> String:
+		return str(game.team_of(String(id).to_int())) if String(id).is_valid_int() else ""
+	mod_commands.items_fn = func() -> PackedStringArray:
+		return ArenaModTools.item_ids(game)
+
+	# A new body is a new body: a respawn switches a freeze or a noclip off and puts god
+	# back on. `player_spawned` is the match's respawn AND an admin's, because
+	# `ArenaGame.respawn_player` takes the same path.
+	if not game.player_spawned.is_connected(_on_player_spawned_for_tools):
+		game.player_spawned.connect(_on_player_spawned_for_tools)
+
+
+func _on_player_spawned_for_tools(player: ArenaPlayer) -> void:
+	if services != null and services.mod_tools != null:
+		services.mod_tools.respawned(StringName(str(player.player_id)))
 
 
 func _build_maps() -> DotResult:
@@ -519,6 +557,9 @@ func _module_unload() -> void:
 		if game.player_killed.is_connected(_on_player_killed):
 			game.player_killed.disconnect(_on_player_killed)
 
+		if game.player_spawned.is_connected(_on_player_spawned_for_tools):
+			game.player_spawned.disconnect(_on_player_spawned_for_tools)
+
 		# Every player this module put in the match comes back out. A module that
 		# unloaded and left them there would leave the game holding bodies whose
 		# sessions no longer exist, and the next kill would credit a ghost.
@@ -630,6 +671,11 @@ func _on_client_disconnected(session: DotClientSession, _reason: String) -> void
 
 	if services != null:
 		services.remove_peer(session.peer_id)
+
+		# Who they were frozen or noclipped by, and where a bring would return them to.
+		# The next player given this userid must not inherit any of it.
+		if services.mod_tools != null:
+			services.mod_tools.forget(StringName(str(session.userid)))
 
 	if maps != null:
 		# Otherwise the next map change waits out its whole timeout for somebody who

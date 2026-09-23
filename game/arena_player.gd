@@ -153,6 +153,10 @@ func _build_controller() -> void:
 	controller.tunables = tunables
 	controller.register_service = false
 	controller.register_default_actions = false
+	# On for every player on every machine, because a registration order is part of the
+	# wire: an admin's noclip or freeze is a modifier the owning client has to predict,
+	# and a client that had not registered it would read that index as something else.
+	controller.admin_abilities = true
 	controller.body_ref = DotNodeRef.of_path(NodePath(".."))
 	add_child(controller)
 
