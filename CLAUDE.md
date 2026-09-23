@@ -538,7 +538,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-294 + 56 + 116 + 91 checks.
+302 + 70 + 116 + 91 checks, and `headless_stack` adds 54 over six sections.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -887,6 +887,15 @@ would be assembling a fingerprint that survives a new account and every ban a mo
 issues. So there is no read direction at all, and a clamp is a **bound**: a player who
 prefers 90 keeps 90 under a cap of 100, and what is saved is their choice rather than the
 cap.
+
+## Four things the first rendered offline frame showed
+
+A frame of `tools/screenshot.sh game-arena out.png --wait 35 -- --offline`, looked at, and every suite green throughout:
+
+- **The round clock and the leader line started at the middle of the screen instead of being centred on it.** A centre-top preset is a zero-width box, and a `Label` wider than its box grows by `grow_horizontal`, which defaults to END. `ArenaHud._make_label` grows both ways now.
+- **A pale slab across the bottom of every offline frame was the local player's own nose.** `add_player` emits `player_added` synchronously and `_on_player_added` gives everybody it does not recognise a body; offline, `_watch_id` was still -1, so that included the player the camera sits in. `_start_offline` names the player before creating it, which is the order HELLO and JOIN already give a networked client.
+- **The crosshair measured spread through a hardcoded 75 degree lens.** The camera is the player's `field_of_view`, horizontal at 4:3, which is 83.6 vertical at the default of 100 — so every gap was 17% wider than the cone the shots leave in, and 69% at 120. `ArenaHud.match_view` reads the camera's own `fov` once a frame, because the camera is the one place a slider, a server clamp and the first `attach_camera` all end.
+- **`sensitivity`, `invert_pitch` and `crosshair` were on the Settings screen and read by nothing.** The view turned at `DotFpsTunables`' default whatever the slider said. `ArenaPresentation.bind_look` and `bind_crosshair` push them — at bind time as well as on `changed`, because a value loaded from disk has not changed — and the client binds again when it hands the sampler its player's tunables, which is a new object carrying the default. Sensitivity converts at 0.022 degrees per count, the same as game-g2gfast, because it is an `ACCOUNT` setting in the shared namespace and one number has to mean one turning speed. `circle` draws the cross: `DotCrosshair` has no ring.
 
 ## A private match files nothing
 

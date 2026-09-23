@@ -151,6 +151,13 @@ func _make_label(
 	label.name = node_name
 	label.set_anchors_preset(preset)
 	label.offset_top = offset.y
+	# [b]Grow both ways, or "centred" means "starts at the centre".[/b] A centre-top
+	# preset is a zero-width box at the middle of the screen, and a `Label` wider than
+	# its box grows by `grow_horizontal`, which defaults to END — so the text is pushed
+	# rightwards from the midline and `HORIZONTAL_ALIGNMENT_CENTER` has nothing to centre
+	# inside. The round clock drew at x = 640..680 on a 1280-wide frame, with every
+	# property above reading correctly. Only a rendered frame shows it.
+	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(label)
@@ -169,6 +176,27 @@ func follow(p_player: ArenaPlayer) -> void:
 
 func _live() -> bool:
 	return player != null and is_instance_valid(player)
+
+
+## Gives the crosshair the field of view the camera is actually drawing with.
+##
+## [b]The crosshair turns an angle of spread into pixels, and that conversion is only
+## as right as the field of view it is given.[/b] It was a constant 75 here while the
+## camera was the player's own setting converted from horizontal-at-4:3 — 83.6 degrees
+## vertical at the default of 100 — so every gap was drawn 17% wider than the cone the
+## shots actually leave in, and at a setting of 120 it was 69% wider. A crosshair that is
+## confidently wrong about where the shots go is exactly what `DotCrosshair` says it
+## exists to avoid.
+##
+## Read off the camera once a frame rather than pushed from the settings, because the
+## camera is the one place the field of view is written: a player's slider, a server's
+## clamp and the first `attach_camera` all end there, and a copy fed by one of them
+## would disagree with the other two.
+func match_view() -> void:
+	if crosshair == null or not _live() or player.camera == null:
+		return
+
+	crosshair.fov_degrees = player.camera.fov
 
 
 ## Puts a kill on the feed.
@@ -227,7 +255,12 @@ func catch_up(since_tick: int = -1) -> int:
 ## `DotHudWidget`, because both are strings assembled from several values and a widget
 ## exists to bind one.
 func _process(_delta: float) -> void:
-	if Engine.is_editor_hint() or game == null or timer_label == null:
+	if Engine.is_editor_hint():
+		return
+
+	match_view()
+
+	if game == null or timer_label == null:
 		return
 
 	# The override first, when there is one.

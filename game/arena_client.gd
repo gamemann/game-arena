@@ -195,6 +195,14 @@ func _ready() -> void:
 	_build_presentation()
 	_build_interface()
 
+	# The player's look and crosshair settings, onto the two things they shape. After both
+	# exist, and pushed rather than waited for: a value loaded from disk has not changed,
+	# so a binding that only listened would leave a saved sensitivity doing nothing.
+	if presentation != null:
+		presentation.bind_look(_sampler.tunables)
+		if hud != null:
+			presentation.bind_crosshair(hud.crosshair)
+
 	if _offline:
 		_start_offline()
 	else:
@@ -296,6 +304,14 @@ func _build_interface() -> void:
 
 func _start_offline() -> void:
 	game.start(0)
+
+	# [b]Named as ours BEFORE it exists.[/b] `add_player` emits `player_added`
+	# synchronously, and `_on_player_added` gives every player it does not recognise as
+	# ours a body to be seen as. With `_watch_id` still -1 that was this one: the local
+	# player wore a capsule and a nose with the camera inside it, and the nose was a pale
+	# slab across the bottom of every offline frame. A networked client never had it,
+	# because HELLO names the session before JOIN creates it.
+	_watch_id = 1
 
 	var added := game.add_player(1, "Player")
 
@@ -660,7 +676,7 @@ func _on_kill(info: Dictionary) -> void:
 	entry.killer_name = killer.display_name if killer != null else "the world"
 	entry.victim_name = victim.display_name if victim != null else "?"
 
-	hud._on_kill(entry)
+	hud.show_kill(entry)
 
 
 # --- Following the local player --------------------------------------------
@@ -734,6 +750,9 @@ func _adopt(candidate: ArenaPlayer) -> void:
 
 	if _sampler != null:
 		_sampler.tunables = player.controller.tunables
+		# A different tunables object, carrying the default sensitivity again.
+		if presentation != null:
+			presentation.bind_look(_sampler.tunables)
 
 	_hear_the_local_player()
 

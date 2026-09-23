@@ -19,7 +19,7 @@ const ArenaPresentation := preload("../game/arena_presentation.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 60
+const CHECKS := 70
 
 var _passed := 0
 var _failed := 0
@@ -46,6 +46,7 @@ func _run() -> void:
 	_test_console()
 	_test_party_is_sandboxed()
 	_test_chat_box()
+	_test_look_and_crosshair()
 
 	print("")
 	_check(
@@ -469,6 +470,86 @@ func _test_chat_box() -> void:
 	p.settings.reset_value(&"chat_window")
 
 	_completed += 1
+
+
+# --- 8 ----------------------------------------------------------------------
+
+## `sensitivity`, `invert_pitch` and `crosshair` were on the settings screen and read by
+## nothing: the view turned at `DotFpsTunables`' default whatever the slider said. The
+## checks are about the two directions a binding like this goes wrong without erroring —
+## a saved value that is never pushed, and a changed value that is never heard.
+func _test_look_and_crosshair() -> void:
+	_section("The settings a player touches first reach what they are about")
+
+	var p := _make()
+	var look := DotFpsTunables.new()
+	var fingerprint := look.fingerprint()
+	var addon_default := look.mouse_sensitivity
+
+	p.bind_look(look)
+	_check(
+		is_equal_approx(look.mouse_sensitivity, ArenaPresentation.look_degrees_per_count(
+			p.settings.get_float(&"sensitivity")
+		)),
+		"binding pushes the current sensitivity, without waiting for it to change",
+		"%.4f" % look.mouse_sensitivity
+	)
+	_check(
+		not is_equal_approx(look.mouse_sensitivity, addon_default),
+		"and it is not the addon's default, which is what the view turned at before",
+		"%.4f vs %.4f" % [look.mouse_sensitivity, addon_default]
+	)
+
+	p.settings.set_value(&"sensitivity", 5.0)
+	_check(
+		is_equal_approx(look.mouse_sensitivity, 5.0 * ArenaPresentation.DEGREES_PER_COUNT),
+		"moving the slider moves the view's turning speed",
+		"%.4f" % look.mouse_sensitivity
+	)
+	p.settings.set_value(&"invert_pitch", true)
+	_check(look.invert_look_y, "and inverting the pitch inverts it")
+	_check(
+		look.fingerprint() == fingerprint,
+		"neither enters the simulation, so a client cannot desync from its server by aiming"
+	)
+
+	# The client hands the sampler a new tunables object when it adopts its player, and a
+	# new object carries the addon's default again.
+	var replaced := DotFpsTunables.new()
+	p.bind_look(replaced)
+	_check(
+		is_equal_approx(replaced.mouse_sensitivity, look.mouse_sensitivity)
+		and replaced.invert_look_y,
+		"a replacement tunables object is given the player's settings, not the default"
+	)
+
+	var crosshair := DotCrosshair.new()
+	crosshair.length = 7.0
+	p.bind_crosshair(crosshair)
+	_check(
+		not crosshair.suppressed and is_equal_approx(crosshair.length, 7.0),
+		"the default crosshair is the cross the HUD built"
+	)
+	p.settings.set_value(&"crosshair", &"dot")
+	_check(
+		is_equal_approx(crosshair.length, 0.0) and crosshair.centre_dot
+		and not crosshair.suppressed,
+		"`dot` draws the dot and no arms"
+	)
+	p.settings.set_value(&"crosshair", &"none")
+	_check(crosshair.suppressed, "`none` draws nothing")
+	p.settings.set_value(&"crosshair", &"cross")
+	_check(
+		not crosshair.suppressed and is_equal_approx(crosshair.length, 7.0),
+		"and `cross` puts the arms back at the length they were built with"
+	)
+
+	p.settings.reset_value(&"sensitivity")
+	p.settings.reset_value(&"invert_pitch")
+	p.settings.reset_value(&"crosshair")
+	crosshair.free()
+	p.queue_free()
+	_done()
 
 
 func _section(title: String) -> void:

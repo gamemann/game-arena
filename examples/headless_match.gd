@@ -49,7 +49,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 300
+const CHECKS := 302
 
 var _passed := 0
 var _failed := 0
@@ -1851,6 +1851,31 @@ func _test_interface() -> void:
 				else "nothing"
 		]
 	)
+
+	# [b]And it turns spread into pixels through the field of view the camera is really
+	# drawing with.[/b] It was a constant 75 while the camera was the player's setting
+	# converted from horizontal-at-4:3 — 83.6 vertical at the default of 100 — so every
+	# gap was drawn 17% too wide, and 69% at 120. Two settings, because one could agree
+	# with a stale copy by coincidence; the second is a slider moved mid-game.
+	var had_camera := subject.camera != null
+	subject.attach_camera(100.0)
+	hud.match_view()
+	_check(
+		is_equal_approx(hud.crosshair.fov_degrees, subject.camera.fov)
+		and not is_equal_approx(subject.camera.fov, 75.0),
+		"the crosshair measures with the camera's field of view",
+		"crosshair %.2f, camera %.2f" % [hud.crosshair.fov_degrees, subject.camera.fov]
+	)
+	subject.attach_camera(120.0)
+	hud.match_view()
+	_check(
+		is_equal_approx(hud.crosshair.fov_degrees, subject.camera.fov),
+		"and follows it when the player changes it",
+		"crosshair %.2f, camera %.2f" % [hud.crosshair.fov_degrees, subject.camera.fov]
+	)
+	if not had_camera:
+		subject.camera.queue_free()
+		subject.camera = null
 
 	# This HUD was built after the match ended, which is exactly what a client joining
 	# a match in progress looks like: the kills already happened and the signal has

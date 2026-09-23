@@ -24,6 +24,18 @@ const CHANNEL := "arena.presentation"
 const SCHEMA_VERSION := 1
 
 const SOUND_DIR := "res://audio"
+
+## Degrees of view per unit of mouse motion at a sensitivity of 1.
+##
+## The genre's own yaw constant, and the reason `sensitivity` defaults to 2.5 rather than
+## to a number of degrees: a player's sensitivity is a number they carry between games,
+## and it only survives the trip if it is converted the way every game they carried it
+## from converts it. It is also an `ACCOUNT` setting under the shared `tmc_account`
+## namespace, so it is one number for the person across the family and has to mean one
+## turning speed wherever it is read; game-g2gfast's `G2GUnits.sensitivity_to_degrees`
+## is the same conversion.
+const DEGREES_PER_COUNT := 0.022
+
 static var FX_DIR := ArenaPaths.rebase(ArenaPaths.rebase("res://scenes/fx"))
 
 var settings: DotSettingsManager = null
@@ -40,6 +52,14 @@ var client: Node = null
 
 var _layer: CanvasLayer = null
 var _chat_layer: CanvasLayer = null
+
+## What the look settings are written onto: the tunables the client's sampler reads.
+## See [method bind_look].
+var _look: DotFpsTunables = null
+
+## The HUD's crosshair, and the arm length it was built with. See [method bind_crosshair].
+var _crosshair: DotCrosshair = null
+var _crosshair_length: float = 0.0
 
 ## Whether the server said something else is carrying chat. See [method set_chat_relayed].
 var _chat_relayed: bool = false
@@ -179,8 +199,70 @@ func _on_setting_changed(key: StringName, value: Variant, _why: StringName) -> v
 			_bind_chat(chat_window.open_action if chat_window != null else &"", str(value))
 		&"chat_team_key":
 			_bind_chat(chat_window.team_action if chat_window != null else &"", str(value))
+		&"sensitivity", &"invert_pitch":
+			_apply_look()
+		&"crosshair":
+			_apply_crosshair()
 		_:
 			pass
+
+
+## Points the look settings at the tunables the client's sampler reads, and applies them.
+##
+## [b]`sensitivity` and `invert_pitch` were in the settings screen and read by nothing.[/b]
+## A player could drag the slider end to end and the view turned at `DotFpsTunables`'
+## default 0.25 degrees per unit throughout — this family's "a value produced correctly
+## and consumed by nobody", on the one setting everybody touches first.
+##
+## Called again whenever the sampler is handed a different tunables object, because that
+## is a new object carrying the default again. Only the look fields are written, and those
+## are the ones `DotFpsTunables.fingerprint` leaves out: a sensitivity is a preference and
+## never enters the simulation, so writing it cannot desynchronise a client from its server.
+func bind_look(tunables: DotFpsTunables) -> void:
+	_look = tunables
+	_apply_look()
+
+
+func _apply_look() -> void:
+	if _look == null or settings == null:
+		return
+
+	_look.mouse_sensitivity = look_degrees_per_count(settings.get_float(&"sensitivity", 2.5))
+	_look.invert_look_y = settings.get_bool(&"invert_pitch", false)
+
+
+## A sensitivity setting as degrees per unit of mouse motion. See [constant DEGREES_PER_COUNT].
+static func look_degrees_per_count(sensitivity: float) -> float:
+	return maxf(sensitivity, 0.0) * DEGREES_PER_COUNT
+
+
+## Hands the crosshair setting a crosshair to shape, and shapes it.
+##
+## Like [method bind_look], and for the same reason: the `crosshair` choice was on the
+## settings screen and nothing drew anything differently for any of its four answers.
+func bind_crosshair(crosshair: DotCrosshair) -> void:
+	_crosshair = crosshair
+	_crosshair_length = crosshair.length if crosshair != null else 0.0
+	_apply_crosshair()
+
+
+func _apply_crosshair() -> void:
+	if _crosshair == null or settings == null:
+		return
+
+	var style := StringName(settings.get_string(&"crosshair", "cross"))
+
+	# `suppressed` rather than `visible`: dot-ui keeps a suppressed crosshair measuring its
+	# spread, so nothing that reads the gap stops working because a player hid the lines.
+	_crosshair.suppressed = style == &"none"
+	_crosshair.centre_dot = true
+
+	# **`circle` draws the cross**, because `DotCrosshair` has no ring to draw and a
+	# setting that drew nothing at all would be worse than one that draws the default.
+	# The choice stays in the document rather than being removed, because it is an
+	# `ACCOUNT` setting another game may be storing it for.
+	_crosshair.length = 0.0 if style == &"dot" else _crosshair_length
+	_crosshair.queue_redraw()
 
 
 # --- Audio ------------------------------------------------------------------
