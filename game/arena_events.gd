@@ -29,6 +29,11 @@ enum Kind {
 	SCORE,
 	## Text for everybody: a vote, an admin's message, a refusal.
 	NOTICE,
+	## The map vote: a sound cue to play, or a second of the countdown before a ballot.
+	##
+	## Last, and it has to be: a kind is its index on the wire, and one inserted above
+	## would renumber every kind after it for a client built a day earlier.
+	VOTE,
 }
 
 enum Ask {
@@ -261,6 +266,34 @@ static func write_notice(text: String) -> PackedByteArray:
 
 static func read_notice(reader: DotNetReader) -> Dictionary:
 	var out := {"text": reader.read_string(TEXT_BYTES)}
+	out["ok"] = reader.ok()
+	return out
+
+
+# --- VOTE ------------------------------------------------------------------
+
+## Bytes a cue id may occupy. An id, not a path: `vote_count` is ten.
+const CUE_BYTES := 32
+
+## A cue id (empty for none) and a countdown second (0 for none).
+##
+## [b]An id, never a file.[/b] What the id sounds like is the client's catalogue, so a
+## server can name a cue a client has no sound for and the client plays nothing — which
+## is dot-audio's rule for any id it does not know, and the right one for a noise.
+static func write_vote(cue: String, seconds_left: int, runoff: bool) -> PackedByteArray:
+	var writer := _w()
+	writer.write_string(cue, CUE_BYTES)
+	writer.write_uint(clampi(seconds_left, 0, 255), 8)
+	writer.write_bool(runoff)
+	return writer.to_bytes()
+
+
+static func read_vote(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"cue": reader.read_string(CUE_BYTES),
+		"seconds_left": reader.read_uint(8),
+		"runoff": reader.read_bool(),
+	}
 	out["ok"] = reader.ok()
 	return out
 

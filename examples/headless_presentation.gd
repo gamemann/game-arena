@@ -3,6 +3,7 @@ extends Node
 const ArenaParty := preload("../game/arena_party.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
 const ArenaPresentation := preload("../game/arena_presentation.gd")
+const ArenaVote := preload("../game/arena_vote.gd")
 
 ## Settings, audio, effects, the console and the private-match party.
 ##
@@ -19,7 +20,7 @@ const ArenaPresentation := preload("../game/arena_presentation.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 70
+const CHECKS := 76
 
 var _passed := 0
 var _failed := 0
@@ -47,6 +48,7 @@ func _run() -> void:
 	_test_party_is_sandboxed()
 	_test_chat_box()
 	_test_look_and_crosshair()
+	_test_vote_is_heard()
 
 	print("")
 	_check(
@@ -571,3 +573,58 @@ func _check(condition: bool, what: String, detail: String = "") -> bool:
 		print("  FAIL  %s" % what)
 		_failures.append(what if detail == "" else "%s — %s" % [what, detail])
 	return condition
+
+
+# --- The map vote ------------------------------------------------------------
+
+func _test_vote_is_heard() -> void:
+	_section("The map vote is heard: every cue its rules name is a sound here")
+
+	var p := _make()
+	var sink := p.audio.sink as DotAudioSinkNull
+
+	# The rules this game votes by, as the server builds them. dot-vote ships every cue
+	# empty, so a cue id the rules name and the catalogue lacks is a sound that is
+	# configured, sent to every client each second of a countdown, and never heard.
+	var vote := ArenaVote.new()
+	var rules := vote._rules()
+	vote.free()
+
+	var named: Array[StringName] = []
+	for cue in [
+		rules.cue_vote_start, rules.cue_vote_end, rules.cue_warning,
+		rules.cue_runoff_warning, rules.countdown_cue_id(3),
+	]:
+		named.append(StringName(cue))
+
+	_check(
+		not named.has(&""),
+		"the rules name a cue for the start, the end, both warnings and a countdown second",
+		str(named)
+	)
+
+	var missing: Array[String] = []
+	for id in named:
+		if not p.audio.catalogue.has(id):
+			missing.append(String(id))
+	_check(missing.is_empty(), "and every one is in the catalogue (missing: %s)" % str(missing))
+
+	_check(
+		rules.vote_warning_sec > 0.0,
+		"with a countdown before the ballot, so the countdown cue has seconds to play in"
+	)
+
+	sink.forget()
+	_check(p.on_vote_cue(StringName(rules.cue_vote_start)) != 0, "a ballot opening plays")
+	_check(sink.count_of(StringName(rules.cue_vote_start)) == 1, "once")
+
+	sink.forget()
+	p.on_vote_cue(&"")
+	p.on_vote_cue(&"a_sound_set_this_client_was_not_built_with")
+	_check(
+		sink.count_of(&"") == 0 and sink.count_of(&"a_sound_set_this_client_was_not_built_with") == 0,
+		"and an empty cue or one this client does not know is silence, not an error"
+	)
+
+	p.queue_free()
+	_done()

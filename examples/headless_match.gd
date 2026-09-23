@@ -17,6 +17,7 @@ const ArenaNpcs := preload("../game/arena_npcs.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
 const ArenaProps := preload("../game/arena_props.gd")
 const ArenaStats := preload("../game/arena_stats.gd")
+const ArenaVote := preload("../game/arena_vote.gd")
 
 ## A whole deathmatch, played out headlessly, with nothing called by hand.
 ##
@@ -49,7 +50,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 302
+const CHECKS := 310
 
 var _passed := 0
 var _failed := 0
@@ -63,6 +64,11 @@ var _game: ArenaGame = null
 ## incremented inside a signal handler stays zero outside it — and the assertion then
 ## reports a failure for a signal that fired perfectly.
 var _kills: Array[DotKillFeed.Entry] = []
+
+## The map vote riding along on the real match: what state the match was in, and what the
+## leader had, each time a ballot opened. See [method _build_vote].
+var _vote: ArenaVote = null
+var _vote_seen: Array = []
 var _spawns: Array[int] = []
 var _states: Array[String] = []
 
@@ -87,9 +93,11 @@ func _run() -> void:
 	await _test_team_deathmatch()
 
 	await _build()
+	_build_vote()
 	_test_players_exist()
 	await _play()
 	_test_outcome()
+	_test_score_vote()
 	await _test_progression()
 	_test_geometry_held()
 	_test_interface()
@@ -1656,6 +1664,9 @@ func _play() -> void:
 		_game.tick(_commands_for_tick(ticks))
 		ticks += 1
 
+		if _vote != null:
+			_vote.advance(1.0 / float(TICK_RATE))
+
 		for player in _game.players():
 			var at := player.controller.state.position
 			_lowest_y = minf(_lowest_y, at.y)
@@ -1675,6 +1686,97 @@ func _play() -> void:
 		"ran %d ticks" % ticks
 	)
 	print("       %d ticks, %d kills" % [ticks, _kills.size()])
+
+
+## A map vote over the match `_play` is about to run, with a score limit and nothing else.
+##
+## [b]Real frags, not a reported number.[/b] dot-vote's own suite calls `note_score` by
+## hand; what it cannot reach is whether a game ever calls it — and until this, none did,
+## so `trigger: score_limit` on any game here was a setting that validated and did nothing.
+func _build_vote() -> void:
+	_group("a map vote over the match")
+
+	var maps := ArenaMapDirector.new()
+	maps.name = "VoteMaps"
+	maps.game = _game
+	maps.map_seconds = 0.0
+	add_child(maps)
+	_check(maps.setup().ok, "a map director for the vote sets up")
+
+	_vote = ArenaVote.new()
+	_vote.name = "Vote"
+	_vote.game = _game
+	_vote.maps = maps
+	# Counts and never applies: a winner would change the map under every section after
+	# this one. `auto_apply` follows it, and so does the registry.
+	_vote.authoritative = false
+	_vote.config_path = ""
+	add_child(_vote)
+
+	var ready := _vote.setup()
+	if not _check(ready.ok, "and the vote sets up", str(ready.error)):
+		_vote = null
+		return
+
+	# A score limit ABOVE the match's own, so the clock is still running when the round
+	# ends and the round end can be seen arriving. Due at four frags: two short of the
+	# match's limit of six, which is where a frag-limit chooser opens its ballot.
+	var rules := _vote.director.rules
+	rules.trigger = DotVoteRules.Trigger.SCORE_LIMIT
+	rules.duration_sec = 0.0
+	rules.score_limit = SCORE_LIMIT + 10
+	rules.vote_lead_score = SCORE_LIMIT + 6
+	rules.vote_warning_sec = 0.0
+	# Open for the whole match, so a ballot closing unanswered does not restart the clock
+	# and open a second one.
+	rules.vote_duration_sec = 600.0
+	_check(rules.validate().ok, "a score-limited vote validates", str(rules.validate().error))
+
+	# The clock reads its limits when it starts.
+	_vote.director.begin(_vote.source.current_id())
+
+	_vote.director.vote_opened.connect(func(_options: Array, _seconds: float) -> void:
+		_vote_seen.append([
+			DotMatch.State.keys()[_game.match_node.state], _vote.leading_score()
+		])
+	)
+
+
+func _test_score_vote() -> void:
+	_group("the map vote heard the match")
+
+	if not _check(_vote != null, "there is a vote"):
+		return
+
+	_check(
+		_vote_seen.size() == 1,
+		"a ballot opened, once, off the bots' own frags (%d)" % _vote_seen.size(),
+		"nothing called note_score, and trigger: score_limit decided nothing"
+	)
+
+	if not _vote_seen.is_empty():
+		var first: Array = _vote_seen[0]
+		_check(
+			String(first[0]) == "LIVE" and int(first[1]) >= SCORE_LIMIT - 2
+				and int(first[1]) < SCORE_LIMIT,
+			"while the round was live, two short of the limit (%s at %d)" % [first[0], first[1]]
+		)
+
+	_check(
+		_vote.director.clock.top_score == _game.match_node.scoreboard.best_score()
+			and _vote.director.clock.top_score >= SCORE_LIMIT,
+		"and followed the leader to the match's own limit (%d)" % _vote.director.clock.top_score
+	)
+	_check(
+		_vote.director.clock.rounds_played == 1,
+		"and dot-match's round end reached it (%d)" % _vote.director.clock.rounds_played,
+		"ArenaVote.note_round_end existed and was called by nothing"
+	)
+
+	_vote.director.close_vote()
+	_vote.queue_free()
+	_vote.maps.queue_free()
+	_vote = null
 
 
 func _test_outcome() -> void:

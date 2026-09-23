@@ -3,6 +3,7 @@ extends DotModule
 const ArenaPaths := preload("arena_paths.gd")
 
 const ArenaBoards := preload("arena_boards.gd")
+const ArenaEvents := preload("arena_events.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaIdentity := preload("arena_identity.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
@@ -427,6 +428,17 @@ func _build_vote() -> DotResult:
 			log_info("a vote decided what plays next", {"choice": String(id)})
 	)
 
+	# The cues and the countdown, to every ready client. Chat carries what the ballot
+	# SAYS — that is `announce_fn` above — and cannot carry a sound or a number a HUD
+	# counts down, which is why this is an event of its own rather than more chat.
+	vote.cue_due.connect(
+		func(cue: StringName, seconds_left: int, runoff: bool) -> void:
+			if bridge != null:
+				bridge.send_event(0, ArenaEvents.Kind.VOTE, ArenaEvents.write_vote(
+					String(cue), seconds_left, runoff
+				))
+	)
+
 	return DotResult.success(vote)
 
 
@@ -442,7 +454,14 @@ func _physics_process(delta: float) -> void:
 	# frame. Both addons make the same point and it is the same point: a server that
 	# stalls should not lose that time off its map, and a test must be able to run an
 	# hour of a map in a millisecond.
-	if maps != null:
+	#
+	# [b]One clock, and it is the vote's when there is a vote.[/b] The map director's own
+	# `DotMapTimeLimit` and the vote's `DotVoteClock` both ran here, both thirty minutes
+	# from boot, and the first to expire won: the map director's reached `_on_map_over`,
+	# which opened a SECOND ballot over a winner the players had already chosen and was
+	# waiting for its moment. The map director's clock is the fallback for a server whose
+	# vote did not load, which is the only server that advances it.
+	if maps != null and vote == null:
 		maps.advance(delta)
 
 	if vote != null:
@@ -513,6 +532,9 @@ class ArenaQueryProvider extends DotQueryProvider:
 
 		if module.vote != null:
 			values["voting"] = module.vote.is_voting()
+			# The vote's clock is the one that runs when there is a vote; see
+			# `_physics_process`.
+			values["time_left"] = int(module.vote.director.clock.remaining)
 
 		snapshot.contribute_game(values)
 
@@ -714,39 +736,31 @@ func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> vo
 	if session == null:
 		return
 
-	var voter := StringName(str(session.userid))
+	# [b]The vote's own commands are not here.[/b] `!rtv`, `!nominate`, `!vote`,
+	# `!nextmap` and `!timeleft` are dot-vote's, registered on the console by
+	# `ArenaVote.install_commands` with `.with_chat()`, and an unclaimed `!` line carries
+	# on to the console. This handler answered all five itself once, beside a console with
+	# none of dot-vote's operator commands: two paths to one director, one of them without
+	# `setnextmap`. Only a server whose vote did not load answers them here, so a player
+	# gets "no vote" rather than silence.
+	if vote == null:
+		match command:
+			"rtv", "nominate", "vote":
+				_reply_chat(peer, "There is no vote on this server.")
+				services.claim_command()
+				return
+			"nextmap":
+				_reply_chat(
+					peer, "Next: %s" % (maps.next_map_hint() if maps != null else "-")
+				)
+				services.claim_command()
+				return
+			"timeleft":
+				_reply_chat(peer, _timeleft_line())
+				services.claim_command()
+				return
 
 	match command:
-		"rtv":
-			_reply_chat(peer, _rtv_line(voter))
-			services.claim_command()
-		"nominate":
-			if args.is_empty():
-				_reply_chat(peer, "Usage: !nominate <map>")
-			elif vote == null:
-				_reply_chat(peer, "There is no vote on this server.")
-			else:
-				var res := vote.nominate(voter, StringName(args[0]))
-				_reply_chat(peer, "Nominated." if res.ok else res.error.message)
-			services.claim_command()
-		"vote":
-			if args.is_empty():
-				_reply_chat(peer, "Usage: !vote <choice>")
-			elif vote == null or not vote.is_voting():
-				_reply_chat(peer, "No vote is open.")
-			else:
-				var res := vote.cast_one(voter, StringName(args[0]))
-				_reply_chat(peer, "Counted." if res.ok else res.error.message)
-			services.claim_command()
-		"nextmap":
-			_reply_chat(
-				peer,
-				"Next: %s" % (maps.next_map_hint() if maps != null else "-")
-			)
-			services.claim_command()
-		"timeleft":
-			_reply_chat(peer, _timeleft_line())
-			services.claim_command()
 		"score":
 			for line in game.match_node.scoreboard.describe_lines():
 				_reply_chat(peer, line)
@@ -757,15 +771,10 @@ func _on_chat_command(peer: int, command: String, args: PackedStringArray) -> vo
 			services.claim_command()
 
 
-func _rtv_line(voter: StringName) -> String:
-	if vote == null:
-		return "There is no vote on this server."
-
-	var res := vote.rock_the_vote(voter)
-	return "Rocked the vote." if res.ok else res.error.message
-
-
 func _timeleft_line() -> String:
+	if vote != null:
+		return vote.director.clock.timeleft_line()
+
 	if maps == null or maps.session == null:
 		return "This map has no time limit."
 
@@ -889,6 +898,9 @@ func _add_extra_commands() -> void:
 		add_command(
 			"arena_vote", _cmd_vote, "Open a vote now", DotAdminFlags.VOTE
 		)
+
+		var commanded := vote.install_commands(self)
+		DotLog.result(CHANNEL, "the vote's commands", commanded)
 
 	if services != null:
 		add_command(

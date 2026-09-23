@@ -100,6 +100,9 @@ addons refuse to know about each other:
 | map → game | `ArenaMapSession.change_to_map` → `ArenaGame.change_map` |
 | map → clients | `DotMapSyncHost.send_fn` → `ArenaNetLink.send_map` |
 | vote → map | `ArenaVoteSource.apply`, routed on a `map:` / `mode:` prefix |
+| match → vote | `ArenaVote.leading_score` polled each tick into `note_score`; dot-match's `round_ended` → `note_round_end` |
+| vote → clients | `ArenaVote.cue_due` → `ArenaEvents.Kind.VOTE` → `ArenaPresentation.on_vote_cue` and the HUD's notice line |
+| vote → console | `ArenaVote.install_commands`, dot-vote's `DotVoteCommands` on the module |
 | npc → combat | `ArenaHorde._register_combat`, hitboxes and health under one entity id |
 | npc → game | the brain reaches `ArenaHorde` through `DotRegistry`, never by name |
 | chat → server | `ArenaServices._on_player_chat`, which **cancels** dot-server's own |
@@ -540,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-302 + 70 + 123 + 93 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 32 over eight.
+310 + 76 + 126 + 100 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 32 over eight.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1071,6 +1074,15 @@ Three decisions worth not undoing:
 - **A respawn clears a freeze and a noclip and keeps god**, through `player_spawned`, which fires for a match respawn and an admin's alike because `respawn_player` takes the same path.
 
 `headless_admin` is the suite, on a real `DotServer` with the module loaded by path. Two things it found while being written, neither a bug in the code under test and both worth knowing: **`dm_box` has a platform at the origin**, so a body teleported there is pushed out by the motor's depenetration and a frozen player appears to drift — every position check here starts on a spawn point; and **an adopted session has no peer**, so the netcode's own sends were 1,287 engine RPC errors in one run until the suite pointed `send_fn` at nothing.
+
+## The map vote: one set of commands, one clock, and a score it is actually told
+
+Three things were written and not joined, and a fourth ran twice.
+
+- **dot-vote's commands were never installed.** The module's chat handler answered `!rtv`, `!nominate`, `!vote`, `!nextmap` and `!timeleft` itself, and `setnextmap`, `nominate_addmap`, `forcertv` and `votereload` did not exist on this server at all. `ArenaVote.install_commands` puts `DotVoteCommands` on the module now, and the chat handler claims none of the five unless the vote failed to load, so an unclaimed `!rtv` reaches the console's `rtv` — one path. Two things make them this game's: `resolve_fn` turns the `dm_atrium` a player types into the ballot's `map:dm_atrium`, and `voter_fn` keys a voter as the bare session id, which is what `voters_fn` lists and what a disconnect forgets — dot-vote's default is `u<userid>`, and two spellings of one voter is a player who rocks the vote twice. `vote` keeps its name rather than dot-vote's `votefor`, because `!vote 2` is what players here already type.
+- **Two clocks ran and the first to expire won.** The map director's `DotMapTimeLimit` and the vote's `DotVoteClock` were both thirty minutes from boot. The map director's reached `_on_map_over`, which opened a second ballot over a winner the players had already chosen and was waiting for its moment. With a vote, only the vote's clock is advanced; the map director's is the fallback for a server whose vote did not load. `dedicated` asserts one moves and the other does not.
+- **Nothing called `note_score` or `note_round_end`.** `ArenaVote.note_round_end` existed and was called by nothing, so this game's rule that a winner waits for the end of a round reached the director only as the clock running out. `ArenaVote` now polls the leading score each tick — the best player's frags, or the leading team's total in a team mode, whatever dot-match's own limit is measured on — and follows dot-match's `round_ended`, rebinding on every map change because a map change builds a new match. A score is **per match**, because dot-match zeroes the scoreboard every round: a vote `score_limit` is a frag limit on one match, the way the old choosers read the frag limit. An extend that raises the vote's score limit raises the match's too. `headless_match` rides a score-limited vote on the real deathmatch and asserts the ballot opened off the bots' own frags while the round was live; it was armed by removing the poll and the connection, and three checks fired.
+- **The cues went nowhere.** `ArenaVote.cue_due` carries each `cue` and each countdown second, the module sends it as a `VOTE` event (appended last in `Kind`, because a kind is its index on the wire), and the client plays the id through `ArenaPresentation`'s catalogue and draws the countdown on the HUD's notice line. The four ids are `ArenaVote.CUE_*`, named by the rules and defined in the catalogue from the one constant, with synthesised stand-ins like every other sound here. Chat still carries what the ballot says; this is what chat cannot carry. The rules give a ten-second countdown before a ballot, so the countdown cue has something to count.
 
 ## No message preloads itself
 

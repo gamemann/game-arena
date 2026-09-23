@@ -31,6 +31,13 @@ const ArenaVoteSource := preload("arena_vote_source.gd")
 
 const CHANNEL := "arena.vote"
 
+## The vote's sound cues, as ids in [code]ArenaPresentation.sound_catalogue()[/code]. One
+## copy: the rules name them and the catalogue defines them, both from here.
+const CUE_START := &"vote_start"
+const CUE_END := &"vote_end"
+const CUE_WARNING := &"vote_warning"
+const CUE_COUNT := &"vote_count"
+
 ## The key in the running game's descriptor metadata an operator's overrides are read
 ## from — [code]metadata: map_vote:[/code] in a delivered game's [code]game.yml[/code].
 const METADATA_KEY := "map_vote"
@@ -43,6 +50,11 @@ signal vote_closed(result: DotVoteResult)
 
 ## Somebody rocked the vote.
 signal rocked(voter: StringName, votes: int, needed: int)
+
+## Something for every client to hear or count: a [code]cue_*[/code] id, or a second of
+## the countdown before a ballot. One of the two is empty or zero. The module puts it on
+## the wire as [constant ArenaEvents.Kind].VOTE; see [method setup].
+signal cue_due(cue: StringName, seconds_left: int, runoff: bool)
 
 ## What is going to happen, once the delay or the round is over.
 signal change_due(id: StringName, choice: DotVoteChoice)
@@ -93,6 +105,17 @@ var announce_fn: Callable = Callable()
 
 ## Whether a voter is an admin, for `rtv_admin_instant` and nomination bypasses.
 var is_admin_fn: Callable = Callable()
+
+## What dot-vote's commands are called here. `vote` rather than dot-vote's `votefor`,
+## because `!vote 2` is what this game's players have always typed.
+const COMMAND_NAMES := {"vote": "vote"}
+
+## The match whose score and rounds the vote is told about. Replaced on every map change,
+## because a map change builds a new match; see [method _bind_match].
+var _match: DotMatch = null
+
+## The leading score last reported, so the director hears a change rather than a tick.
+var _last_score: int = -1
 
 
 ## Builds the director over the game's maps and modes.
@@ -173,6 +196,24 @@ func setup() -> DotResult:
 			change_due.emit(id, choice)
 	)
 
+	# Two signals, two messages, rather than one merged in here. The director emits a
+	# countdown second and that second's cue separately, and merging them would mean
+	# working out which cue belongs to which second — which is dot-vote's knowledge, not
+	# this file's. A ten-second countdown is twenty small reliable messages.
+	director.cue.connect(
+		func(id: StringName) -> void: cue_due.emit(id, 0, false)
+	)
+	director.countdown_tick.connect(
+		func(seconds_left: int, runoff: bool) -> void:
+			cue_due.emit(&"", seconds_left, runoff)
+	)
+
+	# A host that enforces its own score limit has to hear an extend, or the match ends on
+	# the old number with the vote believing it extended. dot-match is that host here.
+	director.score_limit_changed.connect(_on_score_limit_changed)
+
+	_bind_match()
+
 	# The map the server booted on, so the clock starts and the cooldown history has
 	# something in it. Everything after this comes through `note_changed`.
 	director.begin(source.current_id())
@@ -237,6 +278,18 @@ func _rules() -> DotVoteRules:
 	rules.apply = DotVoteRules.Apply.END_OF_ROUND
 	rules.apply_delay_sec = 5.0
 
+	# Ten seconds' warning, counted down on every client, before a ballot opens over a
+	# fight in progress — a ballot that appears mid-fight is one most people close unread.
+	rules.vote_warning_sec = 10.0
+
+	# The ids ArenaPresentation's catalogue plays. dot-vote ships every cue empty and
+	# names no audio class; this game has a catalogue, so it has something to name.
+	rules.cue_vote_start = String(CUE_START)
+	rules.cue_vote_end = String(CUE_END)
+	rules.cue_warning = String(CUE_WARNING)
+	rules.cue_runoff_warning = String(CUE_WARNING)
+	rules.cue_countdown = String(CUE_COUNT)
+
 	# Two maps ship, so a "not in the last five" cooldown would leave nothing to
 	# offer. dot-vote's `cooldown_max_fraction` caps this against the pool size at
 	# runtime, and one is the honest number for a catalogue this small.
@@ -253,16 +306,132 @@ func note_changed() -> void:
 	if director != null and source != null:
 		director.begin(source.current_id())
 
+	_bind_match()
 
-## Advances the vote clock. Once per tick, from whatever drives the game.
+
+## Advances the vote clock, and reports the leading score. Once per tick, from whatever
+## drives the game.
 func advance(delta: float) -> void:
-	if director != null:
-		director.advance(delta)
+	if director == null:
+		return
+
+	director.advance(delta)
+	_report_score()
 
 
 ## Tells the clock a round ended, for a round-limited vote.
+##
+## [b]Connected to dot-match's `round_ended`, and it was called by nothing.[/b] This game
+## applies a vote's winner at the end of a round, and until this was connected "the end
+## of a round" reached the director only as the clock running out — so the rule that a
+## map never changes under a fight in progress was written down and not kept.
 func note_round_end() -> bool:
 	return director.note_round_end() if director != null else false
+
+
+## The leading score in the match in progress: the best player's frags, or the leading
+## team's total in a team mode — whatever dot-match's own score limit is measured on.
+##
+## [b]Per match, and a match here is a round.[/b] dot-match zeroes the scoreboard at the
+## start of every round, so a vote `score_limit` is a frag limit on one match, the way the
+## community choosers read the frag limit — not a total across the map.
+func leading_score() -> int:
+	if _match == null or not is_instance_valid(_match) or _match.scoreboard == null:
+		return 0
+
+	if _match.rules != null and _match.rules.team_based:
+		var best := 0
+
+		for value: Variant in _match.scoreboard.team_scores().values():
+			best = maxi(best, int(value))
+
+		return best
+
+	return _match.scoreboard.best_score()
+
+
+## Polled rather than connected: a score moves on a kill, an assist, an objective and a
+## team award, from four places in dot-match, and one integer compared once a tick is
+## cheaper than four connections that have to be remade on every map change.
+func _report_score() -> void:
+	var top := leading_score()
+
+	if top == _last_score:
+		return
+
+	_last_score = top
+	director.note_score(top)
+
+
+## Follows the game onto its current match. A map change builds a new one and frees the
+## old, and a connection to a freed match would simply never fire again.
+func _bind_match() -> void:
+	var node: DotMatch = game.match_node if game != null else null
+
+	if node == _match:
+		return
+
+	if (
+		_match != null and is_instance_valid(_match)
+		and _match.round_ended.is_connected(_on_round_ended)
+	):
+		_match.round_ended.disconnect(_on_round_ended)
+
+	_match = node
+	_last_score = -1
+
+	if _match != null:
+		_match.round_ended.connect(_on_round_ended)
+
+
+func _on_round_ended(_round: int, _winner: int, _outcome: DotMatchRules.Outcome) -> void:
+	note_round_end()
+
+
+## An extend raised the vote's score limit; raise the match's with it, or the match ends
+## on the old number and a new match starts from nothing under a limit it can never
+## reach. Only upwards, and only where the match has a limit of its own.
+func _on_score_limit_changed(limit: int) -> void:
+	if _match == null or not is_instance_valid(_match) or _match.rules == null:
+		return
+
+	if _match.rules.score_limit > 0 and limit > _match.rules.score_limit:
+		_match.rules.score_limit = limit
+
+		DotLog.info(CHANNEL, "an extend raised the match's score limit", {"limit": limit})
+
+
+## dot-vote's commands, on [param host] — the module, so they go when it does.
+##
+## [b]These are the only vote commands, and that is the point.[/b] This game had its own
+## `!rtv`, `!nominate`, `!vote`, `!nextmap` and `!timeleft` in the module's chat handler,
+## and none of dot-vote's operator commands — `setnextmap`, `nominate_addmap`,
+## `forcertv`, `votereload` — existed here at all. dot-vote's are registered on the
+## console with `.with_chat()`, so a `!rtv` the chat handler does not claim reaches them;
+## two handlers for one name is the collision [code]TmcVote[/code] documents, where
+## [DotConsole] keeps the first registration and the second is silently dead.
+func install_commands(host: Object) -> DotResult:
+	if director == null:
+		return DotResult.fail(DotError.CODE_STATE, "There is no vote to command.")
+
+	commands = DotVoteCommands.new()
+	commands.director = director
+	commands.names = COMMAND_NAMES
+	# A player types `dm_atrium`; the ballot's id is `map:dm_atrium`.
+	commands.resolve_fn = func(text: String) -> StringName:
+		return _qualify(StringName(text))
+	# This game's voters are the bare session id — `str(userid)`, which is what
+	# `voters_fn` lists and what the module forgets on a disconnect. dot-vote's default is
+	# `u<userid>`, and two spellings of one voter is a player who can rock the vote twice.
+	commands.voter_fn = func(ctx: Object) -> StringName:
+		var session: Variant = ctx.get("session")
+
+		if session is Object and (session as Object).get("userid") != null:
+			return StringName(str((session as Object).get("userid")))
+
+		return &"console"
+
+	return commands.bind(host)
 
 
 # --- What a player does ----------------------------------------------------

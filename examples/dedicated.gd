@@ -6,6 +6,7 @@ const ArenaGame := preload("../game/arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaModule := preload("../game/arena_module.gd")
 const ArenaServices := preload("../game/arena_services.gd")
+const ArenaVote := preload("../game/arena_vote.gd")
 const ArenaVoteSource := preload("../game/arena_vote_source.gd")
 
 ## A real [DotServer], listening, with the arena loaded into it.
@@ -459,6 +460,88 @@ func _test_maps_and_vote() -> void:
 		_check(module.vote.is_voting(), "and the ballot is open")
 		module.vote.director.close_vote()
 		_check(not module.vote.is_voting(), "and closes again")
+
+	# dot-vote's commands, which this game never installed. The operator's four did not
+	# exist here at all, and the players' five were the module's own chat handler — a
+	# second path to the director with none of the first's commands.
+	var absent := PackedStringArray()
+
+	for name in [
+		"rtv", "unrtv", "nominate", "vote", "timeleft", "nextmap",
+		"setnextmap", "nominate_addmap", "forcertv", "votereload",
+	]:
+		if _server.console.find_command(name) == null:
+			absent.append(name)
+
+	_check(
+		absent.is_empty(),
+		"dot-vote's commands are on the console, the operator's with the players'",
+		"missing: %s" % ", ".join(absent)
+	)
+
+	# A player's `!nominate dm_atrium`, as chat hands it to the console, from the session
+	# the client-spawn section adopted. The ballot's id is `map:dm_atrium`; a command that
+	# took the text as it came would nominate an id nothing has.
+	var session := _server.session_by_userid(77)
+
+	if _check(session != null, "the adopted player is still here"):
+		var replies := PackedStringArray()
+		var ctx := session.make_context(
+			"nominate", PackedStringArray(["dm_atrium"]), DotCmdContext.Source.CHAT,
+			func(line: String) -> void: replies.append(line)
+		)
+		_server.console.execute("nominate dm_atrium", ctx)
+		_check(
+			module.vote.director.nominated_ids().has(&"map:dm_atrium"),
+			"a player's bare map name is nominated under the ballot's own id",
+			"%s / %s" % [str(module.vote.director.nominated_ids()), " ".join(replies)]
+		)
+		_check(
+			module.vote.director.nominations.by_voter(&"77").has(&"map:dm_atrium"),
+			"and counted against the voter the rest of the game knows them as (77, not u77)"
+		)
+
+	# One clock. The map director's used to run beside the vote's, and whichever expired
+	# first won — which at the end of every map was a second ballot over a winner the
+	# players had already chosen.
+	var map_left := module.maps.session.time_limit.remaining
+	var vote_left := module.vote.director.clock.remaining
+	module._physics_process(0.5)
+	_check(
+		is_equal_approx(module.maps.session.time_limit.remaining, map_left)
+			and module.vote.director.clock.remaining < vote_left,
+		"only the vote's clock runs when there is a vote (map %.1f -> %.1f, vote %.1f -> %.1f)"
+			% [map_left, module.maps.session.time_limit.remaining,
+				vote_left, module.vote.director.clock.remaining]
+	)
+
+	# What reaches the wire. The module turns every `cue_due` into a VOTE event for every
+	# ready client; this is the half of that join a server with no client can see.
+	var heard: Array = []
+	var probe := func(cue: StringName, seconds_left: int, runoff: bool) -> void:
+		heard.append([String(cue), seconds_left, runoff])
+	module.vote.cue_due.connect(probe)
+
+	# Past the cooldown the ballot opened above left behind.
+	module.vote.director.advance(module.vote.director.rules.vote_cooldown_sec + 1.0)
+
+	var was_min := module.vote.director.rules.min_players_to_vote
+	module.vote.director.rules.min_players_to_vote = 0
+	var started := module.vote.director.start_vote(DotVoteClock.REASON_MANUAL)
+	module.vote.director.rules.min_players_to_vote = was_min
+
+	_check(
+		started.ok and module.vote.director.is_counting_down(),
+		"a vote starts with this game's countdown",
+		"" if started.ok else started.error.message
+	)
+	_check(
+		heard.has([String(ArenaVote.CUE_WARNING), 0, false]) and heard.has(["", 10, false]),
+		"and its warning cue and first second are handed on for the wire (%s)" % str(heard)
+	)
+
+	module.vote.cue_due.disconnect(probe)
+	module.vote.director.cancel_countdown()
 
 
 ## What a server browser is told.

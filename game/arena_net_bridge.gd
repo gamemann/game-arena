@@ -113,6 +113,10 @@ signal hello_received(info: Dictionary)
 ## Emitted on a client for anything the server wants shown as text.
 signal notice_received(text: String)
 
+## Emitted on a client for the map vote: a cue to play and a countdown second, from
+## [method ArenaEvents.read_vote].
+signal vote_received(info: Dictionary)
+
 ## Emitted on a client when the server reports a kill.
 signal kill_received(info: Dictionary)
 
@@ -751,6 +755,10 @@ func _on_event(message: DotNetMessage) -> void:
 			var notice := ArenaEvents.read_notice(reader)
 			if bool(notice["ok"]):
 				notice_received.emit(String(notice["text"]))
+		ArenaEvents.Kind.VOTE:
+			var voted := ArenaEvents.read_vote(reader)
+			if bool(voted["ok"]):
+				vote_received.emit(voted)
 		_:
 			pass
 

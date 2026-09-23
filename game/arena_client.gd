@@ -408,6 +408,7 @@ func _build_netcode() -> DotResult:
 
 	bridge.hello_received.connect(_on_hello)
 	bridge.notice_received.connect(_on_notice)
+	bridge.vote_received.connect(_on_vote)
 	bridge.kill_received.connect(_on_kill)
 	bridge.match_received.connect(_on_match)
 
@@ -656,6 +657,20 @@ func _on_match(info: Dictionary) -> void:
 func _on_notice(text: String) -> void:
 	if hud != null:
 		hud.notice(text)
+
+
+## The map vote's cue and countdown. The ballot itself arrives as chat, which is where
+## `announce_fn` sends it; this is what chat cannot carry.
+func _on_vote(info: Dictionary) -> void:
+	var seconds_left := int(info.get("seconds_left", 0))
+
+	if seconds_left > 0 and hud != null:
+		hud.notice(
+			"%s in %d…" % ["Runoff" if bool(info.get("runoff", false)) else "Map vote", seconds_left]
+		)
+
+	if presentation != null:
+		presentation.on_vote_cue(StringName(str(info.get("cue", ""))))
 
 
 func _on_kill(info: Dictionary) -> void:

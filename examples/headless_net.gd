@@ -30,7 +30,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 123
+const CHECKS := 126
 
 var _passed := 0
 var _failed := 0
@@ -938,6 +938,29 @@ func _test_event_wire() -> void:
 	_check(
 		bool(notice["ok"]) and String(notice["text"]) == "Match point",
 		"a NOTICE round-trips"
+	)
+
+	# The map vote's cue and countdown. The one event whose two halves are optional each:
+	# a countdown second with no cue, a cue with no second. Both shapes round-trip.
+	var counting := ArenaEvents.read_vote(DotNetReader.new(
+		ArenaEvents.write_vote("vote_count", 7, true)
+	))
+	_check(
+		bool(counting["ok"]) and String(counting["cue"]) == "vote_count"
+			and int(counting["seconds_left"]) == 7 and bool(counting["runoff"]),
+		"a VOTE round-trips, with the cue, the second and the runoff flag"
+	)
+	var opening := ArenaEvents.read_vote(DotNetReader.new(
+		ArenaEvents.write_vote("vote_start", 0, false)
+	))
+	_check(
+		bool(opening["ok"]) and String(opening["cue"]) == "vote_start"
+			and int(opening["seconds_left"]) == 0 and not bool(opening["runoff"]),
+		"and a cue with no countdown second is exactly that"
+	)
+	_check(
+		ArenaEvent.new(ArenaEvents.Kind.VOTE, PackedByteArray()).validate().ok,
+		"and VOTE is a kind the message validates"
 	)
 
 	var score := ArenaEvents.read_score(DotNetReader.new(ArenaEvents.write_score(11, 7, 3)))

@@ -1,6 +1,7 @@
 extends Node
 
 const ArenaPaths := preload("arena_paths.gd")
+const ArenaVote := preload("arena_vote.gd")
 
 ## Settings, audio, effects and a console, on the client.
 ##
@@ -344,6 +345,19 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	spawn.priority = 60
 	c.add(spawn)
 
+	# The map vote's cues. Flat and on the interface bus: a ballot is about the server,
+	# not about a place in the world, and a countdown that got quieter the further you
+	# stood from the origin would be a countdown some players never heard. The ids are
+	# ArenaVote's, which is also what its rules name — one copy.
+	for vote_id in [ArenaVote.CUE_START, ArenaVote.CUE_END, ArenaVote.CUE_WARNING, ArenaVote.CUE_COUNT]:
+		var cue := DotAudioDef.new()
+		cue.id = vote_id
+		cue.path = "%s/%s.ogg" % [SOUND_DIR, String(vote_id)]
+		cue.bus = &"UI"
+		cue.max_concurrent = 1
+		cue.priority = 70
+		c.add(cue)
+
 	var pickup := DotAudioDef.new()
 	pickup.id = &"pickup"
 	pickup.path = "%s/pickup.ogg" % SOUND_DIR
@@ -386,6 +400,13 @@ static func sound_recipes() -> Dictionary:
 		&"died": DotAudioSynth.Voice.DIE,
 		&"spawned": DotAudioSynth.Voice.SPAWN,
 		&"pickup": DotAudioSynth.Voice.PICKUP,
+		# Up for a ballot opening, the one upward sweep, because up reads as "on"; a
+		# blip for the warning and a click per second, so a countdown is heard without
+		# being mistaken for a hit marker.
+		ArenaVote.CUE_START: DotAudioSynth.Voice.SPAWN,
+		ArenaVote.CUE_END: DotAudioSynth.Voice.PICKUP,
+		ArenaVote.CUE_WARNING: DotAudioSynth.Voice.BLIP,
+		ArenaVote.CUE_COUNT: DotAudioSynth.Voice.CLICK,
 	}
 
 
@@ -735,6 +756,16 @@ func on_impact(at: Transform3D, on_player: bool) -> void:
 		# moves is a hole that walks away, and a decal on a body that is about to be
 		# freed is a decal freed with it -- which reads as decals that flicker.
 		fx.spawn_decal(&"bullet_hole", at)
+
+
+## A map-vote cue from the server. Empty is silence, and an id this catalogue does not
+## have is dot-audio's silent refusal rather than an error: a server configured with a
+## sound set this client was not built with should cost a noise, not a log line per second.
+func on_vote_cue(id: StringName) -> int:
+	if id == &"" or audio == null:
+		return 0
+
+	return audio.play(id)
 
 
 func on_hit_confirmed() -> void:
