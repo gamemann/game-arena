@@ -806,11 +806,11 @@ func _test_event_wire() -> void:
 	# Both message types validate their kind, so a peer that disagrees about the schema
 	# is a refusal rather than an out-of-range read.
 	_check(
-		not ArenaEvent.of(ArenaEvents.Kind.size(), PackedByteArray()).validate().ok,
+		not ArenaEvent.new(ArenaEvents.Kind.size(), PackedByteArray()).validate().ok,
 		"an unknown event kind is refused"
 	)
 	_check(
-		ArenaEvent.of(ArenaEvents.Kind.HELLO, PackedByteArray()).validate().ok,
+		ArenaEvent.new(ArenaEvents.Kind.HELLO, PackedByteArray()).validate().ok,
 		"and a known one is not"
 	)
 

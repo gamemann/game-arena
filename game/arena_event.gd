@@ -1,6 +1,5 @@
 extends DotNetMessage
 
-const ArenaEvent := preload("arena_event.gd")
 const ArenaEvents := preload("arena_events.gd")
 
 ## Anything the authority tells a client that is not a snapshot. Reliable, to clients.
@@ -23,11 +22,16 @@ var kind: int = 0
 var body: PackedByteArray = PackedByteArray()
 
 
-static func of(p_kind: int, p_body: PackedByteArray) -> ArenaEvent:
-	var event := ArenaEvent.new()
-	event.kind = p_kind
-	event.body = p_body
-	return event
+## [b]Built with [code]new(kind, body)[/code], and this file does not preload itself.[/b]
+## It used to, for a typed [code]static func of() -> ArenaEvent[/code] factory. A script that
+## [code]extends DotNetMessage[/code] and preloads ITSELF, first loaded from a module a
+## running [DotServer] loads at runtime — which is how every deployed server loads this
+## game — leaks the whole script graph at exit on Godot 4.7.2. Measured in
+## mg-buses-from-hell (8ed866c) with a two-line reproduction. The registry decodes with a
+## bare [code]new()[/code], which is why both arguments default.
+func _init(p_kind: int = 0, p_body: PackedByteArray = PackedByteArray()) -> void:
+	kind = p_kind
+	body = p_body
 
 
 func _type_name() -> StringName:

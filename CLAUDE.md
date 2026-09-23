@@ -538,7 +538,7 @@ godot --headless --path . res://examples/headless_net.tscn
 godot --headless --path . res://examples/dedicated.tscn
 ```
 
-302 + 70 + 116 + 91 checks, and `headless_stack` adds 54 over six sections.
+302 + 70 + 116 + 93 checks, and `headless_stack` adds 54 over six sections.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1057,6 +1057,14 @@ drives a walking bot, and that measurement is what says why. The number is print
 rather than only asserted, because a check's detail line is shown only when it fails and
 an assertion alone would hide the measurement again the moment it started passing.
 
+
+## No message preloads itself
+
+`arena_event.gd` and `arena_request.gd` each began by preloading themselves, for a typed `of()` factory. mg-buses-from-hell measured that line (8ed866c) as enough to leak the whole script graph at exit on Godot 4.7.2: a script that `extends DotNetMessage` and preloads ITSELF, first loaded by a module inside a running `DotServer` — which is how every deployed server loads a game. Both are built with `new(kind, body)` now, an `_init` whose arguments default because dot-net's registry decodes with a bare `new()`.
+
+`dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
+
+**Here it was not the cause, and the leak is still open.** `dedicated` exits with 23 ObjectDB instances and 6 resources, exactly as many before the change as after (2026-09-23) — too few to be the whole script graph, so a different shape from the one buses had.
 
 ## Things deliberately not here
 

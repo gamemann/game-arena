@@ -69,6 +69,7 @@ func _run() -> void:
 		await _test_browser()
 		_test_commands()
 		_test_unload()
+		_test_no_message_preloads_itself()
 
 	_teardown()
 	_cleanup()
@@ -763,3 +764,62 @@ func _test_unload() -> void:
 		_server.console.find_command("arena_status") != null,
 		"with its commands back"
 	)
+
+
+## [b]The one line that leaked mg-buses-from-hell's whole script graph at exit.[/b]
+##
+## A script that `extends DotNetMessage` and preloads ITSELF, first loaded from a module a
+## running [DotServer] loads — which is how every deployed server loads this game — leaves
+## every loaded script alive at exit on Godot 4.7.2 (measured in mg-buses-from-hell,
+## 8ed866c). This game's event and request both did it, for a typed `of()` factory.
+##
+## [b]Asserted on the source, because the symptom is where no check can reach.[/b] The
+## leak is reported after `quit()`, by the engine, as warnings a CI filter already treats
+## as noise; an assertion here runs before any of it exists. So this checks the cause
+## instead: every message script in `game/`, read as text.
+func _test_no_message_preloads_itself() -> void:
+	print("")
+	print("exiting clean")
+
+	var messages := PackedStringArray()
+	var offenders := PackedStringArray()
+	var pending: Array[String] = ["res://game"]
+
+	while not pending.is_empty():
+		var dir_path: String = pending.pop_back()
+
+		for sub in DirAccess.get_directories_at(dir_path):
+			pending.append(dir_path.path_join(sub))
+
+		for file in DirAccess.get_files_at(dir_path):
+			if not file.ends_with(".gd"):
+				continue
+
+			var path := dir_path.path_join(file)
+			var source := FileAccess.get_file_as_string(path)
+
+			if not _extends_message(source):
+				continue
+
+			messages.append(path)
+
+			if source.contains('preload("%s")' % file) or source.contains('preload("%s")' % path):
+				offenders.append(path)
+
+	_check(
+		messages.size() >= 2,
+		"this game's message scripts are found, so the next check is about something",
+		", ".join(messages)
+	)
+	_check(
+		offenders.is_empty(),
+		"and none of them preloads itself, which leaks every script at exit",
+		", ".join(offenders)
+	)
+
+
+func _extends_message(source: String) -> bool:
+	for line in source.split("\n"):
+		if line.begins_with("extends "):
+			return line.contains("DotNetMessage") or line.contains("dot_net_message.gd")
+	return false

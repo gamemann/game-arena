@@ -542,7 +542,7 @@ func send_event(peer_id: int, kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or link == null:
 		return
 
-	var message := ArenaEvent.of(kind, body)
+	var message := ArenaEvent.new(kind, body)
 	var writer := DotNetWriter.new()
 	var wrote := net.messages.encode(message, writer)
 
@@ -569,7 +569,7 @@ func send_request(kind: int, body: PackedByteArray = PackedByteArray()) -> void:
 		return
 
 	var writer := DotNetWriter.new()
-	var wrote := net.messages.encode(ArenaRequest.of(kind, body), writer)
+	var wrote := net.messages.encode(ArenaRequest.new(kind, body), writer)
 
 	if not wrote.ok:
 		return
