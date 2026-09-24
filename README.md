@@ -113,13 +113,13 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match`: 310 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
+`headless_match`: 311 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
 
-`headless_net`: 135 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding, and an admin's blind reaches the blinded player's client and no other while a beacon reaches both.
+`headless_net`: 136 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding, and an admin's blind reaches the blinded player's client and no other while a beacon reaches both.
 
 `dedicated`: 100 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
 
-`headless_admin`: 43 checks over nine sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, a player with no flags is refused, a blind lifts on its own when its seconds are up, a slay inside spawn protection still kills, and blind and beacon survive a respawn.
+`headless_admin`: 44 checks over nine sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, a player with no flags is refused, a blind lifts on its own when its seconds are up, a slay inside spawn protection still kills, and blind and beacon survive a respawn.
 
 ### The admin tools
 

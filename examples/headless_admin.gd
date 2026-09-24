@@ -36,7 +36,7 @@ const SERVER_DIR := "user://arena_admin"
 const TICK_RATE := 64
 
 const SECTIONS := 9
-const CHECKS := 42
+const CHECKS := 43
 
 var _passed := 0
 var _failed := 0
@@ -181,6 +181,10 @@ func _build() -> bool:
 		print("  the server would not boot: %s" % str(booted.error))
 		return false
 
+	# This run's own store, which `SERVER_DIR` is wiped with on the way in and out. Left
+	# unset the module falls back to the one a real server enforces, and every run filed
+	# its slaps and blinds against userid 73 there — and then read them back.
+	ArenaModule.punishments_file = "%s/punishments.json" % SERVER_DIR
 	var loaded: DotResult = await _server.modules.load_module("res://game/arena_module.gd")
 
 	if not loaded.ok:
@@ -188,6 +192,14 @@ func _build() -> bool:
 		return false
 
 	_module = _server.modules.get_module("arena") as ArenaModule
+
+	var store: Object = _module.services.moderation.store \
+		if _module != null and _module.services != null and _module.services.moderation != null \
+		else null
+	var store_path := str(store.get("path")) if store != null else ""
+	_check(store_path.begins_with(SERVER_DIR),
+		"the live tools write to this run's own store, not the one a real server enforces",
+		store_path)
 
 	# This suite drives the ticks itself, so a check can say exactly how many ran.
 	_module.set_physics_process(false)
