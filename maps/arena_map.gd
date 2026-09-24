@@ -68,6 +68,17 @@ var display_name: String = "dm_box"
 var climbs: Array[Climb] = []
 
 
+## Top faces a player is deliberately never meant to stand on.
+##
+## `[gate-sweep-1]`'s second question is whether a map has floor nobody can reach, and
+## the honest answer for most maps is "yes, on purpose": a pillar's top is a surface,
+## and a pillar you could climb would be a different map. The survey in `headless_match`
+## flood-fills every map and fails on any unreached surface that is not one of these,
+## so an unreachable top is a decision somebody wrote down rather than a thing nobody
+## noticed. Append through [method add_out_of_reach].
+var out_of_reach: Array[AABB] = []
+
+
 ## One step up a map expects a player to make, measured off the geometry it is made of.
 ##
 ## [b]Constructed from the two boxes rather than from two numbers.[/b] A climb written
@@ -90,9 +101,18 @@ class Climb:
 	## which is a step across rather than a jump.
 	var gap: float = 0.0
 
+	## The two boxes, kept so that the gap between them is known to be a JUMP. The
+	## survey's slot rule reads them: 0.5 m of air between two crates is a slot nobody
+	## can walk through and is not meant to be walked through, and the only thing that
+	## says which of the two it is is this declaration.
+	var from_box: AABB = AABB()
+	var to_box: AABB = AABB()
+
 	static func between(of_name: String, from_box: AABB, to_box: AABB) -> Climb:
 		var climb := Climb.new()
 		climb.name = of_name
+		climb.from_box = from_box
+		climb.to_box = to_box
 		climb.rise = to_box.end.y - from_box.end.y
 		climb.gap = maxf(
 			_clear_between(from_box.position.x, from_box.end.x, to_box.position.x, to_box.end.x),
@@ -197,6 +217,12 @@ func add_climb(of_name: String, from_box: AABB, to_box: AABB) -> ArenaMap:
 	return self
 
 
+## Declares that nobody is meant to stand on [param box]'s top. See [member out_of_reach].
+func add_out_of_reach(box: AABB) -> ArenaMap:
+	out_of_reach.append(box.abs())
+	return self
+
+
 ## The ground plane as a box, so that "off the floor" is an ordinary climb.
 ##
 ## Wide enough that its footprint contains every map, which is what makes the gap of a
@@ -206,7 +232,8 @@ static func _floor_at(y: float) -> AABB:
 	return AABB(Vector3(-1000.0, y - 1.0, -1000.0), Vector3(2000.0, 1.0, 2000.0))
 
 
-## The shipped arena: a square room, a raised centre, four pillars, two ledges.
+## The shipped arena: a square room, a raised centre, four pillars, two ledges, and
+## since 2026-09-24 two gantries joining the ledges and a nest on two of the pillars.
 ##
 ## Symmetric on purpose. A symmetric map makes every spawn point score identically for
 ## the spawn selector, which is exactly the tie its name-based tie-break exists for —
@@ -223,14 +250,27 @@ static func dm_box() -> ArenaMap:
 	map.add_box(AABB(Vector3(-7.0, 0.0, -7.0), Vector3(14.0, 0.5, 14.0)))
 
 	# Four pillars, off the diagonals so they break sightlines rather than framing them.
+	# The two at x ±12 stand beside the crate stacks and nobody stands on them — see
+	# the nests below for why those two and not the others.
 	for corner in [Vector2(-12.0, -4.0), Vector2(12.0, 4.0), Vector2(-4.0, 12.0), Vector2(4.0, -12.0)]:
-		map.add_box(AABB(
+		var pillar := AABB(
 			Vector3(corner.x - 1.5, 0.0, corner.y - 1.5), Vector3(3.0, 5.0, 3.0)
-		))
+		)
+		map.add_box(pillar)
+
+		if absf(corner.x) > 10.0:
+			map.add_out_of_reach(pillar)
 
 	# Two ledges along opposite walls, top face at 3.6.
-	var west_ledge := AABB(Vector3(-map.extent, 3.0, -18.0), Vector3(6.0, 0.6, 36.0))
-	var east_ledge := AABB(Vector3(map.extent - 6.0, 3.0, -18.0), Vector3(6.0, 0.6, 36.0))
+	#
+	# [b]6.5 m deep, and the last half metre is for the crates.[/b] They were 6, which
+	# left a metre of air between the top crate and the ledge — too far for a player
+	# hopping up with jump held (see the crates below). The crates cannot move toward
+	# the wall instead: the spawns on the x axis stand at ±18, and a crate there is a
+	# player spawning with their nose against a 2.7 m box. So the ledge reaches out to
+	# meet them, and the axis spawns stand under its lip, which is cover.
+	var west_ledge := AABB(Vector3(-map.extent, 3.0, -18.0), Vector3(6.5, 0.6, 36.0))
+	var east_ledge := AABB(Vector3(map.extent - 6.5, 3.0, -18.0), Vector3(6.5, 0.6, 36.0))
 
 	map.add_box(west_ledge)
 	map.add_box(east_ledge)
@@ -247,8 +287,17 @@ static func dm_box() -> ArenaMap:
 	#
 	# Three crates to each ledge, 0.9 at a time to 2.7 and a fourth 0.9 onto the
 	# ledge itself — 72% of the apex per step, so each is a jump and none is a
-	# stretch. Each crate is 1.0 m of clear air north of the last, which at this rise
-	# is a quarter of what the movement crosses.
+	# stretch. Each crate is 0.5 m of clear air on from the last, the number the other
+	# two maps use.
+	#
+	# [b]It was 1.0 m until 2026-09-24, and no bot could climb it.[/b] A metre is a
+	# fifth of what a RUNNING jump crosses at this rise, and it is too far for a
+	# player hopping up with jump held: auto-hop leaves the ground on the tick it
+	# lands, air speed caps at 1.2 m/s, and a hop that happens to start in the middle
+	# of a 2.5 m crate carries 0.6 m — so the bot fell into the gap between the first
+	# two crates and stood at the foot of a 1.8 m wall. `headless_match` drives the
+	# whole climb now; the route has to work for the way a player climbs a stack, not
+	# only for the way they cross a gap.
 	#
 	# [b]Mirrored, and that is not decoration.[/b] This map is symmetric so that every
 	# spawn scores identically for the spawn selector, which is the tie its name-based
@@ -268,7 +317,7 @@ static func dm_box() -> ArenaMap:
 					# corner reflects the box onto the wrong side of itself and the two
 					# walls stop being each other's mirror, which is the one thing this
 					# map may not lose.
-					side * (6.25 - float(step) * 3.5) - 1.25
+					side * (6.25 - float(step) * 3.0) - 1.25
 				),
 				Vector3(2.5, top, 2.5)
 			)
@@ -286,6 +335,69 @@ static func dm_box() -> ArenaMap:
 			previous,
 			west_ledge if side < 0.0 else east_ledge
 		)
+
+	# --- The gantries and the two nests (2026-09-24) -----------------------
+	#
+	# [b]The ledges were two dead ends.[/b] Once the crates made them reachable, each
+	# was 36 m of high ground with one way on and every way off being down: a player
+	# who climbed one had nowhere to go but back into the room. Two gantries now cross
+	# the room between them at ledge height, north and south of the raised middle, so
+	# the upper level is a LOOP — ledge, gantry, ledge, gantry — and holding it is a
+	# matter of moving along it rather than standing at the top of a stair.
+	#
+	# Each gantry passes one of the two pillars that stand north and south of the
+	# middle, and carries a single 0.9 m step against it. The pillar's top is 5.0,
+	# 1.4 over the gantry and so out of reach from it; the step makes it 0.9 then 0.5,
+	# and the two pillar tops become the map's third tier — a 3 m nest over the middle
+	# that sees both ledges, both gantries and the whole floor, and that every one of
+	# those sees back. The other two pillars stay out of reach on purpose: they stand
+	# beside the crate stacks, and a nest there would be a nest at the top of the
+	# route up, which is the one place on this map a nest should not be.
+	#
+	# [b]Point-symmetric, like everything else on this map.[/b] The north gantry and
+	# its nest are the south gantry and its nest turned half a circle about the
+	# origin, so every spawn still scores identically for the spawn selector — the
+	# property dm_box exists for. `headless_match` asserts the whole box list is its
+	# own half-turn rather than trusting this paragraph.
+	#
+	# The gantry is 2.5 m wide and flush with the pillar's face, so the step can sit on
+	# it against the pillar and still leave 1.5 m of walkway beside it; set 0.5 m off
+	# the pillar instead, the step would have had to hang over that half metre of air
+	# or leave a slot between gantry and pillar that looks, from the floor, like a way
+	# up. Its far edge is 0.5 m clear of the nearest crate stack, which is what stops a
+	# player jumping up the first crate from striking their head on it.
+	const GANTRY_Y := 3.0
+	const GANTRY_T := 0.6
+	const GANTRY_W := 2.5
+	const NEST_STEP := 0.9
+
+	for side in [-1.0, 1.0]:
+		# side -1 is the north gantry (z -10.5..-8), side +1 its turn about the origin.
+		var gantry := AABB(
+			Vector3(west_ledge.end.x, GANTRY_Y, 8.0 if side > 0.0 else -8.0 - GANTRY_W),
+			Vector3(east_ledge.position.x - west_ledge.end.x, GANTRY_T, GANTRY_W)
+		)
+		# The pillar this gantry passes: (4, -12) for the north one, (-4, 12) for the
+		# south. Its face toward the middle is the gantry's outer edge.
+		var pillar := AABB(
+			Vector3(side * -4.0 - 1.5, 0.0, side * 12.0 - 1.5), Vector3(3.0, 5.0, 3.0)
+		)
+		var step := AABB(
+			Vector3(pillar.position.x, GANTRY_Y, 9.5 if side > 0.0 else -10.5),
+			Vector3(3.0, GANTRY_T + NEST_STEP, 1.0)
+		)
+
+		map.add_box(gantry)
+		map.add_box(step)
+
+		var which := "south" if side > 0.0 else "north"
+
+		map.add_climb("dm_box: the west ledge onto the %s gantry" % which, west_ledge, gantry)
+		map.add_climb("dm_box: the %s gantry onto the east ledge" % which, gantry, east_ledge)
+		map.add_climb("dm_box: the east ledge onto the %s gantry" % which, east_ledge, gantry)
+		map.add_climb("dm_box: the %s gantry onto the west ledge" % which, gantry, west_ledge)
+		map.add_climb("dm_box: the %s gantry onto its nest step" % which, gantry, step)
+		map.add_climb("dm_box: the %s nest step onto the pillar" % which, step, pillar)
 
 	map.add_perimeter()
 
@@ -389,9 +501,16 @@ static func dm_atrium() -> ArenaMap:
 	#
 	# Each step is a full-height box rather than a tread, because a tread with air under
 	# it is two boxes and the analytic body would let a player stand in the gap.
+	#
+	# [b]The top tread is flush with the building's west face, x = -10.[/b] It stopped
+	# 0.75 m short until 2026-09-24, which left a 0.75 m slot between the stair's end
+	# and the wall's north segment — narrower than the 0.8 m a player is, and running
+	# from the yard straight to the west doorway, so from the ground it read as a way
+	# in. `[gate-sweep-1]`'s slot rule found it. Flush, the walk onto the ring is a
+	# step across with no air under it as well.
 	for index in range(13):
 		map.add_box(AABB(
-			Vector3(-20.5 + float(index) * 0.75, 0.0, -4.0),
+			Vector3(-19.75 + float(index) * 0.75, 0.0, -4.0),
 			Vector3(0.75, 0.36 * float(index + 1), 4.0)
 		))
 
@@ -550,11 +669,18 @@ static func dm_atrium() -> ArenaMap:
 	map.add_climb("dm_atrium: the arcade roof onto the crates", arcade_roof, crates[3])
 	map.add_climb("dm_atrium: the crates onto the arcade roof", crates[3], arcade_roof)
 
-	# Five piers on each long edge. 3.9 m of daylight between them, which is wider than
+	# Five piers on each long edge. 4 m of daylight between them, which is wider than
 	# the building's doorways -- the arcade is meant to be shot into, and a colonnade
 	# you cannot see through is the tunnel this is not.
+	#
+	# [b]The last pair is flush with the crate column, x 11 to 12.5.[/b] It stood at
+	# 10.5 to 12 until 2026-09-24, half a metre short of the crates, which left two 0.5
+	# m slots between pier and crate that looked from inside the arcade like its east
+	# way out and that no player fits through. `[gate-sweep-1]`'s slot rule found both.
+	# The half metre of pier past the roof's end sits in the gap the step across to the
+	# crates jumps, 0.6 m under it, where nothing can stand.
 	for index in range(5):
-		var pier_x := -11.0 + float(index) * 5.375
+		var pier_x := -11.0 + float(index) * 5.5
 
 		map.add_box(AABB(Vector3(pier_x, 0.0, ARC_Z), Vector3(PIER, ARC_Y, PIER)))
 		map.add_box(AABB(
@@ -751,9 +877,14 @@ static func dm_pit() -> ArenaMap:
 	# A low island in the middle, under the bridge with 2.2 m of headroom, and three
 	# waist-high pillars. Three and not four: the fourth corner is where the crates
 	# are, and a pillar there would grow through the first of them.
+	#
+	# [b]At ±5.75, not ±6.[/b] At 6 the pillars beside the two stairs stood 0.75 m off
+	# the stairs' sides — a pinch 0.9 m long and narrower than a player, between two
+	# things a player runs along. `[gate-sweep-1]`'s slot rule found both (2026-09-24);
+	# a quarter of a metre toward the middle makes each a metre.
 	map.add_box(AABB(Vector3(-2.5, 0.0, -2.5), Vector3(5.0, 0.8, 5.0)))
 
-	for corner in [Vector2(-6.0, -6.0), Vector2(-6.0, 6.0), Vector2(6.0, 6.0)]:
+	for corner in [Vector2(-5.75, -5.75), Vector2(-5.75, 5.75), Vector2(5.75, 5.75)]:
 		map.add_box(AABB(
 			Vector3(corner.x - 0.75, 0.0, corner.y - 0.75), Vector3(1.5, 2.2, 1.5)
 		))

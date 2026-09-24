@@ -10,6 +10,7 @@ const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMapDirector := preload("../game/arena_map_director.gd")
 const ArenaMaps := preload("../game/arena_maps.gd")
+const ArenaMapSurvey := preload("../maps/arena_map_survey.gd")
 const ArenaMenus := preload("../game/arena_menus.gd")
 const ArenaMode := preload("../game/arena_mode.gd")
 const ArenaModes := preload("../game/arena_modes.gd")
@@ -50,13 +51,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 311
+const CHECKS := 332
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 25
+const SECTIONS := 27
 
 var _passed := 0
 var _failed := 0
@@ -96,7 +97,9 @@ func _run() -> void:
 	await _test_atrium()
 	_test_bot_ground_speed()
 	_test_reach()
+	_test_survey()
 	await _test_crate_climb()
+	await _test_box_upper()
 	_test_modes()
 	await _test_team_deathmatch()
 
@@ -1423,6 +1426,308 @@ func _test_reach() -> void:
 		"and none asks a player to cross more air than they can carry",
 		"; ".join(too_far)
 	)
+	_done()
+
+
+## `[gate-sweep-1]`, asked of every map as a rule over its box list.
+##
+## [b]The two questions, and neither is "is the box there".[/b] Can a player pass every
+## gap that looks like a way through — two faces closer than 0.8 m, beside the same
+## floor, nothing between them, and not a jump the map declares — and is there any
+## surface a player cannot get to at all, or can get to and never leave? Both have
+## been asked of this game's maps one slot at a time, and the first time they were
+## asked of every pair of boxes they found five slots on two maps that nobody had
+## thought about: two 0.5 m gaps between dm_atrium's last piers and its crates, a
+## 0.75 m one beside its north-west stair, and two 0.75 m pinches between dm_pit's
+## stairs and pillars.
+##
+## [b]The numbers are printed, not only asserted,[/b] for the reason every other
+## measurement in this file gives: a detail line appears only on failure, and the areas
+## are the part worth reading when the map next changes.
+##
+## Armed by construction below: a map with a 0.5 m slot, a tower nothing climbs, and a
+## courtyard you can drop into and not climb out of — each has to be found, or the
+## per-map checks above it pass for a survey that sees nothing.
+func _test_survey() -> void:
+	_section("every map: slots and reach, as a rule")
+
+	for id in ArenaMap.ids():
+		var map := ArenaMap.by_id(id)
+
+		if map == null:
+			continue
+
+		var slots := ArenaMapSurvey.slots(map)
+		var closed := PackedStringArray()
+		var tight := 0
+
+		for slot in slots:
+			if slot["closed"]:
+				closed.append("%.2f m on %s between %s and %s" % [
+					slot["gap"], slot["axis"], map.boxes[slot["a"]], map.boxes[slot["b"]]
+				])
+			else:
+				tight += 1
+
+		var surveyed := ArenaMapSurvey.reach(map)
+		var unexplained := ArenaMapSurvey.unexplained(map, surveyed)
+		var lost := PackedStringArray()
+
+		for region in unexplained:
+			lost.append("%.1f m² at y %.2f, %s..%s" % [
+				region["area"], region["height"], region["from"], region["to"]
+			])
+
+		print("  ..    %s: %.0f m² standable, %.0f reached, %.1f unreached (%d declared "
+			% [id, surveyed["standable"], surveyed["reached"], surveyed["unreached"],
+				map.out_of_reach.size()]
+			+ "out of reach), %.1f trapped; %d closed slots, %d tight (0.8-1.05 m)"
+			% [surveyed["trapped"], closed.size(), tight])
+
+		_check(
+			closed.is_empty(),
+			"%s: no gap that looks like a way through is narrower than a player" % id,
+			"; ".join(closed)
+		)
+		_check(
+			surveyed["spawns_reached"] == map.spawns.size(),
+			"%s: every spawn stands on ground the flood fill reaches" % id,
+			"%d of %d" % [surveyed["spawns_reached"], map.spawns.size()]
+		)
+		_check(
+			unexplained.is_empty(),
+			"%s: every surface nobody can reach is one the map says is out of reach" % id,
+			"; ".join(lost)
+		)
+		_check(
+			float(surveyed["trapped"]) < 0.01,
+			"%s: and nowhere a player can reach is somewhere they cannot leave" % id,
+			"%.2f m²: %s" % [surveyed["trapped"], str(surveyed["trapped_regions"])]
+		)
+
+	# --- The survey itself, shown the three things it is for ---------------
+
+	var bad := ArenaMap.new()
+	bad.id = &"survey_fixture"
+	bad.extent = 8.0
+	bad.wall_height = 6.0
+	# Two walls 0.5 m apart, the slot dm_pit's shelf would have made.
+	bad.add_box(AABB(Vector3(-7.0, 0.0, 4.0), Vector3(4.0, 2.0, 1.0)))
+	bad.add_box(AABB(Vector3(-7.0, 0.0, 5.5), Vector3(4.0, 2.0, 1.0)))
+	# A tower 4 m high with nothing to climb it by — 2 m over the courtyard's wall
+	# tops too, which a 3 m tower was not: the survey jumped onto it from the wall,
+	# correctly, and the fixture was what was wrong.
+	var tower := AABB(Vector3(4.0, 0.0, 4.0), Vector3(2.0, 4.0, 2.0))
+	bad.add_box(tower)
+	# A courtyard walled at 2 m, reached over its west wall from a 1 m crate and left
+	# by nothing: 2 m is over the climb limit from inside.
+	bad.add_box(AABB(Vector3(0.0, 0.0, -4.0), Vector3(0.5, 2.0, 4.0)))
+	bad.add_box(AABB(Vector3(3.5, 0.0, -4.0), Vector3(0.5, 2.0, 4.0)))
+	bad.add_box(AABB(Vector3(0.0, 0.0, -4.5), Vector3(4.0, 2.0, 0.5)))
+	bad.add_box(AABB(Vector3(0.0, 0.0, 0.0), Vector3(4.0, 2.0, 0.5)))
+	bad.add_box(AABB(Vector3(-1.5, 0.0, -3.0), Vector3(1.5, 1.0, 2.0)))
+	bad.add_perimeter()
+	bad.add_spawn(Transform3D(Basis(), Vector3(-5.0, 0.1, -5.0)))
+
+	var found := false
+
+	for slot in ArenaMapSurvey.slots(bad):
+		if slot["closed"] and absf(float(slot["gap"]) - 0.5) < 0.01:
+			found = true
+
+	_check(found, "the survey finds a 0.5 m slot when there is one")
+
+	var fixture := ArenaMapSurvey.reach(bad)
+	var tower_lost := false
+
+	for region in ArenaMapSurvey.unexplained(bad, fixture):
+		if is_equal_approx(float(region["height"]), 4.0):
+			tower_lost = true
+
+	_check(tower_lost, "and a tower nothing climbs, as floor nobody reaches")
+
+	bad.add_out_of_reach(tower)
+	var still := 0
+
+	for region in ArenaMapSurvey.unexplained(bad, fixture):
+		if is_equal_approx(float(region["height"]), 4.0):
+			still += 1
+
+	_check(still == 0, "and stops calling it a fault once the map declares it")
+	_check(
+		float(fixture["trapped"]) > 2.0,
+		"and a walled courtyard you can drop into and not leave, as a trap",
+		"%.2f m² trapped" % fixture["trapped"]
+	)
+	_done()
+
+
+## `dm_box`'s upper level, climbed and walked by a bot rather than believed.
+##
+## [b]The crates to the ledges were declared on 2026-09-22 and swept as arithmetic, and
+## nothing had ever climbed them.[/b] The gantries and nests added on 2026-09-24 are
+## the same kind of claim, so all of it is driven here: a bot from the floor up the
+## west crates onto the ledge, one across each gantry, and one up the north nest.
+##
+## Each leg holds ONE direction, for the reason `_test_crate_climb` gives; the gantry
+## and nest legs start from a teleport rather than from the end of the climb, because
+## turning a bot at 9 m/s on a 2.5 m walkway measures its friction, not the map.
+func _test_box_upper() -> void:
+	_section("dm_box: the upper level, climbed")
+
+	var map := ArenaMap.dm_box()
+
+	# [b]The property dm_box exists for, asked of the whole list.[/b] Every box has a
+	# twin turned half a circle about the origin, so every spawn scores identically —
+	# the gantries and nests had to keep that or not be added.
+	var unpaired := PackedStringArray()
+
+	for box in map.boxes:
+		var turned := AABB(
+			Vector3(-box.end.x, box.position.y, -box.end.z), box.size
+		)
+		var twin := false
+
+		for other in map.boxes:
+			if other.is_equal_approx(turned):
+				twin = true
+				break
+
+		if not twin:
+			unpaired.append(str(box))
+
+	_check(
+		unpaired.is_empty(),
+		"every box on dm_box has its twin turned half a circle about the middle",
+		", ".join(unpaired)
+	)
+
+	var climber := ArenaPlayer.new()
+	climber.name = "BoxClimber"
+	add_child(climber)
+	climber.setup(ArenaPlayer.Mode.HEADLESS, map, 9003, "box climber")
+
+	var delta := 1.0 / 64.0
+	var tick := 0
+
+	# --- Floor, three crates, the west ledge --------------------------------
+	#
+	# +Z (yaw 180) with jump up the crates, a quarter of a second standing still on
+	# the top one, then -X (yaw 90) with jump onto the ledge. [b]The pause is the
+	# honest part.[/b] Air control only adds speed along the wish direction, so a bot
+	# that turns west in mid-hop keeps every bit of its +Z speed and drifts off the
+	# far end of a 2.5 m crate before it has hopped the metre and a half west — which
+	# is a bot that never stopped to turn, not a map that cannot be climbed.
+	var start := Vector3(-15.75, 0.1, -7.8)
+	climber.controller.teleport(start, 180.0, 0.0)
+
+	var on_top_crate := false
+	var on_ledge := false
+	var settle := 16
+
+	for step in range(64 * 20):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0 if on_top_crate else 180.0
+
+		if on_top_crate and settle > 0:
+			settle -= 1
+		else:
+			command.move = Vector2(0.0, 1.0)
+			command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+
+		climber.controller.apply_command(command)
+		climber.controller.simulate_tick(tick, delta)
+		tick += 1
+
+		var at: Vector3 = climber.controller.state.position
+		var grounded := climber.controller.state.is_grounded()
+
+		if not on_top_crate and grounded and at.y > 2.65:
+			on_top_crate = true
+
+		if on_top_crate and grounded and at.y > 3.55 and at.x < -18.0:
+			on_ledge = true
+			break
+
+	var ended: Vector3 = climber.controller.state.position
+
+	_check(
+		on_top_crate and on_ledge,
+		"a bot climbs the west crates from the floor onto the west ledge",
+		"top crate %s, ended at (%.1f, %.2f, %.1f)"
+			% [on_top_crate, ended.x, ended.y, ended.z]
+	)
+
+	# --- Each gantry, ledge to ledge -----------------------------------------
+	#
+	# Clear of the nest step, which fills the gantry's outer metre beside its pillar:
+	# the walkway past it is the 1.5 m this leg walks.
+	for leg in [
+		{"name": "north", "from": Vector3(-20.0, 3.7, -8.9), "yaw": -90.0, "sign": 1.0},
+		{"name": "south", "from": Vector3(20.0, 3.7, 8.9), "yaw": 90.0, "sign": -1.0},
+	]:
+		climber.controller.teleport(leg["from"], leg["yaw"], 0.0)
+		var crossed := false
+
+		for step in range(64 * 8):
+			var command := DotFpsCommand.new()
+			command.yaw = leg["yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+			var at: Vector3 = climber.controller.state.position
+
+			if (
+				climber.controller.state.is_grounded()
+				and at.y > 3.55
+				and at.x * float(leg["sign"]) > 18.5
+			):
+				crossed = true
+				break
+
+		var there: Vector3 = climber.controller.state.position
+
+		_check(
+			crossed,
+			"and walks the %s gantry from one ledge to the other" % leg["name"],
+			"ended at (%.1f, %.2f, %.1f)" % [there.x, there.y, there.z]
+		)
+
+	# --- The north nest --------------------------------------------------------
+	#
+	# North (yaw 0) with jump from the gantry: 0.9 onto the step, 0.5 onto the pillar.
+	# Grounded on the pillar's top is the arrival, for the reason `_test_crate_climb`
+	# gives about heights a jump only passes through.
+	climber.controller.teleport(Vector3(4.0, 3.7, -8.4), 0.0, 0.0)
+	var nested := false
+
+	for step in range(64 * 6):
+		var command := DotFpsCommand.new()
+		command.yaw = 0.0
+		command.move = Vector2(0.0, 1.0)
+		command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+		climber.controller.apply_command(command)
+		climber.controller.simulate_tick(tick, delta)
+		tick += 1
+
+		var at: Vector3 = climber.controller.state.position
+
+		if climber.controller.state.is_grounded() and at.y > 4.95 and at.z < -10.5:
+			nested = true
+			break
+
+	var perched: Vector3 = climber.controller.state.position
+
+	_check(
+		nested,
+		"and climbs off the north gantry, up its step, onto the nest",
+		"ended at (%.1f, %.2f, %.1f)" % [perched.x, perched.y, perched.z]
+	)
+
+	climber.queue_free()
+	remove_child(climber)
 	_done()
 
 
@@ -3411,9 +3716,9 @@ func _test_atrium() -> void:
 	# [b]All three moved on 2026-09-22, which is the first time that has happened and
 	# does not weaken the check.[/b] They moved for one cause — every climb on every
 	# map was above the jump apex — but they are still three separate changes to three
-	# separate maps, and a shared constant would have had to say "1.2.0" about dm_box,
-	# whose geometry moved by three crates and not by a rebuilt route.
-	var expected := {&"dm_atrium": "1.2.0", &"dm_pit": "1.2.0", &"dm_box": "1.1.0"}
+	# separate maps. dm_box reached 1.2.0 by its own two steps — the crates on
+	# 2026-09-22, the gantries and nests on 2026-09-24.
+	var expected := {&"dm_atrium": "1.3.0", &"dm_pit": "1.3.0", &"dm_box": "1.2.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
@@ -3429,9 +3734,15 @@ func _test_atrium() -> void:
 		"the catalogue carries every map at the version its geometry is at",
 		"; ".join(wrong)
 	)
+	# [b]Was "two maps that moved by different amounts do not share a version", which
+	# is not a rule versions keep.[/b] Two minor bumps on two maps land on the same
+	# string whenever they happen to — dm_box went 1.1.0 -> 1.2.0 on 2026-09-24, where
+	# dm_atrium had been two days — and a check that fails on a coincidence is one
+	# people learn to edit. What it was for is that a map that moved takes its version
+	# from the per-map table rather than the catalogue-wide default; asked directly.
 	_check(
-		versions.get_map(&"dm_box").version != versions.get_map(&"dm_atrium").version,
-		"and two maps that moved by different amounts do not share a version"
+		versions.get_map(&"dm_box").version != ArenaMaps.MAP_VERSION,
+		"and a map that moved is not at the catalogue-wide default"
 	)
 
 	# [b]The stair onto the arcade roof, walked.[/b] Same shape as the north-west stair

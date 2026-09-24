@@ -56,7 +56,10 @@ const MAP_VERSIONS := {
 	# 1.2.0: the south-east crates rebuilt from three steps of 1.5 m to five of 0.9,
 	# because a jump here peaks at 1.25 and the route had never been climbable
 	# (2026-09-22).
-	&"dm_atrium": "1.2.0",
+	# 1.3.0: the north-west stair moved 0.75 m east to meet the building, and the
+	# arcade's last piers 0.5 m east to meet the crates — both closing slots narrower
+	# than a player that `[gate-sweep-1]` found (2026-09-24).
+	&"dm_atrium": "1.3.0",
 	# 1.1.0: the east-west bridge, the south-west shelf and the perch (2026-09-18).
 	# [b]Backdated.[/b] That change moved the geometry and did not move the version,
 	# so every record set on the one-bridge dm_pit is recorded against the two-bridge
@@ -64,10 +67,14 @@ const MAP_VERSIONS := {
 	# are separable from both.
 	# 1.2.0: the north-east crates rebuilt from two steps of 1.4 and 1.2 to three of
 	# 0.9, same cause as dm_atrium's (2026-09-22).
-	&"dm_pit": "1.2.0",
+	# 1.3.0: the three pillars in the pit moved from ±6 to ±5.75, closing two 0.75 m
+	# pinches against the stairs that `[gate-sweep-1]` found (2026-09-24).
+	&"dm_pit": "1.3.0",
 	# 1.1.0: three crates to each of the two ledges, which had been standable geometry
 	# with no way up since the map was written (2026-09-22).
-	&"dm_box": "1.1.0",
+	# 1.2.0: two gantries joining the ledges into a loop, and a nest on the pillars at
+	# (4, -12) and (-4, 12), reached by one 0.9 m step off each gantry (2026-09-24).
+	&"dm_box": "1.2.0",
 }
 
 

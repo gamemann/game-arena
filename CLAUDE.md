@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-311 + 89 + 136 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
+332 + 89 + 136 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1062,6 +1062,19 @@ drives a walking bot, and that measurement is what says why. The number is print
 rather than only asserted, because a check's detail line is shown only when it fails and
 an assertion alone would hide the measurement again the moment it started passing.
 
+
+## `dm_box`'s upper level is a loop now, and every map is surveyed as a rule
+
+**Extended 2026-09-24 (dm_box 1.2.0).** The crates of 2026-09-22 made the two ledges reachable and left them dead ends: 36 m of high ground with one way on. Two **gantries** at ledge height now cross the room north and south of the raised middle, so the upper level is ledge, gantry, ledge, gantry — and each gantry carries one 0.9 m step against the pillar it passes, which makes the pillars at (4, -12) and (-4, 12) a third tier at 5.0: two **nests** over the middle that see everything and are seen by everything. The two pillars beside the crate stacks stay out of reach on purpose and are declared so (`ArenaMap.add_out_of_reach`). The map stays **its own half-turn about the origin**, which is the property it ships for, and `headless_match` now asserts that of the whole box list rather than of a comment.
+
+Driving it found two things the arithmetic sweep had passed. **The crate gaps were 1.0 m and a bot could not climb them**: auto-hop plus the 1.2 m/s air cap means a player hopping up with jump held carries about 0.6 m per hop, so it fell into the gap between the first two crates. They are 0.5 m now, like the other maps'. The top crate was a metre from the ledge for the same reason, and could not move toward the wall because the x-axis spawns stand at ±18 — so the ledges are 6.5 m deep instead of 6, and those spawns stand under the lip. And a bot turning in mid-hop keeps all its old speed, because air control only adds along the wish direction: the climb test stands still for a quarter of a second on the top crate before turning, which is what a player does.
+
+**`ArenaMapSurvey` is `[gate-sweep-1]` as a rule over the box list** (`maps/arena_map_survey.gd`), asserted per map in `headless_match`'s *every map: slots and reach* section:
+
+- `slots(map)` — every pair of boxes whose facing sides are under 0.8 m apart, running side by side for at least 0.8 m, both walls at the floor between them, nothing in the gap, and **not a declared climb** (a `Climb` now keeps its two boxes, because 0.5 m of air between two crates is a jump and the declaration is the only thing that says so). 0.8 is the family's width; the motor's hull is 0.7 (`radius` 0.35), so the rule errs toward calling a slot closed.
+- `reach(map)` — a 0.25 m grid of every surface a crouching player fits on, walked under `STEP_HEIGHT`, fallen off anywhere, and jumped under `climb_limit()` within `jump_reach(rise)` along an arc that passes through no box; flood-filled from the spawns forward (reached) and backward (can get back). `unexplained()` is what is unreached and not declared `out_of_reach`; `trapped` is reached with no way back.
+
+First run: **five closed slots on two maps**, all fixed — dm_atrium's last piers stood 0.5 m short of the crate column (two slots that looked like the arcade's east way out; piers now at 5.5 m spacing, flush), its north-west stair stopped 0.75 m short of the building (a slot from the yard to the west doorway; stair now flush at x = -10, which also takes the air out of the step onto the ring), and dm_pit's pillars stood 0.75 m off both stairs' sides (moved from ±6 to ±5.75). dm_atrium and dm_pit are at 1.3.0. Numbers now: dm_box 2696 m² standable, 18 unreached (both declared pillar tops), 0 trapped; dm_atrium 3560 / 0 / 0; dm_pit 985 / 0 / 0; each map has two **tight** gaps between 0.8 and 1.05 m, all passable, printed rather than failed. The section is armed by a fixture map with a 0.5 m slot, a tower nothing climbs and a courtyard you can drop into and not leave, and was armed for real by putting the atrium's old pier spacing and stair back (three closed slots reported).
 
 ## An administrator's live tools
 
