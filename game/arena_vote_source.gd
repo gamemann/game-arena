@@ -88,6 +88,9 @@ func choices() -> Array[DotVoteChoice]:
 		# it and refusing the change afterwards is a vote whose winner does not
 		# happen, which reads to the players as a broken server.
 		if not ArenaMaps.supports_mode(def, mode):
+			DotLog.debug(CHANNEL, "a map is off the ballot for the mode being played", {
+				"map": String(def.id), "mode": String(mode.id) if mode != null else "",
+			})
 			continue
 
 		out.append(_map_choice(def))
@@ -180,6 +183,14 @@ func _apply_mode(mode_id: StringName) -> DotResult:
 	# directly would be assigning the mode to a running match — the thing the note
 	# above says not to do.
 	director.current.meta["mode"] = String(mode_id)
+
+	# INFO, because a mode change is a map change to the same map — every player is
+	# re-teamed and the match restarts — and the director's own line names only the map.
+	DotLog.info(CHANNEL, "the vote changes the mode; the map re-runs under it", {
+		"map": String(director.current.id),
+		"from": String(game.mode.id) if game != null and game.mode != null else "",
+		"to": String(mode_id),
+	})
 
 	return await director.change_to(director.current.id)
 

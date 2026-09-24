@@ -98,6 +98,13 @@ var voice_received: int = 0
 var map_sent: int = 0
 var map_received: int = 0
 
+## Sends dropped because there was no peer to send them on.
+var dropped: int = 0
+
+## Whether the last send found the link live. Null before the first send, so the first
+## drop is reported as the edge it is. See [method _can_send].
+var _was_live: Variant = null
+
 
 static func attached_to(
 	parent: Node, p_bridge: ArenaNetBridge, server: bool
@@ -119,11 +126,38 @@ func _live() -> bool:
 		and multiplayer.has_multiplayer_peer()
 
 
+## [method _live], with the change reported rather than every call.
+##
+## [b]On the edge, not per send.[/b] A snapshot goes out thirty-two times a second per
+## peer; a line per dropped one is a log nobody can read, and no line at all is a server
+## whose clients stopped hearing it without anything saying so. So one WARN when sends
+## start being dropped, and one INFO with the count when they stop.
+func _can_send() -> bool:
+	var live := _live()
+
+	if _was_live == null or bool(_was_live) != live:
+		if not live:
+			DotLog.warn(CHANNEL, "sends are being dropped: there is no multiplayer peer", {
+				"server": is_server,
+			})
+		elif _was_live != null:
+			DotLog.info(CHANNEL, "the link is live again", {
+				"server": is_server, "dropped": dropped,
+			})
+
+		_was_live = live
+
+	if not live:
+		dropped += 1
+
+	return live
+
+
 # --- Sending ---------------------------------------------------------------
 
 ## A state snapshot. Server to one client, or to all of them when [param peer_id] is 0.
 func send_snapshot(peer_id: int, payload: PackedByteArray) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	snapshots_sent += 1
@@ -137,7 +171,7 @@ func send_snapshot(peer_id: int, payload: PackedByteArray) -> void:
 
 
 func send_event(peer_id: int, payload: PackedByteArray) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	events_sent += 1
@@ -151,7 +185,7 @@ func send_event(peer_id: int, payload: PackedByteArray) -> void:
 
 
 func send_input(payload: PackedByteArray) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	inputs_sent += 1
@@ -163,7 +197,7 @@ func send_input(payload: PackedByteArray) -> void:
 
 
 func send_request(payload: PackedByteArray) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	requests_sent += 1
@@ -182,7 +216,7 @@ func send_request(payload: PackedByteArray) -> void:
 ## proximity packet to the whole server. This family has shipped that exact bug once
 ## already, through a bot registered as peer 0.
 func send_voice(peer_id: int, payload: PackedByteArray) -> void:
-	if not _live() or peer_id <= 0:
+	if peer_id <= 0 or not _can_send():
 		return
 
 	voice_sent += 1
@@ -196,7 +230,7 @@ func send_voice(peer_id: int, payload: PackedByteArray) -> void:
 
 ## One captured voice frame, client to server.
 func send_voice_frame(payload: PackedByteArray) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	voice_sent += 1
@@ -215,7 +249,7 @@ func send_voice_frame(payload: PackedByteArray) -> void:
 ## step with dot-map's own, for a saving of about forty bytes per map change. The
 ## bit-packing exists for the snapshot, which is thirty-two of them a second.
 func send_map(peer_id: int, payload: Dictionary) -> void:
-	if not _live() or peer_id <= 0:
+	if peer_id <= 0 or not _can_send():
 		return
 
 	map_sent += 1
@@ -234,7 +268,7 @@ func send_map(peer_id: int, payload: Dictionary) -> void:
 
 ## A client's answer: how far through the download it is, or that it is ready.
 func send_map_report(payload: Dictionary) -> void:
-	if not _live():
+	if not _can_send():
 		return
 
 	map_sent += 1
@@ -379,4 +413,5 @@ func describe() -> Dictionary:
 		"requests": [requests_sent, requests_received],
 		"voice": [voice_sent, voice_received],
 		"map": [map_sent, map_received],
+		"dropped": dropped,
 	}

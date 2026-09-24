@@ -22,7 +22,8 @@ extends RefCounted
 ## tracker.record(&"7", ArenaStats.KILLS)
 ## [/codeblock]
 
-const CHANNEL := "arena.stats"
+# No `CHANNEL`: this is a schema of ids and two pure functions, and it has nothing to
+# report. The tracker that records against it is dot-stats', and logs there.
 
 # --- Fighting --------------------------------------------------------------
 

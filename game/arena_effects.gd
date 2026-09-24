@@ -83,10 +83,19 @@ func setup() -> DotResult:
 
 
 ## Put the per-hit hook back on whatever resolver is current.
+##
+## Called at setup and on each map change, so the WARN below is on an edge rather than
+## on every hit: without the hook, spawn protection's two records here and every damage
+## scale stop applying to hits while the effects themselves carry on ticking — the
+## failure mode the note in [method setup] describes, and one nothing else would show.
 func _bind_combat() -> void:
 	if game.combat == null or game.combat.resolver == null:
+		DotLog.warn(CHANNEL, "no combat resolver to hook; hits ignore spawn protection and damage effects", {
+			"map": String(game.map.id) if game.map != null else "",
+		})
 		return
 	game.combat.resolver.adjust = adjust_damage
+	DotLog.debug(CHANNEL, "the per-hit hook is on the current resolver")
 
 
 func _on_map_changed(_map: ArenaMap) -> void:
@@ -176,6 +185,9 @@ func adjust_damage(damage: DotDamage) -> void:
 
 	if manager.is_invulnerable(damage.victim):
 		damage.refuse("invulnerable")
+		DotLog.debug(CHANNEL, "a hit was refused", {
+			"why": "invulnerable", "attacker": damage.attacker, "victim": damage.victim,
+		})
 		return
 
 	# [b]dot-spawn's ledger, asked here because this is the one hook there is.[/b]
@@ -191,6 +203,9 @@ func adjust_damage(damage: DotDamage) -> void:
 		str(damage.attacker), str(damage.victim), damage.tick, damage.is_world_damage()
 	):
 		damage.refuse("spawn protection")
+		DotLog.debug(CHANNEL, "a hit was refused", {
+			"why": "spawn protection", "attacker": damage.attacker, "victim": damage.victim,
+		})
 		return
 
 	var dealt := manager.damage_dealt_scale(damage.attacker)
@@ -315,7 +330,13 @@ func on_spawn(entity: int) -> void:
 		return
 	manager.on_death(entity)  # clears whatever survived the round
 	manager.stand_up(entity, true)
-	var _res := manager.apply(PROTECTED, entity, entity)
+	var res := manager.apply(PROTECTED, entity, entity)
+
+	# A respawn without its protection is a spawn camp the server promised to stop.
+	if not res.ok:
+		DotLog.warn(CHANNEL, "a respawn was not given spawn protection", {
+			"entity": entity, "why": res.error.message,
+		})
 
 
 func on_round_reset() -> void:

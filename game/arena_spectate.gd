@@ -52,6 +52,15 @@ func setup() -> DotResult:
 	if not res.ok:
 		return res.wrap("arena spectate")
 
+	# Once per game, and INFO because it is the policy an admin is asked about: "why
+	# can I only watch my own team" has its answer in this line.
+	DotLog.info(CHANNEL, "spectating is set up", {
+		"own_team_only": manager.rules.force_camera == 1,
+		"roaming": manager.rules.allow_roaming,
+		"death_cam_ticks": manager.rules.death_cam_ticks,
+		"authoritative": manager.authoritative,
+	})
+
 	if not game.player_killed.is_connected(_on_killed):
 		game.player_killed.connect(_on_killed)
 	if not game.player_spawned.is_connected(_on_spawned):
@@ -148,6 +157,12 @@ func _on_killed(entry: DotKillFeed.Entry) -> void:
 	var at := Vector3.ZERO
 	if player != null and player.controller != null:
 		at = player.controller.state.position
+	else:
+		# A kill for somebody the game no longer holds: their death cam starts at the
+		# world origin, which is a camera in the floor of the middle of the map.
+		DotLog.warn(CHANNEL, "a death for a player the game does not hold; the death cam starts at the origin", {
+			"victim": entry.victim_key,
+		})
 	manager.on_death(entry.victim_key, at, entry.killer_key, game.current_tick())
 
 

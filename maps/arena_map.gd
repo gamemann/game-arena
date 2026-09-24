@@ -20,7 +20,8 @@ const ArenaMap := preload("arena_map.gd")
 ## The same reason a game like this ships with dev textures in the first place. A
 ## grey-box level whose geometry is its gameplay is a level you can reason about.
 
-const CHANNEL := "arena.map"
+# No `CHANNEL`: a map is content and says nothing at runtime — it is built, turned into
+# three representations, and checked in `headless_match`. The session that loads it logs.
 
 ## Solid boxes, in world space.
 var boxes: Array[AABB] = []

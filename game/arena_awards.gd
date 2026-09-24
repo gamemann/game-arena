@@ -25,7 +25,8 @@ const ArenaStats := preload("arena_stats.gd")
 ## HIGHEST stat here is therefore an absolute in both systems, which is the only way
 ## "best streak" means the same thing on both sides.
 
-const CHANNEL := "arena.awards"
+# No `CHANNEL`: a static catalogue document, validated by dot-achievements, which is
+# where a refusal is reported. Nothing here runs.
 
 ## Categories, so a menu can group them without parsing names.
 const CAT_COMBAT := &"combat"
