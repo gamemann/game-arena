@@ -52,9 +52,17 @@ const MAX_TICKS := 64 * 90
 
 const CHECKS := 310
 
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
+## total is the other half — see docs/testing.md.
+const SECTIONS := 25
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
+var _entered := 0
+var _completed := 0
 
 var _game: ArenaGame = null
 
@@ -127,6 +135,13 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	print("%d of %d sections ran to their last line" % [_completed, _entered])
+	if _entered != SECTIONS or _completed != _entered:
+		print("ERROR: %d sections entered and %d completed, %d expected. One aborted or was skipped." % [
+			_entered, _completed, SECTIONS
+		])
+		get_tree().quit(1)
+		return
 	# The total the section counter cannot be. A runtime error inside a section aborts
 	# that function, and the counter is satisfied because the section had already
 	# announced itself. See docs/testing.md.
@@ -143,7 +158,7 @@ func _run() -> void:
 
 ## The catalogue, and the one disagreement a mode can have with itself.
 func _test_modes() -> void:
-	print("modes")
+	_section("modes")
 
 	var ids := ArenaModes.ids()
 	_check(ids.size() >= 2, "the catalogue has modes", str(ids))
@@ -177,12 +192,13 @@ func _test_modes() -> void:
 	var broken := ArenaMode.team_deathmatch()
 	broken.rules.team_based = false
 	_check(not broken.validate().ok, "a mode that disagrees with its rules is refused")
+	_done()
 
 
 ## Two sides, tagged spawns, and a friendly-fire rule that protects somebody.
 func _test_team_deathmatch() -> void:
 	print("")
-	print("team deathmatch")
+	_section("team deathmatch")
 
 	var game := ArenaGame.new()
 	game.name = "TeamGame"
@@ -275,6 +291,7 @@ func _test_team_deathmatch() -> void:
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame
+	_done()
 
 
 ## Another id on the same side as [param id], or 0.
@@ -300,7 +317,7 @@ func _first_team_mate(game: ArenaGame, id: int) -> int:
 ## has offered that seam since it was written, and a layer that computes multipliers
 ## nothing multiplies by is this family's most repeated bug.
 func _test_effects() -> void:
-	_group("effects")
+	_section("effects")
 
 	var game := ArenaGame.new()
 	game.name = "EffectGame"
@@ -428,6 +445,7 @@ func _test_effects() -> void:
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame
+	_done()
 
 
 ## One resolved hit, returning what actually landed.
@@ -445,7 +463,7 @@ func _hit(game: ArenaGame, attacker: int, victim: int, amount: float) -> float:
 # --- Spectating ------------------------------------------------------------
 
 func _test_spectating() -> void:
-	_group("spectating")
+	_section("spectating")
 
 	var game := ArenaGame.new()
 	game.name = "SpectateGame"
@@ -528,6 +546,7 @@ func _test_spectating() -> void:
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame
+	_done()
 
 
 func _first_other_team(game: ArenaGame, id: int) -> int:
@@ -542,7 +561,7 @@ func _first_other_team(game: ArenaGame, id: int) -> int:
 # --- Objectives ------------------------------------------------------------
 
 func _test_king_of_the_hill() -> void:
-	_group("king of the hill")
+	_section("king of the hill")
 
 	var game := ArenaGame.new()
 	game.name = "KothGame"
@@ -665,10 +684,11 @@ func _test_king_of_the_hill() -> void:
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame
+	_done()
 
 
 func _test_capture_the_flag() -> void:
-	_group("capture the flag")
+	_section("capture the flag")
 
 	var game := ArenaGame.new()
 	game.name = "CtfGame"
@@ -744,6 +764,7 @@ func _test_capture_the_flag() -> void:
 	game.queue_free()
 	remove_child(game)
 	await get_tree().process_frame
+	_done()
 
 
 ## Zero the warmup and tick until the match is actually being played.
@@ -798,6 +819,16 @@ func _stand(game: ArenaGame, id: int, at: Vector3) -> void:
 
 # --- Assertions ------------------------------------------------------------
 
+func _section(title: String) -> void:
+	_entered += 1
+	_group(title)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
+
+
 func _check(condition: bool, what: String, detail: String = "") -> bool:
 	if condition:
 		_passed += 1
@@ -817,7 +848,7 @@ func _group(title: String) -> void:
 # --- Content ---------------------------------------------------------------
 
 func _test_content() -> void:
-	_group("content")
+	_section("content")
 
 	for weapon in ArenaContent.weapons():
 		_check(
@@ -878,10 +909,11 @@ func _test_content() -> void:
 		).ok,
 		"and refuses a rocket launcher to a player who has not unlocked it"
 	)
+	_done()
 
 
 func _test_map() -> void:
-	_group("map")
+	_section("map")
 
 	var map := ArenaMap.dm_box()
 
@@ -930,6 +962,7 @@ func _test_map() -> void:
 	# asserted in a comment.
 	var texture := ArenaMap.dev_texture(64, 16)
 	_check(texture != null and texture.get_width() == 64, "the dev texture generates")
+	_done()
 
 
 ## `dm_pit`: the geometry, the bot that has to get out of the pit, and the mode gate.
@@ -940,7 +973,7 @@ func _test_map() -> void:
 ## first map for which [method ArenaMaps.supports_mode] can answer no — and every place
 ## that asks it had, until now, only ever been told yes.
 func _test_pit() -> void:
-	_group("dm_pit")
+	_section("dm_pit")
 
 	var map := ArenaMap.dm_pit()
 
@@ -1187,6 +1220,7 @@ func _test_pit() -> void:
 			"and is flush with both arms of the ring rather than slotted off them",
 			"%.2f m west, %.2f m south" % [west_slot, south_slot]
 		)
+	_done()
 
 
 ## What a bot driven the way every bot in this family is driven actually MOVES at.
@@ -1213,7 +1247,7 @@ func _test_pit() -> void:
 ## above drives a walking bot for exactly this reason, and this is the number that says
 ## why.
 func _test_bot_ground_speed() -> void:
-	_group("what a bot actually travels at")
+	_section("what a bot actually travels at")
 
 	var map := ArenaMap.dm_atrium()
 	var tunables := ArenaPlayer.arena_tunables()
@@ -1257,6 +1291,7 @@ func _test_bot_ground_speed() -> void:
 
 	holder.queue_free()
 	remove_child(holder)
+	_done()
 
 
 ## The highest horizontal speed [param bot] reaches in two seconds of holding forward.
@@ -1314,7 +1349,7 @@ func _top_speed(
 ## a climb if you are willing to call them one; which pairs a player is meant to use is
 ## a design decision and the only part of this a human has to write down.
 func _test_reach() -> void:
-	_group("what a player can climb")
+	_section("what a player can climb")
 
 	var tunables := ArenaPlayer.arena_tunables()
 
@@ -1388,6 +1423,7 @@ func _test_reach() -> void:
 		"and none asks a player to cross more air than they can carry",
 		"; ".join(too_far)
 	)
+	_done()
 
 
 ## A bot driven up `dm_atrium`'s crates, start to roof.
@@ -1405,7 +1441,7 @@ func _test_reach() -> void:
 ## to gain height rather than ground, `auto_hop` is on, and eighteen metres is short
 ## enough that bleeding to the air cap does not stop it arriving.
 func _test_crate_climb() -> void:
-	_group("dm_atrium: the crates, climbed")
+	_section("dm_atrium: the crates, climbed")
 
 	var map := ArenaMap.dm_atrium()
 
@@ -1505,6 +1541,7 @@ func _test_crate_climb() -> void:
 
 	climber.queue_free()
 	remove_child(climber)
+	_done()
 
 
 ## The first mode in this game that needs tagged spawns, or null if there is none.
@@ -1521,7 +1558,7 @@ func _first_team_mode() -> ArenaMode:
 # --- Building --------------------------------------------------------------
 
 func _build() -> void:
-	_group("bringing up the match")
+	_section("bringing up the match")
 
 	_game = ArenaGame.new()
 	_game.name = "Arena"
@@ -1565,10 +1602,11 @@ func _build() -> void:
 	# Let the first tick run so the round goes live and everyone is spawned in.
 	_game.tick({})
 	await get_tree().process_frame
+	_done()
 
 
 func _test_players_exist() -> void:
-	_group("players")
+	_section("players")
 
 	_check(_game.players().size() == BOTS, "every bot has a body")
 
@@ -1585,6 +1623,7 @@ func _test_players_exist() -> void:
 			_game.combat.health_of(player.player_id) == player.health,
 			"and as damageable"
 		)
+	_done()
 
 
 # --- Playing ---------------------------------------------------------------
@@ -1653,7 +1692,7 @@ var _grounded_ticks := 0
 
 
 func _play() -> void:
-	_group("playing")
+	_section("playing")
 
 	var ticks := 0
 
@@ -1686,6 +1725,7 @@ func _play() -> void:
 		"ran %d ticks" % ticks
 	)
 	print("       %d ticks, %d kills" % [ticks, _kills.size()])
+	_done()
 
 
 ## A map vote over the match `_play` is about to run, with a score limit and nothing else.
@@ -1694,7 +1734,7 @@ func _play() -> void:
 ## hand; what it cannot reach is whether a game ever calls it — and until this, none did,
 ## so `trigger: score_limit` on any game here was a setting that validated and did nothing.
 func _build_vote() -> void:
-	_group("a map vote over the match")
+	_section("a map vote over the match")
 
 	var maps := ArenaMapDirector.new()
 	maps.name = "VoteMaps"
@@ -1740,10 +1780,11 @@ func _build_vote() -> void:
 			DotMatch.State.keys()[_game.match_node.state], _vote.leading_score()
 		])
 	)
+	_done()
 
 
 func _test_score_vote() -> void:
-	_group("the map vote heard the match")
+	_section("the map vote heard the match")
 
 	if not _check(_vote != null, "there is a vote"):
 		return
@@ -1777,10 +1818,11 @@ func _test_score_vote() -> void:
 	_vote.queue_free()
 	_vote.maps.queue_free()
 	_vote = null
+	_done()
 
 
 func _test_outcome() -> void:
-	_group("what happened")
+	_section("what happened")
 
 	_check(_kills.size() > 0, "bots killed each other", "%d kills" % _kills.size())
 
@@ -1855,6 +1897,7 @@ func _test_outcome() -> void:
 		"shots were resolved",
 		str(stats["resolved"])
 	)
+	_done()
 
 
 ## The HUD and the menus, built and driven headlessly.
@@ -1865,7 +1908,7 @@ func _test_outcome() -> void:
 ## stack keeps its four invariants straight when a scoreboard is held down over a pause
 ## menu.
 func _test_interface() -> void:
-	_group("the interface")
+	_section("the interface")
 
 	var ui_config := DotUiConfig.new()
 	ui_config.allow_pause = false
@@ -2075,6 +2118,7 @@ func _test_interface() -> void:
 	remove_child(hud)
 	stack.queue_free()
 	remove_child(stack)
+	_done()
 
 
 # --- Progression -----------------------------------------------------------
@@ -2088,7 +2132,7 @@ func _test_interface() -> void:
 ## three addons at all, and the family's own list is full of values produced correctly
 ## and consumed by nobody.
 func _test_progression() -> void:
-	_group("progression")
+	_section("progression")
 
 	var progress := _game.progress
 
@@ -2272,6 +2316,7 @@ func _test_progression() -> void:
 		"every board definition was accepted",
 		"%d of %d" % [defined, ArenaBoards.definitions().size()]
 	)
+	_done()
 
 
 # --- Changing the map ------------------------------------------------------
@@ -2285,7 +2330,7 @@ func _test_progression() -> void:
 ## and an [ArenaGame] that has to tear down a combat manager and a match node it did not
 ## expect to lose.
 func _test_map_change() -> void:
-	_group("changing the map")
+	_section("changing the map")
 
 	var catalogue := ArenaMaps.catalogue()
 
@@ -2614,6 +2659,7 @@ func _test_map_change() -> void:
 
 	director.queue_free()
 	remove_child(director)
+	_done()
 
 
 # --- Monsters --------------------------------------------------------------
@@ -2627,7 +2673,7 @@ func _test_map_change() -> void:
 ## handed anything, and a monster registered with dot-combat in an id space it must
 ## never share with a player.
 func _test_horde() -> void:
-	_group("monsters")
+	_section("monsters")
 
 	var catalogue := ArenaNpcs.catalogue()
 	_check(catalogue.size() == 3, "three monsters are catalogued")
@@ -2894,6 +2940,7 @@ func _test_horde() -> void:
 
 	horde.queue_free()
 	remove_child(horde)
+	_done()
 
 
 # --- Siege -----------------------------------------------------------------
@@ -2910,7 +2957,7 @@ func _test_horde() -> void:
 ## match rules, teams, damage rules, monsters and props in one pass, and the mode is
 ## what decides all five.
 func _test_siege() -> void:
-	_group("siege")
+	_section("siege")
 
 	var mode := ArenaModes.by_id(&"siege")
 
@@ -3110,6 +3157,7 @@ func _test_siege() -> void:
 
 	game.queue_free()
 	remove_child(game)
+	_done()
 
 
 ## Bot commands for an arbitrary game. The same aim-and-hold as `_commands_for_tick`,
@@ -3142,7 +3190,7 @@ func _commands_for(game: ArenaGame, tick: int) -> Dictionary:
 
 
 func _test_geometry_held() -> void:
-	_group("the world held")
+	_section("the world held")
 
 	# The failure dot-player-controller documents at length: a player who ends a tick
 	# exactly touching the floor is never grounded again and sinks through the world.
@@ -3184,6 +3232,7 @@ func _test_geometry_held() -> void:
 		"and the level geometry blocks shots",
 		"%d of 64 directions" % blocked
 	)
+	_done()
 
 
 ## [b]The second map, walked rather than asserted.[/b]
@@ -3193,7 +3242,7 @@ func _test_geometry_held() -> void:
 ## it" but "a body starting on the yard floor ends up on the roof by using the stair".
 ## Box counts pass on a pile of boxes in the same place.
 func _test_atrium() -> void:
-	_group("dm_atrium")
+	_section("dm_atrium")
 
 	var map := ArenaMap.dm_atrium()
 
@@ -3436,3 +3485,4 @@ func _test_atrium() -> void:
 	remove_child(walker)
 
 	await get_tree().process_frame
+	_done()
