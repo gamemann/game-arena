@@ -40,6 +40,12 @@ const SERVER_DIR := "user://arena_dedicated"
 ## listing prints it to say which game this is, and nothing treats it as proof.
 const APP_URL := "arena"
 
+## Every check this suite runs. It has no section counter, so this is its only guard
+## against a runtime error that aborts a test function part-way: the checks after the
+## error never happen, the ones before it still print ok, and "N passed, 0 failed" cannot
+## show the difference. See docs/testing.md.
+const CHECKS := 100
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -81,6 +87,12 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A test aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
