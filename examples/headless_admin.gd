@@ -631,7 +631,12 @@ func _test_reporting() -> void:
 		"every action is in the server's audit log"
 	)
 
-	var history: Array[DotPunishment] = _module.services.moderation.history_for("73")
+	# Under the subject the tools file against — the moderation manager's own peer
+	# mapping, a person rather than a userid that restarts at 1 every boot.
+	var target_session: DotClientSession = _server.session_by_userid(73)
+	var subject := _module.services.moderation.subject_for_peer(target_session.peer_id) \
+		if target_session != null else "73"
+	var history: Array[DotPunishment] = _module.services.moderation.history_for(subject)
 	var slapped := false
 	for record in history:
 		if record.evidence.get("action", "") == "slap":
