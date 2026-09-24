@@ -969,8 +969,7 @@ func _drive_spectator_camera() -> void:
 ## the movement command's angles rather than sampled again — sampling the mouse twice
 ## gives a shot that leaves at a different angle than the player was looking along.
 func _read_fire(move: DotFpsCommand) -> void:
-	var firing := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED \
-		and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	var firing := mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 
 	_fire.set_button(DotWeaponCommand.BUTTON_ATTACK, firing)
 	_fire.set_button(DotWeaponCommand.BUTTON_RELOAD, Input.is_key_pressed(KEY_R))
@@ -1021,6 +1020,33 @@ func _classify_level() -> void:
 	DotLog.debug(CHANNEL, "level classified", {"bodies": done})
 
 
+## Set by a headless suite to answer [method mouse_drives_view] without a display
+## server. Left null in play, where the real mouse mode is the only honest answer.
+var mouse_capture_override: Variant = null
+
+
+## Whether the pointer is currently the player's aim rather than a pointer.
+##
+## [b]Only while the cursor is actually captured.[/b] Escape releases it, and on the web
+## [member _awaiting_click] leaves it released before the first click — in both states
+## the pointer is a pointer, so spending its motion on the view turns the player away
+## from the "Click to play" notice they are being asked to click, and a click on a menu
+## would fire the rifle. Both the look and the trigger ask here.
+##
+## [b]A method with an override rather than a read of `Input.mouse_mode` at the call
+## site, because that read cannot be tested.[/b] The dummy display server pins the mode
+## to `MOUSE_MODE_VISIBLE` and drops every write to it without erroring, so no headless
+## suite could put a client into the state a player plays in: the guard this game had
+## from the start had never once been exercised, in either direction.
+## `headless_presentation` drives it both ways now. Same shape as game-g2gfast's and
+## game-playground's.
+func mouse_drives_view() -> bool:
+	if mouse_capture_override != null:
+		return bool(mouse_capture_override)
+
+	return Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	# [b]The console first, and before the click that captures the mouse.[/b] Without it,
 	# a click inside an open console grabs pointer lock and the next keystroke goes to
@@ -1060,7 +1086,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	if event is InputEventMouseMotion:
-		if _sampler != null and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		if _sampler != null and mouse_drives_view():
 			_sampler.handle_event(event)
 		return
 

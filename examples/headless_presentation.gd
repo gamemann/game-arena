@@ -1,5 +1,6 @@
 extends Node
 
+const ArenaClient := preload("../game/arena_client.gd")
 const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaParty := preload("../game/arena_party.gd")
@@ -22,7 +23,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 89
+const CHECKS := 92
 
 var _passed := 0
 var _failed := 0
@@ -50,6 +51,7 @@ func _run() -> void:
 	_test_party_is_sandboxed()
 	_test_chat_box()
 	_test_look_and_crosshair()
+	_test_mouse_drives_view()
 	_test_vote_is_heard()
 	_test_blind_and_beacon()
 
@@ -554,6 +556,59 @@ func _test_look_and_crosshair() -> void:
 	p.settings.reset_value(&"crosshair")
 	crosshair.free()
 	p.queue_free()
+	_done()
+
+
+## `ArenaClient`'s look guard, driven both ways through `mouse_capture_override`.
+##
+## [b]`Input.mouse_mode` is a no-op here.[/b] The dummy display server reads VISIBLE
+## however it is written, so a suite that set it directly would prove only the released
+## half and pass anyway — which is why the guard `_unhandled_input` had from the start
+## was never exercised. The client is built but not added to the tree: `_ready` builds
+## a whole networked client, and the branch under test needs a player, a sampler and
+## nothing else.
+func _test_mouse_drives_view() -> void:
+	_section("The mouse turns the view only while it is captured")
+
+	var client := ArenaClient.new()
+	var stand_in := ArenaPlayer.new()
+	client.player = stand_in
+	client._sampler = DotFpsSampler.new(DotFpsTunables.new())
+
+	var motion := InputEventMouseMotion.new()
+	motion.relative = Vector2(120.0, 0.0)
+
+	client.mouse_capture_override = true
+	client._unhandled_input(motion)
+	_check(
+		client._sampler._mouse_delta.is_equal_approx(Vector2(120.0, 0.0)),
+		"a motion with the cursor captured reaches the sampler",
+		str(client._sampler._mouse_delta)
+	)
+
+	# The other half, and the one the guard exists for: a released cursor is a
+	# pointer, aimed at a menu or at "Click to play", and must turn nothing.
+	client._sampler._mouse_delta = Vector2.ZERO
+	client.mouse_capture_override = false
+	client._unhandled_input(motion)
+	_check(
+		client._sampler._mouse_delta == Vector2.ZERO,
+		"and a motion with the cursor released does not",
+		str(client._sampler._mouse_delta)
+	)
+
+	# And with no override, the real mode decides — VISIBLE under the dummy display
+	# server, which is the whole reason the override exists.
+	client.mouse_capture_override = null
+	_check(
+		client.mouse_drives_view() == (Input.mouse_mode == Input.MOUSE_MODE_CAPTURED),
+		"left unset, the predicate is the real mouse mode",
+		"mode %d" % Input.mouse_mode
+	)
+
+	client.player = null
+	stand_in.free()
+	client.free()
 	_done()
 
 
