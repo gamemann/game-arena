@@ -43,6 +43,9 @@ const CUE_COUNT := &"vote_count"
 const METADATA_KEY := "map_vote"
 
 ## A ballot opened. The host relays it to clients.
+## An extend raised the match's score limit to [param limit]. The module tells clients.
+signal score_limit_raised(limit: int)
+
 signal vote_opened(options: Array, seconds: float)
 
 ## A ballot closed. Carries the whole result, including why.
@@ -313,6 +316,11 @@ func advance(delta: float) -> void:
 	if director == null:
 		return
 
+	# Every tick, because a mode change builds a new match without `maps.map_changed` —
+	# `arena_mode` calls `game.change_map` directly — and a vote left holding the freed one
+	# reports no score and hears no round end, so "apply at the end of the round" becomes
+	# "when the clock runs out". One comparison when nothing changed.
+	_bind_match()
 	director.advance(delta)
 	_report_score()
 
@@ -396,6 +404,7 @@ func _on_score_limit_changed(limit: int) -> void:
 
 	if _match.rules.score_limit > 0 and limit > _match.rules.score_limit:
 		_match.rules.score_limit = limit
+		score_limit_raised.emit(limit)
 
 		DotLog.info(CHANNEL, "an extend raised the match's score limit", {"limit": limit})
 

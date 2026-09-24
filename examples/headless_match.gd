@@ -50,7 +50,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 310
+const CHECKS := 311
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1813,6 +1813,27 @@ func _test_score_vote() -> void:
 		"and dot-match's round end reached it (%d)" % _vote.director.clock.rounds_played,
 		"ArenaVote.note_round_end existed and was called by nothing"
 	)
+
+	# [b]A new match is followed without a map change.[/b] `arena_mode` calls
+	# `game.change_map` directly, which builds a new match and never fires
+	# `maps.map_changed` — and a vote bound only there held the freed match: no score, no
+	# round end. A stand-in match node here rather than a real mode change, which would
+	# replace the match every section after this one reads.
+	var real_match: DotMatch = _game.match_node
+	var stand_in := DotMatch.new()
+	_game.match_node = stand_in
+	_vote.advance(1.0 / float(TICK_RATE))
+	var followed: bool = _vote.get("_match") == stand_in \
+		and stand_in.round_ended.is_connected(_vote._on_round_ended)
+	_game.match_node = real_match
+	_vote.advance(1.0 / float(TICK_RATE))
+	_check(
+		followed and _vote.get("_match") == real_match
+			and not stand_in.round_ended.is_connected(_vote._on_round_ended),
+		"and it follows a new match the moment the game has one, and lets the old one go",
+		"a mode change builds a match without map_changed, and the vote kept the freed one"
+	)
+	stand_in.free()
 
 	_vote.director.close_vote()
 	_vote.queue_free()
