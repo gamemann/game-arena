@@ -114,8 +114,6 @@ const COMMAND_NAMES := {"vote": "vote"}
 ## because a map change builds a new match; see [method _bind_match].
 var _match: DotMatch = null
 
-## The leading score last reported, so the director hears a change rather than a tick.
-var _last_score: int = -1
 
 
 ## Builds the director over the game's maps and modes.
@@ -356,10 +354,12 @@ func leading_score() -> int:
 func _report_score() -> void:
 	var top := leading_score()
 
-	if top == _last_score:
+	# Against the clock's own memory rather than a copy here: the clock zeroes it on every
+	# restart — a new map, an extend, a ballot that kept the map — and a cached copy would
+	# then hold back a score that had not moved but that the clock had forgotten.
+	if top == director.clock.top_score:
 		return
 
-	_last_score = top
 	director.note_score(top)
 
 
@@ -378,7 +378,6 @@ func _bind_match() -> void:
 		_match.round_ended.disconnect(_on_round_ended)
 
 	_match = node
-	_last_score = -1
 
 	if _match != null:
 		_match.round_ended.connect(_on_round_ended)
