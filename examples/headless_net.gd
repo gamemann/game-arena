@@ -31,7 +31,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 135
+const CHECKS := 136
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1035,6 +1035,17 @@ func _test_event_wire() -> void:
 		ArenaEvents.write_match(3, -64, 5)
 	))
 	_check(int(over["remaining_ticks"]) == -64, "and a clock past zero stays negative")
+
+	# The score limit rides at the end, because an extend raises it mid-match and HELLO
+	# is sent once. A MATCH without it — an older server — keeps the limit it had.
+	var limited := ArenaEvents.read_match(DotNetReader.new(
+		ArenaEvents.write_match(3, 1920, 5, 35)
+	))
+	_check(
+		bool(limited["ok"]) and int(limited.get("score_limit", -1)) == 35
+			and not state.has("score_limit"),
+		"and the score limit an extend raised, only when it is sent"
+	)
 
 	var leave := ArenaEvents.read_leave(DotNetReader.new(ArenaEvents.write_leave(99)))
 	_check(bool(leave["ok"]) and int(leave["session_id"]) == 99, "a LEAVE round-trips")

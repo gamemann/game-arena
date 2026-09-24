@@ -629,8 +629,16 @@ func _send_match_state(peer_id: int) -> void:
 	send_event(peer_id, ArenaEvents.Kind.MATCH, ArenaEvents.write_match(
 		int(game.match_node.state),
 		int(round(game.match_node.seconds_remaining() * float(net.config.tick_rate))),
-		game.match_node.round_number
+		game.match_node.round_number,
+		game.match_node.rules.score_limit if game.match_node.rules != null else 0
 	))
+
+
+## An extend raised the match's score limit: everybody's HUD shows it, and a late joiner
+## would otherwise be told the one the match started with.
+func note_score_limit_changed() -> void:
+	if net != null and net.is_server:
+		_send_match_state(0)
 
 
 func _on_match_state_changed(_from: int, _to: int) -> void:

@@ -213,7 +213,12 @@ static func read_kill(reader: DotNetReader) -> Dictionary:
 
 # --- MATCH -----------------------------------------------------------------
 
-static func write_match(state: int, remaining_ticks: int, round_number: int) -> PackedByteArray:
+## [param score_limit] is last and optional on the wire: an extend raises it mid-match,
+## and HELLO — the only other place it travelled — is sent once. A reader that finds the
+## message ends before it keeps the limit it had.
+static func write_match(
+	state: int, remaining_ticks: int, round_number: int, score_limit: int = -1
+) -> PackedByteArray:
 	var writer := _w()
 	writer.write_uint(state, 4)
 	# `write_svarint`, not `write_varint`. "No limit" is negative and a match past its
@@ -223,6 +228,8 @@ static func write_match(state: int, remaining_ticks: int, round_number: int) -> 
 	# Zigzag also keeps a small negative to one byte, which two's complement would not.
 	writer.write_svarint(remaining_ticks)
 	writer.write_uint(round_number, 16)
+	if score_limit >= 0:
+		writer.write_uint(score_limit, 16)
 	return writer.to_bytes()
 
 
@@ -232,6 +239,8 @@ static func read_match(reader: DotNetReader) -> Dictionary:
 		"remaining_ticks": reader.read_svarint(),
 		"round": reader.read_uint(16),
 	}
+	if reader.ok() and not reader.at_end():
+		out["score_limit"] = reader.read_uint(16)
 	out["ok"] = reader.ok()
 	return out
 

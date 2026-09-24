@@ -425,7 +425,13 @@ func _build_vote() -> DotResult:
 
 	vote.is_admin_fn = func(voter: StringName) -> bool:
 		var session := server.session_by_userid(String(voter).to_int())
-		return session != null and session.permissions.has(DotAdminFlags.CHANGEMAP)
+		# has_permission, not permissions.has: the second misses `root`.
+		return session != null and session.has_permission(DotAdminFlags.CHANGEMAP)
+
+	vote.score_limit_raised.connect(func(_limit: int) -> void:
+		if bridge != null:
+			bridge.note_score_limit_changed()
+	)
 
 	var ready := vote.setup()
 
@@ -545,8 +551,13 @@ class ArenaQueryProvider extends DotQueryProvider:
 		if module.vote != null:
 			values["voting"] = module.vote.is_voting()
 			# The vote's clock is the one that runs when there is a vote; see
-			# `_physics_process`.
-			values["time_left"] = int(module.vote.director.clock.remaining)
+			# `_physics_process`. Left out when the vote has none (`rtv_only`,
+			# `duration_sec: 0`): a 0 there reads, in a server browser, as a map about to end.
+			var clock := DotVoteClockView.state_of(module.vote.director)
+			if bool(clock["has_clock"]):
+				values["time_left"] = int(clock["seconds_left"])
+			else:
+				values.erase("time_left")
 
 		snapshot.contribute_game(values)
 

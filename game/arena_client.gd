@@ -642,6 +642,11 @@ func _on_match(info: Dictionary) -> void:
 	game.match_node.state = int(info["state"]) as DotMatch.State
 	game.match_node.round_number = int(info["round"])
 
+	# What the HUD's "24 / 35" divides by. This match's rules are its own copy
+	# (`ArenaGame` duplicates the mode's), so writing them touches nothing shared.
+	if info.has("score_limit") and game.match_node.rules != null:
+		game.match_node.rules.score_limit = int(info["score_limit"])
+
 	# Ticks, divided by OUR rate — which HELLO set to the server's, so the two agree.
 	# Sending seconds instead would have been a number derived from the sender's rate
 	# and read as though it were derived from the receiver's.
