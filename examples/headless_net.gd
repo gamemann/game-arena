@@ -33,8 +33,16 @@ const LOSS_EVERY := 5
 
 const CHECKS := 135
 
+## Sections entered against sections that ran to their last line, and against this. A
+## runtime error inside a section aborts that function and nothing says so; a section that
+## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
+## total is the other half — see docs/testing.md.
+const SECTIONS := 13
+
 var _passed := 0
 var _failed := 0
+var _entered := 0
+var _completed := 0
 
 var _server_game: ArenaGame = null
 var _server_net: DotNetManager = null
@@ -79,6 +87,13 @@ func _run() -> void:
 	print("")
 	print("%d passed, %d failed" % [_passed, _failed])
 
+	print("%d of %d sections ran to their last line" % [_completed, _entered])
+	if _entered != SECTIONS or _completed != _entered:
+		print("ERROR: %d sections entered and %d completed, %d expected. One aborted or was skipped." % [
+			_entered, _completed, SECTIONS
+		])
+		get_tree().quit(1)
+		return
 	# The total the section counter cannot be. A runtime error inside a section aborts
 	# that function, and the counter is satisfied because the section had already
 	# announced itself. See docs/testing.md.
@@ -89,6 +104,16 @@ func _run() -> void:
 		get_tree().quit(1)
 		return
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+func _section(title: String) -> void:
+	_entered += 1
+	print(title)
+
+
+## A section reached its last line. See [constant SECTIONS].
+func _done() -> void:
+	_completed += 1
 
 
 func _check(condition: bool, what: String, detail: String = "") -> bool:
@@ -219,7 +244,7 @@ func _build_client(peer_id: int, session_id: int) -> void:
 
 func _test_command_wire() -> void:
 	print("")
-	print("[command wire]")
+	_section("[command wire]")
 
 	var move := DotFpsCommand.new()
 	move.move = Vector2(0.6, -0.4)
@@ -273,6 +298,7 @@ func _test_command_wire() -> void:
 	greedy.delta = 10.0
 	greedy.sanitise(TICK_RATE)
 	_check(greedy.delta <= 2.0 / float(TICK_RATE), "a ten-second tick is refused")
+	_done()
 
 
 # --- Joining ---------------------------------------------------------------
@@ -374,7 +400,7 @@ func _run_ticks() -> void:
 
 func _test_convergence() -> void:
 	print("")
-	print("[convergence]")
+	_section("[convergence]")
 
 	for peer_id in _clients:
 		var entry: Dictionary = _clients[peer_id]
@@ -414,11 +440,12 @@ func _test_convergence() -> void:
 	var server_moved := _server_bridge.behaviour_for(11).player.controller.state.position
 	_check(server_moved.length() > 1.0, "the server actually simulated movement",
 		str(server_moved))
+	_done()
 
 
 func _test_acks_and_recovery() -> void:
 	print("")
-	print("[acknowledgements]")
+	_section("[acknowledgements]")
 
 	for peer_id in _clients:
 		_check(
@@ -471,11 +498,12 @@ func _test_acks_and_recovery() -> void:
 		"loss was real",
 		"client 3 lost %d" % _clients[3]["net"].stats.snapshots_lost
 	)
+	_done()
 
 
 func _test_owner_only() -> void:
 	print("")
-	print("[audience]")
+	_section("[audience]")
 
 	# Client 2 owns player 11 and observes player 12. Ammunition is owner-only, so it
 	# must know its own and not the other's — data never sent cannot be read out of a
@@ -502,6 +530,7 @@ func _test_owner_only() -> void:
 	# next piece of work here; see this project's CLAUDE.md.
 	_check(other.net_health > 0, "while an opponent's health does arrive",
 		str(other.net_health))
+	_done()
 
 
 # --- Maps and voice over the link -------------------------------------------
@@ -516,7 +545,7 @@ func _test_owner_only() -> void:
 ## would use.
 func _test_map_sync_wire() -> void:
 	print("")
-	print("[map sync over the link]")
+	_section("[map sync over the link]")
 
 	var server_link := ArenaNetLink.attached_to(self, _server_bridge, true)
 	server_link.name = "MapServerLink"
@@ -635,6 +664,7 @@ func _test_map_sync_wire() -> void:
 	remove_child(session)
 	remove_child(server_link)
 	remove_child(client_link)
+	_done()
 
 
 ## A voice frame, client to server to another client.
@@ -646,7 +676,7 @@ func _test_map_sync_wire() -> void:
 ## speaking the same game.
 func _test_voice_wire() -> void:
 	print("")
-	print("[voice over the link]")
+	_section("[voice over the link]")
 
 	var relayed: Array[Dictionary] = []
 	var heard: Array[PackedByteArray] = []
@@ -710,11 +740,12 @@ func _test_voice_wire() -> void:
 	client_link.queue_free()
 	remove_child(server_link)
 	remove_child(client_link)
+	_done()
 
 
 func _test_disconnect() -> void:
 	print("")
-	print("[disconnect]")
+	_section("[disconnect]")
 
 	_server_bridge.remove_peer(3)
 	_check(_server_net.registry.count() == 1, "the peer's entity is released",
@@ -727,6 +758,7 @@ func _test_disconnect() -> void:
 	var next := _server_game.current_tick() + 1
 	_server_bridge.server_tick(next)
 	_check(_server_game.current_tick() == next, "the server ticks on")
+	_done()
 
 
 ## An administrator noclips a player on the server, and the player's own client — which
@@ -750,7 +782,7 @@ func _test_disconnect() -> void:
 ## on the simulated state, which is what a player's camera follows.
 func _test_forced_noclip_is_predicted() -> void:
 	print("")
-	print("[an admin's noclip, predicted by the client it happens to]")
+	_section("[an admin's noclip, predicted by the client it happens to]")
 
 	var entry: Dictionary = _clients[2]
 	var session := int(entry["session"])
@@ -813,6 +845,7 @@ func _test_forced_noclip_is_predicted() -> void:
 	server_player.controller.state.mode = DotFpsState.Mode.AIR
 	server_player.controller.teleport(Vector3(0.0, 0.1, 18.0))
 	var _land := _flight_window(0, 24, 0)
+	_done()
 
 
 ## An administrator's blind and beacon, through the real handlers, over the lossy link.
@@ -824,7 +857,7 @@ func _test_forced_noclip_is_predicted() -> void:
 ## the player, which is what its HUD and its renderer read.
 func _test_blind_and_beacon() -> void:
 	print("")
-	print("[an admin's blind and beacon: who is told]")
+	_section("[an admin's blind and beacon: who is told]")
 
 	var handlers := ArenaModTools.handlers(_server_game)
 	var blind: Callable = handlers[DotModTools.ACTION_BLIND]
@@ -884,6 +917,7 @@ func _test_blind_and_beacon() -> void:
 		not _server_bridge.behaviour_for(11).identity.always_relevant,
 		"and puts player 11 back under the ordinary interest rules"
 	)
+	_done()
 
 
 ## Runs [param ticks] more ticks with [param peer] holding [param buttons] and nothing else
@@ -952,7 +986,7 @@ func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 
 func _test_event_wire() -> void:
 	print("")
-	print("[events]")
+	_section("[events]")
 
 	# Every encoder and its decoder, round-tripped. **The two ends of a serialisation
 	# are exactly as capable of never meeting as the two ends of a wire** — this family
@@ -1062,11 +1096,12 @@ func _test_event_wire() -> void:
 		ArenaEvent.new(ArenaEvents.Kind.HELLO, PackedByteArray()).validate().ok,
 		"and a known one is not"
 	)
+	_done()
 
 
 func _test_ready_gate() -> void:
 	print("")
-	print("[the ready gate]")
+	_section("[the ready gate]")
 
 	# **Nothing may be sent to a peer before it says it can receive.** dot-server's
 	# signon finishes and THEN the client builds its scene, so everything sent in
@@ -1105,11 +1140,12 @@ func _test_ready_gate() -> void:
 	bridge.queue_free()
 	game.queue_free()
 	net.queue_free()
+	_done()
 
 
 func _test_predicted_node_is_not_moved() -> void:
 	print("")
-	print("[the predicted entity's node]")
+	_section("[the predicted entity's node]")
 
 	# `DotNetManager.receive_snapshot` calls `read_state` — and therefore
 	# `_net_state_applied` — BEFORE `DotNetPredictor.reconcile`, and the first thing
@@ -1166,11 +1202,12 @@ func _test_predicted_node_is_not_moved() -> void:
 		"applying state DOES move a remote player's node",
 		str(remote.player.global_position)
 	)
+	_done()
 
 
 func _test_config_agreement() -> void:
 	print("")
-	print("[the two ends agree]")
+	_section("[the two ends agree]")
 
 	# **A quantised value decoded against a different range is a different value, not a
 	# less precise one.** `world_extent` is the range every replicated position is an
@@ -1224,3 +1261,4 @@ func _test_config_agreement() -> void:
 			"and client %d sealed the same message schema" % peer_id,
 			"%s vs %s" % [net.messages.schema_hash(), server_hash]
 		)
+	_done()
