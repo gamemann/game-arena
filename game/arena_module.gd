@@ -50,6 +50,17 @@ var bridge: ArenaNetBridge = null
 ## Chat, voice and moderation. See [ArenaServices] for why it is not this file.
 var services: ArenaServices = null
 
+## Where the services keep punishments. Empty is dot-moderation's own default,
+## `user://moderation.json` — the store a real server enforces.
+##
+## [b]Static, because nothing holds this module before it exists[/b]: dot-server constructs
+## it from a path inside `load_module`, so there is no instance for a host to set a field on
+## first. `examples/dedicated.tscn` points it at a directory of its own; before it could,
+## every run wrote an hour-long gag against the same test uid into the real store, 457
+## records by the time anybody counted. game-simple-lobby's `RoomModule.punishments_path`
+## is the same seam.
+static var punishments_file: String = ""
+
 ## The live tools' commands. See [method _build_mod_commands].
 var mod_commands: DotModToolCommands = null
 
@@ -306,6 +317,7 @@ func _build_identity() -> DotResult:
 func _build_services() -> DotResult:
 	services = ArenaServices.new()
 	services.name = "Services"
+	services.punishments_file = punishments_file
 
 	# Before `setup`, not after. The relay is built inside it, and a client assigned
 	# afterwards is a client the relay has already decided it does not have — the same

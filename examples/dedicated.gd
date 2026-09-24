@@ -44,7 +44,7 @@ const APP_URL := "arena"
 ## against a runtime error that aborts a test function part-way: the checks after the
 ## error never happen, the ones before it still print ok, and "N passed, 0 failed" cannot
 ## show the difference. See docs/testing.md.
-const CHECKS := 100
+const CHECKS := 105
 
 var _passed := 0
 var _failed := 0
@@ -63,6 +63,8 @@ func _run() -> void:
 	print("game-arena dedicated server")
 	print("")
 
+	var probe: Array = [] if _is_exit_probe() else _run_exit_probe()
+
 	_cleanup()
 
 	var built := await _build()
@@ -78,6 +80,9 @@ func _run() -> void:
 		_test_unload()
 		_test_no_message_preloads_itself()
 
+	if not probe.is_empty():
+		_test_exits_clean(probe)
+
 	_teardown()
 	_cleanup()
 
@@ -87,9 +92,12 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
-	if _passed + _failed != CHECKS:
+	# The copy of this suite that the exit probe runs does not run the probe itself.
+	var checks := CHECKS - (EXIT_PROBE_CHECKS if _is_exit_probe() else 0)
+
+	if _passed + _failed != checks:
 		print("ERROR: %d checks ran, %d expected. A test aborted part-way." % [
-			_passed + _failed, CHECKS
+			_passed + _failed, checks
 		])
 		get_tree().quit(1)
 		return
@@ -176,6 +184,10 @@ func _build() -> bool:
 
 	if not _check(booted.ok, "the server boots and listens on %d" % PORT, str(booted.error)):
 		return false
+
+	# Into this run's own directory, which is deleted on the way in and out. Before this
+	# line every run wrote an hour-long gag into the store a real server enforces.
+	ArenaModule.punishments_file = "%s/punishments.json" % SERVER_DIR
 
 	var loaded: DotResult = await _server.modules.load_module(
 		"res://game/arena_module.gd"
@@ -329,6 +341,17 @@ func _test_services() -> void:
 	# dot-server's mute is two booleans on a session object and a session dies with
 	# its connection, so a muted player reconnects and talks. A punishment is a record.
 	var subject := DotPunishmentSubject.for_uid("4242")
+
+	# [b]The store, and that it is empty before this run writes to it.[/b] The gag below is
+	# an hour long against a fixed uid, so a suite that carried its store between runs would
+	# find this person already gagged and could not tell its own gag from the last one.
+	var store: Object = services.moderation.store
+	var store_path := str(store.get("path")) if store != null else ""
+	_check(store_path.begins_with(SERVER_DIR),
+		"punishments go to this run's own store, not the one a real server enforces", store_path)
+	_check(services.moderation.count() == 0,
+		"and it starts empty, so nothing a previous run did is in it",
+		"%d records" % services.moderation.count())
 
 	# Awaited, and typed. A punishment store may be a shared database behind a
 	# community's four servers — the whole reason both halves of the interface are
@@ -918,3 +941,69 @@ func _extends_message(source: String) -> bool:
 		if line.begins_with("extends "):
 			return line.contains("DotNetMessage") or line.contains("dot_net_message.gd")
 	return false
+
+
+# --- Exiting clean ----------------------------------------------------------------
+
+## The flag this suite hands the copy of itself it runs. See [method _run_exit_probe].
+const EXIT_PROBE_FLAG := "--exit-probe"
+
+## What the exit probe adds to a run — one section, these checks — and the copy does not.
+const EXIT_PROBE_CHECKS := 3
+
+
+func _is_exit_probe() -> bool:
+	return EXIT_PROBE_FLAG in OS.get_cmdline_user_args()
+
+
+## Runs this same suite in a fresh process: `[exit code, everything it printed]`.
+##
+## [b]A leak is reported after `quit()`, by the engine, where nothing in the process that
+## leaked can read it.[/b] "N ObjectDB instances were leaked at exit" is printed once the
+## scene tree is gone, so the only process that can check a run's exit is another one. On
+## Godot 4.7.2 a script that names itself, loaded after its base, cuts the engine's exit
+## teardown short and every script loaded before it is reported leaked — hundreds of lines
+## a passing run printed for weeks, which is why this is a check now and not a warning.
+##
+## [b]First, before this run opens a port[/b], so the two never contend for a socket — and
+## so this run is always the second one against the same `user://`, which is the other
+## thing no single run can see.
+func _run_exit_probe() -> Array:
+	print("(running this suite once more in a fresh process, to read what it leaves at exit)")
+	var scene := scene_file_path if scene_file_path != "" else "res://examples/dedicated.tscn"
+	var out: Array = []
+	var code := OS.execute(OS.get_executable_path(), [
+		"--headless", "--path", ProjectSettings.globalize_path("res://"),
+		scene, "--", EXIT_PROBE_FLAG,
+	], out, true)
+	var text := ""
+	for chunk: Variant in out:
+		text += str(chunk)
+	return [code, text]
+
+
+func _test_exits_clean(probe: Array) -> void:
+	print("")
+	print("exiting clean, as a second process saw it")
+
+	var code: int = probe[0]
+	var text: String = probe[1]
+
+	_check(code == 0, "this suite, run again in a fresh process, passes",
+		"exit %d; its last lines:\n%s" % [code, _last_lines(text, 25)] if code != 0 else "")
+	_check(not text.contains("leaked at exit"), "and leaves no object alive at exit",
+		_line_with(text, "leaked at exit"))
+	_check(not text.contains("still in use at exit"), "and no resource",
+		_line_with(text, "still in use at exit"))
+
+
+func _line_with(text: String, needle: String) -> String:
+	for line in text.split("\n"):
+		if line.contains(needle):
+			return line.strip_edges()
+	return ""
+
+
+func _last_lines(text: String, count: int) -> String:
+	var lines := text.strip_edges().split("\n")
+	return "\n".join(lines.slice(maxi(0, lines.size() - count)))
