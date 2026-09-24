@@ -41,10 +41,41 @@ var score_label: Label = null
 ## running and how far along it is.
 var objective_label: Label = null
 
+## An administrator's `blind`, over the world and under the rest of the HUD.
+##
+## [b]Under the widgets, on purpose.[/b] A blind takes the game away, not the player's
+## bearings: the clock, the kill feed, their own health and the chat box still say that
+## the match is going on and that they are in it, which is what makes it read as "an
+## admin did this" rather than as a client that stopped drawing. The menus and the chat
+## box are above the HUD altogether.
+##
+## Black rather than white. A white screen at full brightness is a thing a player can be
+## hurt by in a dark room, and taking the picture away is the whole of the point.
+var blind_overlay: ColorRect = null
+
+## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and
+## not instant, so it reads as something done to the screen rather than a frame dropped.
+const BLIND_FADE_SEC := 0.25
+
+const BLIND_COLOUR := Color(0.01, 0.01, 0.015)
+
 
 ## Builds every widget. Call after adding to the tree.
 func build(p_game: ArenaGame) -> void:
 	game = p_game
+
+	# First, so every widget added below draws over it. See [member blind_overlay].
+	blind_overlay = ColorRect.new()
+	blind_overlay.name = "Blind"
+	blind_overlay.color = BLIND_COLOUR
+	# Not anchored to this HUD's rect: `DotHud` insets itself by the safe area, and a
+	# blind the size of the HUD left a 16-pixel frame of the world visible round the edge
+	# of the first rendered frame. Sized to the whole viewport in `present_blind` instead.
+	blind_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	blind_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	blind_overlay.modulate.a = 0.0
+	blind_overlay.visible = false
+	add_child(blind_overlay)
 
 	crosshair = DotCrosshair.new()
 	crosshair.name = "Crosshair"
@@ -254,11 +285,12 @@ func catch_up(since_tick: int = -1) -> int:
 ## The round timer and the score are read once a frame rather than through a
 ## `DotHudWidget`, because both are strings assembled from several values and a widget
 ## exists to bind one.
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if Engine.is_editor_hint():
 		return
 
 	match_view()
+	present_blind(delta)
 
 	if game == null or timer_label == null:
 		return
@@ -290,6 +322,29 @@ func _process(_delta: float) -> void:
 
 	if objective_label != null:
 		objective_label.text = _objective_line()
+
+
+## Fades [member blind_overlay] toward whether the followed player is blinded.
+##
+## Read off [member player] rather than pushed by anybody, because the flag arrives in a
+## snapshot on a networked client and is set directly offline, and a HUD that had to be
+## told would need telling from two places. Public so a check can step it.
+func present_blind(delta: float) -> void:
+	if blind_overlay == null:
+		return
+
+	var want := 1.0 if _live() and player.blinded else 0.0
+	blind_overlay.modulate.a = move_toward(
+		blind_overlay.modulate.a, want, maxf(delta, 0.0) / BLIND_FADE_SEC
+	)
+	blind_overlay.visible = blind_overlay.modulate.a > 0.0
+
+	if blind_overlay.visible and is_inside_tree():
+		# The whole viewport, in this HUD's own coordinates — whatever the safe area and
+		# the interface scale did to where this HUD starts.
+		var inverse := get_global_transform().affine_inverse()
+		blind_overlay.position = inverse * Vector2.ZERO
+		blind_overlay.size = inverse.basis_xform(get_viewport_rect().size)
 
 
 ## One line about the objectives, or nothing at all.

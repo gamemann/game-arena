@@ -1,5 +1,7 @@
 extends Node
 
+const ArenaHud := preload("../game/arena_hud.gd")
+const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaParty := preload("../game/arena_party.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
 const ArenaPresentation := preload("../game/arena_presentation.gd")
@@ -20,7 +22,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 76
+const CHECKS := 89
 
 var _passed := 0
 var _failed := 0
@@ -49,6 +51,7 @@ func _run() -> void:
 	_test_chat_box()
 	_test_look_and_crosshair()
 	_test_vote_is_heard()
+	_test_blind_and_beacon()
 
 	print("")
 	_check(
@@ -626,5 +629,102 @@ func _test_vote_is_heard() -> void:
 		"and an empty cue or one this client does not know is silence, not an error"
 	)
 
+	p.queue_free()
+	_done()
+
+
+# --- An administrator's blind and beacon --------------------------------------
+
+## What the two flags `headless_net` delivers turn into on a client: a beacon that rings
+## and pings, and a screen that goes dark. Nothing here can say they LOOK right — that is
+## `tools/screenshot.sh --admin` — but it can say they are built, that they come and go
+## with the flag, and that the ping happens once a period rather than once a frame.
+func _test_blind_and_beacon() -> void:
+	_section("An admin's beacon is drawn and heard, and a blind darkens one screen")
+
+	var p := _make()
+	var sink := p.audio.sink as DotAudioSinkNull
+
+	var def := p.audio.catalogue.find(ArenaPresentation.BEACON_SOUND)
+	_check(
+		def != null and def.kind == DotAudioDef.Kind.POSITIONAL_3D and def.max_distance >= 90.0,
+		"the ping is positional and carries at least as far as a shot",
+		"a beacon's job is to say where somebody is"
+	)
+	sink.forget()
+	_check(p.on_beacon(Vector3(4.0, 0.0, 2.0)) != 0 and sink.count_of(ArenaPresentation.BEACON_SOUND) == 1,
+		"and it plays where the beacon is")
+
+	var player := ArenaPlayer.new()
+	player.setup(ArenaPlayer.Mode.HEADLESS, ArenaMap.dm_box(), 5, "Marked")
+	add_child(player)
+	player.spawn(Transform3D(Basis(), Vector3(0.0, 0.05, 18.0)), 0)
+
+	var pings: Array[Vector3] = []
+	player.beacon_pulsed.connect(func(at: Vector3) -> void: pings.append(at))
+
+	player.present(0.016)
+	_check(player.beacon_marker == null and pings.is_empty(), "no beacon, no marker and no ping")
+
+	player.beacon = true
+	player.present(0.016)
+	_check(
+		player.beacon_marker != null and pings.size() == 1,
+		"switched on, it is drawn and pings at once rather than a second later"
+	)
+	for _i in range(30):
+		player.present(0.016)
+	_check(pings.size() == 1, "and not again inside the same second (%d pings)" % pings.size())
+	for _i in range(40):
+		player.present(0.016)
+	_check(pings.size() == 2, "then once a second (%d pings in 1.1 s)" % pings.size())
+	_check(
+		pings[1].distance_to(player.controller.state.position) < 0.01,
+		"from where the player is"
+	)
+
+	player.make_dead()
+	player.present(0.016)
+	_check(player.beacon_marker == null, "a dead player's beacon is not drawn over the corpse")
+
+	player.health.alive = true
+	player.beacon = false
+	player.present(0.016)
+	_check(player.beacon_marker == null, "and switched off, the marker goes")
+
+	var hud := ArenaHud.new()
+	hud.config = DotUiConfig.new()
+	add_child(hud)
+	hud.build(null)
+	hud.follow(player)
+
+	_check(
+		hud.blind_overlay != null and hud.blind_overlay.get_index() == 0
+			and not hud.blind_overlay.visible,
+		"the blind is under every HUD widget, and off"
+	)
+	player.blinded = true
+	hud.present_blind(ArenaHud.BLIND_FADE_SEC * 0.5)
+	_check(
+		hud.blind_overlay.visible and hud.blind_overlay.modulate.a > 0.4
+			and hud.blind_overlay.modulate.a < 0.6,
+		"blinded, it fades in rather than cutting (%.2f half way)" % hud.blind_overlay.modulate.a
+	)
+	hud.present_blind(1.0)
+	# The whole viewport, not the HUD's rect: `DotHud` insets itself by the safe area and
+	# the first rendered blind left a frame of the world round the edge. This is the one
+	# layout check a 64 x 64 headless viewport can still answer, because the inset is
+	# the same sixteen pixels there.
+	_check(
+		hud.blind_overlay.get_global_rect().is_equal_approx(hud.get_viewport_rect()),
+		"and covers the whole screen, not the safe area the HUD sits in",
+		"%s against %s" % [hud.blind_overlay.get_global_rect(), hud.get_viewport_rect()]
+	)
+	player.blinded = false
+	hud.present_blind(1.0)
+	_check(not hud.blind_overlay.visible, "and lifted, it is gone")
+
+	hud.queue_free()
+	player.queue_free()
 	p.queue_free()
 	_done()

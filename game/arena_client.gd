@@ -714,6 +714,8 @@ func _on_player_added(added: ArenaPlayer) -> void:
 	if added == null:
 		return
 
+	_hear_beacon(added)
+
 	if player == null and added.player_id == _watch_id:
 		_adopt(added)
 		return
@@ -755,6 +757,7 @@ func _adopt(candidate: ArenaPlayer) -> void:
 		return
 
 	player = candidate
+	_hear_beacon(player)
 	# The player's own field of view, capped by whatever the server clamped it to. A
 	# server capping it is a legitimate competitive rule; the player's *choice* is what is
 	# saved, so leaving the server gives it back rather than editing their settings.
@@ -1141,6 +1144,24 @@ func _hear_the_local_player() -> void:
 		# reaching two levels into somebody else's addon for a signal the player above it
 		# re-emits unchanged.
 		player.used.connect(_on_local_used)
+
+
+## Plays a beacon's ping wherever its ripple goes out, for [param body] — every player,
+## this client's own included: somebody who has been beaconed should hear it too.
+##
+## From both [method _on_player_added] and [method _adopt], because a player found by
+## `_watch` is adopted without passing through the first, and the connection is guarded so
+## the two never make it twice.
+func _hear_beacon(body: ArenaPlayer) -> void:
+	if body == null or body.beacon_pulsed.is_connected(_on_beacon_pulsed):
+		return
+
+	body.beacon_pulsed.connect(_on_beacon_pulsed)
+
+
+func _on_beacon_pulsed(at: Vector3) -> void:
+	if presentation != null:
+		var _voice := presentation.on_beacon(at)
 
 
 ## One tick of weapon use, predicted. An outcome rather than a shot, because a use is

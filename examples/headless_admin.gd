@@ -35,8 +35,8 @@ const PORT := 27082
 const SERVER_DIR := "user://arena_admin"
 const TICK_RATE := 64
 
-const SECTIONS := 8
-const CHECKS := 31
+const SECTIONS := 9
+const CHECKS := 42
 
 var _passed := 0
 var _failed := 0
@@ -75,6 +75,7 @@ func _run() -> void:
 		await _test_slap_and_slay()
 		await _test_respawn_clears()
 		await _test_immunity_and_self()
+		await _test_blind_and_beacon()
 		await _test_reporting()
 
 	_teardown()
@@ -532,6 +533,72 @@ func _test_immunity_and_self() -> void:
 	_done()
 
 
+## The two that are about a screen. What is asserted is the flag on the player and on the
+## entity the netcode sends, because that is the whole of what the server decides; whether
+## the owner's client — and only the owner's — receives it is `headless_net`'s, and what it
+## looks like is `tools/screenshot.sh --admin`'s.
+func _test_blind_and_beacon() -> void:
+	_section("blind and beacon")
+
+	_put_ada_on_the_floor()
+	var blinded := await _say(_admin, "!blind Ada")
+	_check(_ada().blinded, "!blind Ada blacks her screen out", " / ".join(blinded))
+	_step(2)
+	_check(
+		(_module.bridge.behaviour_for(73) as Object).get("net_blind") == true,
+		"and it is on the entity the netcode sends her"
+	)
+
+	# A blind is a spell. dot-moderation lifts it through the same handler when the time
+	# is up, so what is checked is the flag, not the timer.
+	var _lift := await _say(_admin, "!blind Ada off")
+	_check(not _ada().blinded, "!blind Ada off lifts it")
+	var _spell := await _say(_admin, "!blind Ada 0.2")
+	_check(_ada().blinded, "!blind Ada 0.2 blinds her for a fifth of a second")
+	await get_tree().create_timer(0.4).timeout
+	_check(not _ada().blinded, "and it lifts on its own when the time is up")
+
+	var lit := await _say(_moderator, "!beacon Ada")
+	_check(_ada().beacon, "a moderator may !beacon Ada", " / ".join(lit))
+	_step(2)
+	var identity := (_module.bridge.behaviour_for(73) as DotNetBehaviour).identity
+	_check(
+		identity != null and identity.always_relevant,
+		"and a beaconed player is relevant to everybody, however far away"
+	)
+
+	# Both are about the person, not the body: a death is what a player being punished
+	# would otherwise use to end one.
+	var _blind_again := await _say(_admin, "!blind Ada")
+	# She respawned a section ago and is still inside her spawn protection, which is the
+	# case this was first written against and the case a slay was refused in.
+	var slain := await _say(_admin, "!slay Ada")
+	_check(
+		not _ada().is_alive(),
+		"a slay inside spawn protection kills: the effect and the ledger do not veto it",
+		" / ".join(slain)
+	)
+	var _back := await _say(_admin, "!respawn Ada")
+	_check(
+		_ada().is_alive() and _ada().blinded and _ada().beacon,
+		"a respawn keeps both, where it ends a freeze"
+	)
+
+	var _dark_off := await _say(_admin, "!blind Ada off")
+	var _unlit := await _say(_admin, "!beacon Ada off")
+	_step(2)
+	_check(
+		not _ada().beacon and not identity.always_relevant,
+		"!beacon Ada off puts her back under the ordinary interest rules"
+	)
+	_check(
+		not _module.services.mod_tools.is_active(&"73", DotModTools.ACTION_BEACON)
+		and not _module.services.mod_tools.is_active(&"73", DotModTools.ACTION_BLIND),
+		"and the tools' record agrees with the world"
+	)
+	_done()
+
+
 func _test_reporting() -> void:
 	_section("what an operator can see")
 
@@ -542,8 +609,8 @@ func _test_reporting() -> void:
 		"!modtools lists what this game supports"
 	)
 	_check(
-		joined.contains("blind (the client draws no overlay"),
-		"and why it refuses what it does not"
+		joined.contains("blind") and joined.contains("beacon") and not joined.contains("refused   "),
+		"including blind and beacon, and nothing is refused any more", " / ".join(lines)
 	)
 
 	var audited := FileAccess.get_file_as_string("%s/audit.jsonl" % SERVER_DIR)

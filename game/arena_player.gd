@@ -2,6 +2,7 @@
 extends Node3D
 
 const ArenaAvatars := preload("arena_avatars.gd")
+const ArenaBeacon := preload("arena_beacon.gd")
 const ArenaContent := preload("arena_content.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 
@@ -31,6 +32,10 @@ signal died(damage: DotDamage)
 
 ## Fired a shot. Before it is resolved, so a client can draw a tracer immediately.
 signal used(outcome: DotWeaponOutcome)
+
+## A beacon on this player sent out a ripple: once a second while it is on, and once the
+## moment it comes on. Client side, from [method present]; the client plays the ping here.
+signal beacon_pulsed(at: Vector3)
 
 ## Spawned or respawned.
 signal spawned(at: Transform3D)
@@ -86,6 +91,25 @@ var camera_roll: float = 0.0
 
 ## What a remote player is drawn as. Null on the local player, who sees their own eyes.
 var body_mesh: Node3D = null
+
+## An administrator's `blind`: this player's own screen is blacked out.
+##
+## [b]Set on the server and replicated to the OWNER ONLY[/b] (`ArenaPlayerNet.net_blind`).
+## Nobody else's screen changes, so nobody else needs to know — and an opponent who could
+## read it would know exactly when somebody could not see them coming. `ArenaHud` draws it.
+var blinded: bool = false
+
+## An administrator's `beacon`: a pulsing ring and a column over this player that every
+## client draws, and a ping every client hears, until it is turned off.
+##
+## Set on the server and replicated to everybody (`ArenaPlayerNet.net_beacon`), who each
+## draw it in [method present]. A beaconed player's entity is also made always-relevant,
+## so the beacon reaches a client however far away they are — see `ArenaPlayerNet.pull`.
+var beacon: bool = false
+
+## The marker [member beacon] draws, while it does. Client side; built and freed by
+## [method present].
+var beacon_marker: ArenaBeacon = null
 
 ## The movement this player was built with, before any class scaled it.
 ##
@@ -552,7 +576,34 @@ func present(delta: float) -> void:
 		# left is to face it the way its yaw says.
 		body_mesh.global_rotation = Vector3(0.0, deg_to_rad(drawn.yaw), 0.0)
 
-	var _unused := delta
+	_present_beacon(delta, drawn.position)
+
+
+## Draws [member beacon], and says when it pings.
+##
+## [b]Only while alive.[/b] The flag outlives a death — dot-moderation re-applies it on the
+## respawn — but a ring round a corpse that is about to vanish marks nothing, and a column
+## over a spectating player's last position points everybody at an empty floor.
+##
+## Placed at the DRAWN position, which is the render state on the local player and the
+## interpolated one on a remote player, for the reason [ArenaBeacon] is top level.
+func _present_beacon(delta: float, at: Vector3) -> void:
+	if not beacon or not is_alive():
+		if beacon_marker != null:
+			beacon_marker.queue_free()
+			beacon_marker = null
+		return
+
+	if beacon_marker == null:
+		beacon_marker = ArenaBeacon.new()
+		beacon_marker.name = "Beacon"
+		add_child(beacon_marker)
+
+	beacon_marker.local_view = camera != null
+	beacon_marker.global_position = at
+
+	if beacon_marker.advance(delta):
+		beacon_pulsed.emit(at)
 
 
 ## Gives this player a camera and something to look at it with. Client side, local
@@ -728,6 +779,8 @@ func describe() -> Dictionary:
 		"position": controller.state.position,
 		"health": health.describe(),
 		"arsenal": arsenal.describe(),
+		"blinded": blinded,
+		"beacon": beacon,
 	}
 
 

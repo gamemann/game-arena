@@ -4,6 +4,7 @@ const ArenaEvent := preload("../game/arena_event.gd")
 const ArenaEvents := preload("../game/arena_events.gd")
 const ArenaGame := preload("../game/arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaModTools := preload("../game/arena_mod_tools.gd")
 const ArenaMapSession := preload("../game/arena_map_session.gd")
 const ArenaMaps := preload("../game/arena_maps.gd")
 const ArenaNetBridge := preload("../game/arena_net_bridge.gd")
@@ -30,7 +31,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 126
+const CHECKS := 135
 
 var _passed := 0
 var _failed := 0
@@ -72,6 +73,7 @@ func _run() -> void:
 	await _test_map_sync_wire()
 	_test_voice_wire()
 	_test_forced_noclip_is_predicted()
+	_test_blind_and_beacon()
 	_test_disconnect()
 
 	print("")
@@ -811,6 +813,77 @@ func _test_forced_noclip_is_predicted() -> void:
 	server_player.controller.state.mode = DotFpsState.Mode.AIR
 	server_player.controller.teleport(Vector3(0.0, 0.1, 18.0))
 	var _land := _flight_window(0, 24, 0)
+
+
+## An administrator's blind and beacon, through the real handlers, over the lossy link.
+##
+## [b]The audience is the whole point of both.[/b] Client 2 owns player 11. A blind is
+## that player's screen and nobody else's, so client 2 must get it and client 3 must NOT —
+## an opponent who could read it would know the moment somebody could not see them. A
+## beacon is for everybody, so both must get it. Asserted on each client's own copy of
+## the player, which is what its HUD and its renderer read.
+func _test_blind_and_beacon() -> void:
+	print("")
+	print("[an admin's blind and beacon: who is told]")
+
+	var handlers := ArenaModTools.handlers(_server_game)
+	var blind: Callable = handlers[DotModTools.ACTION_BLIND]
+	var beacon: Callable = handlers[DotModTools.ACTION_BEACON]
+
+	var owner: ArenaNetBridge = _clients[2]["bridge"]
+	var watcher: ArenaNetBridge = _clients[3]["bridge"]
+
+	_check(
+		owner.behaviour_for(11).find_var(&"net_blind").audience == DotNetVar.Audience.OWNER
+		and owner.behaviour_for(11).find_var(&"net_beacon").audience == DotNetVar.Audience.EVERYONE,
+		"the blind is declared owner-only and the beacon for everybody"
+	)
+
+	var on_blind: DotResult = blind.call(&"11", {"on": true, "actor": "1"})
+	var on_beacon: DotResult = beacon.call(&"11", {"on": true, "actor": "1"})
+	_check(on_blind.ok and on_beacon.ok, "the server blinds and beacons player 11")
+
+	# Long enough for several snapshots through one-in-five loss.
+	var _window := _flight_window(0, 24, 0)
+
+	_check(
+		owner.behaviour_for(11).player.blinded,
+		"the owner's client blacks its own screen out"
+	)
+	_check(
+		not watcher.behaviour_for(11).player.blinded
+		and not watcher.behaviour_for(11).net_blind,
+		"and the other client is never told",
+		"client 3 received net_blind = %s" % str(watcher.behaviour_for(11).net_blind)
+	)
+	_check(
+		owner.behaviour_for(11).player.beacon and watcher.behaviour_for(11).player.beacon,
+		"while both clients draw the beacon on player 11"
+	)
+	_check(
+		not watcher.behaviour_for(12).player.blinded
+		and not watcher.behaviour_for(12).player.beacon,
+		"and neither mark lands on the watcher's own player"
+	)
+	_check(
+		_server_bridge.behaviour_for(11).identity.always_relevant,
+		"a beaconed player is relevant to every peer, however far away"
+	)
+
+	var _off_blind: DotResult = blind.call(&"11", {"on": false, "actor": "1"})
+	var _off_beacon: DotResult = beacon.call(&"11", {"on": false, "actor": "1"})
+	_window = _flight_window(0, 24, 0)
+
+	_check(
+		not owner.behaviour_for(11).player.blinded
+		and not owner.behaviour_for(11).player.beacon
+		and not watcher.behaviour_for(11).player.beacon,
+		"and turning both off reaches both clients"
+	)
+	_check(
+		not _server_bridge.behaviour_for(11).identity.always_relevant,
+		"and puts player 11 back under the ordinary interest rules"
+	)
 
 
 ## Runs [param ticks] more ticks with [param peer] holding [param buttons] and nothing else

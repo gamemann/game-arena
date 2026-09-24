@@ -43,6 +43,10 @@ const PROTECTED := &"arena_protected"
 ## Slower, from a monster's swipe. The horde's only lasting effect.
 const SLOWED := &"arena_slowed"
 
+## A key in [member DotDamage.context] that says an administrator's slay: no effect and no
+## spawn-protection ledger may refuse it. See [method adjust_damage].
+const ADMIN_KILL := &"arena_admin_kill"
+
 var game: ArenaGame = null
 
 var manager: DotEffectManager = null
@@ -157,6 +161,17 @@ static func table(rate: int, protection_ticks: int = 0) -> Array[DotEffectDef]:
 ## dot-combat's per-hit hook. Mutates the damage in place, or refuses it.
 func adjust_damage(damage: DotDamage) -> void:
 	if manager == null or damage == null:
+		return
+
+	# [b]An administrator's slay is not a hit, and nothing here may veto it.[/b]
+	# `ArenaModTools.slay` switched god, buddha and `DotHealth`'s own spawn window off for
+	# the one event — and then this function refused it anyway, because spawn protection
+	# is three records and two of them are here: the `PROTECTED` effect and dot-spawn's
+	# ledger. So a slay inside the first second and a half of a life answered "The slay
+	# was refused: invulnerable", which is exactly the spawn-camping griefer an admin
+	# reaches for slay to stop. Found writing headless_admin's blind-and-beacon section,
+	# which slays a player who had just respawned.
+	if bool(damage.context.get(ADMIN_KILL, false)):
 		return
 
 	if manager.is_invulnerable(damage.victim):

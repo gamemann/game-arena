@@ -26,6 +26,9 @@ const SCHEMA_VERSION := 1
 
 const SOUND_DIR := "res://audio"
 
+## The ping an administrator's beacon makes. See [method sound_catalogue].
+const BEACON_SOUND := &"beacon"
+
 ## Degrees of view per unit of mouse motion at a sensitivity of 1.
 ##
 ## The genre's own yaw constant, and the reason `sensitivity` defaults to 2.5 rather than
@@ -358,6 +361,25 @@ static func sound_catalogue() -> DotAudioCatalogue:
 		cue.priority = 70
 		c.add(cue)
 
+	# An administrator's beacon: a ping once a second from the beaconed player, heard by
+	# everybody. Positional, because the beacon's whole job is to say WHERE somebody is and
+	# a flat ping would say only that somebody somewhere is beaconed. And far-reaching —
+	# further than a shot — because a beacon that went quiet at the edge of a fight would
+	# fail in the one place it is used. Pitched an octave under the hit marker it shares a
+	# voice with, so a ping is never heard as "I hit something".
+	var ping := DotAudioDef.new()
+	ping.id = BEACON_SOUND
+	ping.path = "%s/beacon.ogg" % SOUND_DIR
+	ping.kind = DotAudioDef.Kind.POSITIONAL_3D
+	ping.bus = &"SFX"
+	ping.unit_size = 20.0
+	ping.max_distance = 160.0
+	ping.max_concurrent = 4
+	ping.priority = 45
+	ping.pitch_min = 0.5
+	ping.pitch_max = 0.5
+	c.add(ping)
+
 	var pickup := DotAudioDef.new()
 	pickup.id = &"pickup"
 	pickup.path = "%s/pickup.ogg" % SOUND_DIR
@@ -400,6 +422,7 @@ static func sound_recipes() -> Dictionary:
 		&"died": DotAudioSynth.Voice.DIE,
 		&"spawned": DotAudioSynth.Voice.SPAWN,
 		&"pickup": DotAudioSynth.Voice.PICKUP,
+		BEACON_SOUND: DotAudioSynth.Voice.BLIP,
 		# Up for a ballot opening, the one upward sweep, because up reads as "on"; a
 		# blip for the warning and a click per second, so a countdown is heard without
 		# being mistaken for a hit marker.
@@ -789,6 +812,15 @@ func on_spawned() -> void:
 	# Everything from the previous life goes. A decal ring that survives a death is one
 	# that survives a map change, which is a hole in a wall that no longer exists.
 	fx.shake.reset()
+
+
+## A beacon's ripple went out from [param at]. `ArenaPlayer.beacon_pulsed`, on every
+## client, for every beaconed player — the beaconed one included, who hears their own.
+func on_beacon(at: Vector3) -> int:
+	if audio == null:
+		return 0
+
+	return audio.play_at(BEACON_SOUND, at)
 
 
 func on_pickup(at: Vector3) -> void:

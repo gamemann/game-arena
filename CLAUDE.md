@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-310 + 76 + 126 + 100 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 32 over eight.
+310 + 89 + 135 + 100 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 43 over nine.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -557,7 +557,7 @@ exact wording and went stale the moment 4.7 reworded "ObjectDB instances leaked 
 exit" — a guard that cries wolf about correct files is a guard people stop reading.
 Grep for `SCRIPT ERROR`, `Parse Error` and `Failed to load script` instead.
 
-`tools/screenshot.sh <map>` renders a map from three angles into `screenshots/`
+`tools/screenshot.sh <map> [--admin]` renders a map from three angles into `screenshots/`
 (gitignored). It needs `xvfb-run`, because it needs a real rendering context — under
 `--headless` every frame it saves is empty, which is worse than no screenshot because
 it looks like one. **A map is a rendered thing**: this family has shipped a 0 x 0
@@ -1071,7 +1071,13 @@ Three decisions worth not undoing:
 
 - **`admin_abilities` is on for every `ArenaPlayer`, server and client alike.** The admin modifiers register after the game's own and their indices travel on the wire, so a client that had not registered them would read a forced noclip as some other modifier. `headless_net` measures what this buys: a player an admin noclips is predicted flying by their own client with no tick out of noclip and a worst gap of a quarter of a metre, where the same flight set as a bare `state.mode = NOCLIP` spends 61 of 64 ticks predicted falling, up to 2.9 m from the server. That second half is the check's negative control.
 - **A slay turns god, buddha and spawn protection off for exactly one damage event.** A slay that god mode refused would make god a way to be unslayable; the flags are put back, because the tools re-apply god on the respawn.
-- **A respawn clears a freeze and a noclip and keeps god**, through `player_spawned`, which fires for a match respawn and an admin's alike because `respawn_player` takes the same path.
+- **A respawn clears a freeze and a noclip and keeps god**, through `player_spawned`, which fires for a match respawn and an admin's alike because `respawn_player` takes the same path. **Blind and beacon are kept too** (`ArenaModTools.PERSIST_ON_RESPAWN`): they are about the person rather than the body, and a death is what a player being punished would otherwise use to end one.
+
+**Blind and beacon were refused as "no client overlay" until 2026-09-24, and are two flags now.** `ArenaPlayer.blinded` and `ArenaPlayer.beacon` are set by the handlers on the server and replicated as per-player state in `ArenaPlayerNet` — `net_blind` **owner-only**, the way the ammunition is, because nobody else's screen changes and an opponent who could read it would know the moment somebody could not see them; `net_beacon` to everybody. State rather than an event because a joiner, a lost snapshot and a map change are all a baseline the next snapshot corrects, where an event sent once is missed. The client draws them: `ArenaHud.blind_overlay` fades a near-black rect in over a quarter of a second, **under** the HUD's widgets so the clock and the kill feed still say the match is going on, and sized to the whole viewport rather than to the HUD — `DotHud` insets itself by the safe area, and the first rendered blind left a sixteen-pixel frame of the world round the edge. `ArenaBeacon` is a ring at the feet that sends out a ripple once a second and a thin column drawn through walls (not on your own beacon: a camera inside it is a smear over the screen), placed at the drawn position; each ripple is `ArenaPlayer.beacon_pulsed`, which the client plays as `ArenaPresentation.BEACON_SOUND`, a positional BLIP an octave under the hit marker that carries 160 m. A beaconed player's entity is also `always_relevant`, so the beacon reaches a client however far away they are. `blind <player> <seconds>` is dot-moderation's (`TIMED_TOGGLES`), lifted through the same handler.
+
+**A slay inside spawn protection was refused, and it was found writing this.** `slay` switched off god, buddha and `DotHealth`'s spawn window — one of spawn protection's three records — and `ArenaEffects.adjust_damage` then vetoed it on the other two, the `PROTECTED` effect and dot-spawn's ledger: "The slay was refused: invulnerable", for the first second and a half of every life, which is exactly the spawn-camping griefer an admin reaches for slay to stop. The slay's damage carries `ArenaEffects.ADMIN_KILL` in its context now and the hook lets it through; `headless_admin` slays a player who has just respawned, and fails without it.
+
+`headless_admin`'s **blind and beacon** drives both through chat and asserts the flags, the entity the netcode sends, the timed lift, the relevance and the respawn; `headless_net` asserts the audience over the lossy link — the owner's client blinded, the other client never told, both drawing the beacon — and was armed by dropping `to_owner_only()`, which two checks caught; `headless_presentation` asserts the ping happens once a second rather than once a frame, the marker goes when the flag or the player does, and the blind covers the viewport (armed with the HUD-sized rect). `tools/screenshot.sh dm_box --admin` renders a beacon on open floor, one behind a pillar with only its column showing, and a first-person view through the real HUD before and after a blind.
 
 `headless_admin` is the suite, on a real `DotServer` with the module loaded by path. Two things it found while being written, neither a bug in the code under test and both worth knowing: **`dm_box` has a platform at the origin**, so a body teleported there is pushed out by the motor's depenetration and a frozen player appears to drift — every position check here starts on a spawn point; and **an adopted session has no peer**, so the netcode's own sends were 1,287 engine RPC errors in one run until the suite pointed `send_fn` at nothing.
 

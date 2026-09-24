@@ -361,6 +361,10 @@ func _build_mod_tools() -> void:
 	for action: Variant in refusals:
 		mod_tools.unsupported_reasons[action] = refusals[action]
 
+	for action in ArenaModTools.PERSIST_ON_RESPAWN:
+		if not mod_tools.persist_on_respawn.has(action):
+			mod_tools.persist_on_respawn.append(action)
+
 	add_child(mod_tools)
 
 

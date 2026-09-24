@@ -14,6 +14,12 @@ const ArenaPlayer := preload("arena_player.gd")
 ## hear about a rocket; respawn is the match's own respawn path; burn is dot-effects' own
 ## burning. Nothing here is a second rule about any of those.
 ##
+## Blind and beacon are the two that are about a SCREEN rather than a body, and each is one
+## flag on [ArenaPlayer] that `ArenaPlayerNet` replicates — the blind to its owner alone,
+## the beacon to everybody — and that the client draws: `ArenaHud` blacks the owner's
+## screen out, `ArenaBeacon` rings the player on every screen and pings. The server decides;
+## nothing about either is a client's to choose.
+##
 ## Ids are the session userid as a string, which is `ArenaPlayer.player_id` — the one id
 ## space this game has. See the project's CLAUDE.md.
 
@@ -134,15 +140,41 @@ static func handlers(game: ArenaGame) -> Dictionary:
 			# The map's own fire, for its own duration: an admin's burn is the same
 			# afterburn a plasma splash leaves, so it hurts exactly as much as it looks.
 			return game.effects.apply(ArenaEffects.BURNING, int(String(id)), 0),
+
+		DotModTools.ACTION_BLIND: func(id: StringName, args: Dictionary) -> DotResult:
+			var player := _player(game, id)
+			if player == null:
+				return _absent(id)
+			# The screen and nothing else. A blinded player still moves, shoots and is
+			# shot; an admin who wants them to stop as well has freeze, and one verb that
+			# did both would be a verb nobody could use for only the first.
+			player.blinded = bool(args["on"])
+			return DotResult.success(player.blinded),
+
+		DotModTools.ACTION_BEACON: func(id: StringName, args: Dictionary) -> DotResult:
+			var player := _player(game, id)
+			if player == null:
+				return _absent(id)
+			player.beacon = bool(args["on"])
+			return DotResult.success(player.beacon),
 	}
 
 
-## Why the rest are refused.
+## Why the rest are refused. Nothing is, now that blind and beacon have a client to draw
+## them; kept as a table because a new dot-moderation ability arrives unsupported, and the
+## place its reason goes is here.
 static func unsupported() -> Dictionary:
-	return {
-		DotModTools.ACTION_BLIND: "the client draws no overlay a server could turn on",
-		DotModTools.ACTION_BEACON: "the client draws no marker a server could turn on",
-	}
+	return {}
+
+
+## Toggles that outlive a respawn here, beyond dot-moderation's own god and buddha.
+##
+## [b]Blind and beacon are about the person, not the body.[/b] Freeze and noclip end with
+## the body because arriving in a spawn room frozen, or falling through its floor, is the
+## respawn broken; a player an admin blinded or wanted the room to watch is still that
+## player after they die, and a death is exactly what a player being punished would
+## otherwise use to end it.
+const PERSIST_ON_RESPAWN: Array[String] = ["blind", "beacon"]
 
 
 ## What `give` can hand out, for its completion and its refusal.
@@ -177,7 +209,9 @@ static func teleport(game: ArenaGame, id: StringName, to: Variant) -> void:
 ##
 ## God, buddha and spawn protection are all switched off for the one event and put back,
 ## because a slay that god mode refused would make god mode a way to be unslayable — and
-## the god flag must survive it, since the tools re-apply it on the respawn.
+## the god flag must survive it, since the tools re-apply it on the respawn. Spawn
+## protection is three records: `DotHealth`'s window is cleared here, and the effect and
+## the spawn ledger let the damage through on [constant ArenaEffects.ADMIN_KILL].
 static func slay(game: ArenaGame, id: StringName) -> DotResult:
 	var player := _player(game, id)
 
@@ -199,6 +233,9 @@ static func slay(game: ArenaGame, id: StringName) -> DotResult:
 	)
 	damage.weapon_id = &"slay"
 	damage.tick = game.current_tick()
+	# The other two thirds of spawn protection — the effect and the ledger — are vetoes in
+	# `ArenaEffects.adjust_damage`, and this is how that hook knows to let it through.
+	damage.context[ArenaEffects.ADMIN_KILL] = true
 	game.combat.apply_damage(damage)
 
 	player.health.invulnerable = was_god

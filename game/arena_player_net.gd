@@ -41,6 +41,14 @@ var net_slot: int = 0
 var net_magazine: int = 0
 var net_reserve: int = 0
 
+# --- An administrator's marks, from ArenaModTools ---
+
+## `ArenaPlayer.blinded`. Owner only: see [method _register_net_vars].
+var net_blind: bool = false
+
+## `ArenaPlayer.beacon`. Everybody's.
+var net_beacon: bool = false
+
 ## The last command received, retained.
 ##
 ## [b]Retained rather than cleared, and that is the documented behaviour of a starved
@@ -85,6 +93,18 @@ func _register_net_vars() -> void:
 			# opponent should not have, and a modified client that had it would know
 			# when to push. Data never sent cannot be read out of a client.
 			declaration.to_owner_only()
+
+	# [b]Per-player state rather than an event, and that is what makes both of these
+	# survive what an event does not.[/b] A client that joins after the admin typed
+	# `beacon`, a snapshot lost on the way, a map change: each is a baseline the next
+	# snapshot corrects, where an event sent once is simply missed. Two bits, and nothing
+	# at all on a tick where neither changed.
+	#
+	# The blind goes to its owner alone. Nobody else's screen changes, and an opponent who
+	# received it would know the moment somebody could not see them — the same reason the
+	# ammunition above is the owner's.
+	replicate(&"net_blind", DotNetVar.Type.BOOL).to_owner_only()
+	replicate(&"net_beacon", DotNetVar.Type.BOOL)
 
 
 # --- Input -----------------------------------------------------------------
@@ -146,6 +166,17 @@ func pull() -> void:
 	DotCombatNetSync.pull(player.health, self)
 	DotWeaponNetSync.pull(player.arsenal, self)
 
+	net_blind = player.blinded
+	net_beacon = player.beacon
+
+	# A beaconed player is relevant to everybody, wherever they are. The beacon's whole
+	# job is that the room can find this player, and a client whose interest set had cut
+	# them for distance would receive neither the flag nor the position to draw it at —
+	# a beacon that works everywhere except across a big map. On the authority only:
+	# relevance is the server's decision, and a client's copy of the flag decides nothing.
+	if identity != null and identity.is_authoritative:
+		identity.always_relevant = player.beacon
+
 
 ## Copies received state back into the simulation. Receiving side.
 ##
@@ -163,6 +194,9 @@ func _net_state_applied(tick: int) -> void:
 	DotFpsNetSync.push(self, player.controller.state)
 	DotCombatNetSync.push(self, player.health)
 	DotWeaponNetSync.push(self, player.arsenal)
+
+	player.blinded = net_blind
+	player.beacon = net_beacon
 
 	# The controller writes its state out to the body node during simulation, and a
 	# receiving client does not simulate this player. Without this the state moves and
@@ -218,5 +252,7 @@ func describe() -> Dictionary:
 		"health": net_health,
 		"alive": net_alive,
 		"slot": net_slot,
+		"blind": net_blind,
+		"beacon": net_beacon,
 		"state_tick": last_state_tick,
 	}
