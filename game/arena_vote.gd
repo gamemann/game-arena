@@ -126,7 +126,7 @@ func setup() -> DotResult:
 			DotError.CODE_STATE, "The vote needs a game and a map director."
 		)
 
-	source = ArenaVoteSource.of(maps.session.catalogue, maps, game)
+	source = ArenaVoteSource.of(maps.session.catalogue, maps, game) as ArenaVoteSource
 
 	if not source.is_usable():
 		return DotResult.fail(

@@ -5,7 +5,6 @@ const ArenaMapDirector := preload("arena_map_director.gd")
 const ArenaMaps := preload("arena_maps.gd")
 const ArenaMode := preload("arena_mode.gd")
 const ArenaModes := preload("arena_modes.gd")
-const ArenaVoteSource := preload("arena_vote_source.gd")
 
 ## What the players of this server get to choose: the map, and the mode.
 ##
@@ -53,10 +52,12 @@ var game: ArenaGame = null
 var include_modes: bool = true
 
 
+## Typed as the base on purpose: a script that names itself inside itself leaks the whole
+## script graph at exit on Godot 4.7.2 (docs/gdscript-hazards.md). Callers cast.
 static func of(
 	p_catalogue: DotMapCatalogue, p_director: ArenaMapDirector, p_game: ArenaGame
-) -> ArenaVoteSource:
-	var source := ArenaVoteSource.new()
+) -> DotVoteSource:
+	var source = new()
 	source.catalogue = p_catalogue
 	source.director = p_director
 	source.game = p_game
