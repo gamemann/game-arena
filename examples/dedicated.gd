@@ -169,6 +169,8 @@ func _build() -> bool:
 	# thread blocks in `read_string_from_stdin`, which nothing can wake, and a process with a
 	# reader blocked on an open pipe prints its whole result, its leak report, and then never
 	# exits: the copy ran to its deadline on every run until this was off.
+	# Kept after dot-server 5f46687, which no longer reads a pipe unless `stdin_console_pipes`
+	# is on: a terminal is still read, and a suite takes no commands from either.
 	config.stdin_console_enabled = false
 
 	_server = DotServer.new()
