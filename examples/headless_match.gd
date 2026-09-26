@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 332
+const CHECKS := 334
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1020,6 +1020,59 @@ func _test_pit() -> void:
 			tagged += 1
 
 	_check(tagged == 0, "every spawn is untagged, on purpose", "%d tagged" % tagged)
+
+	# --- The lookout, climbed, and what it is for ---------------------------
+	#
+	# A bot on the east arm facing east (yaw 270) holding forward and jump, grounded
+	# on the lookout's top as the arrival. Then the reason it exists: an eye on the
+	# lookout sees an eye on the perch, with no box in between.
+	var lookout_climber := ArenaPlayer.new()
+	lookout_climber.name = "LookoutClimber"
+	add_child(lookout_climber)
+	lookout_climber.setup(ArenaPlayer.Mode.HEADLESS, map, 9004, "lookout climber")
+	lookout_climber.controller.teleport(Vector3(11.6, 3.7, 4.0), 270.0, 0.0)
+
+	var looking := false
+	var look_tick := 0
+
+	for step in range(64 * 4):
+		var command := DotFpsCommand.new()
+		command.yaw = 270.0
+		command.move = Vector2(0.0, 1.0)
+		command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+		lookout_climber.controller.apply_command(command)
+		lookout_climber.controller.simulate_tick(look_tick, 1.0 / 64.0)
+		look_tick += 1
+
+		var on: Vector3 = lookout_climber.controller.state.position
+
+		if lookout_climber.controller.state.is_grounded() and on.y > 4.45 and on.x > 12.5:
+			looking = true
+			break
+
+	var stood: Vector3 = lookout_climber.controller.state.position
+	_check(
+		looking,
+		"a bot climbs off the east arm onto the lookout",
+		"ended at (%.1f, %.2f, %.1f)" % [stood.x, stood.y, stood.z]
+	)
+
+	lookout_climber.queue_free()
+	remove_child(lookout_climber)
+
+	var from_lookout := Vector3(13.25, 4.5 + 1.6, 4.0)
+	var from_perch := Vector3(-10.0, 5.4 + 1.6, 10.0)
+	var in_the_way := PackedStringArray()
+
+	for box in map.boxes:
+		if box.intersects_segment(from_lookout, from_perch):
+			in_the_way.append(str(box))
+
+	_check(
+		in_the_way.is_empty(),
+		"and from it a player sees the perch, and the perch sees them",
+		", ".join(in_the_way)
+	)
 
 	var catalogue := ArenaMaps.catalogue()
 	var def := catalogue.get_map(&"dm_pit")
@@ -3718,7 +3771,7 @@ func _test_atrium() -> void:
 	# map was above the jump apex — but they are still three separate changes to three
 	# separate maps. dm_box reached 1.2.0 by its own two steps — the crates on
 	# 2026-09-22, the gantries and nests on 2026-09-24.
-	var expected := {&"dm_atrium": "1.3.0", &"dm_pit": "1.3.0", &"dm_box": "1.2.0"}
+	var expected := {&"dm_atrium": "1.3.0", &"dm_pit": "1.4.0", &"dm_box": "1.2.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
