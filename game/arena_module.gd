@@ -263,10 +263,16 @@ func _build_netcode() -> DotResult:
 	# client parents its copy under `DotClientLink`, which is named to match.
 	bridge.open_link(server)
 
-	# Sealed once, on both ends, after every type is registered. `seal()` assigns wire
-	# ids from a sort of the type names, so a type registered after this would renumber
-	# every id above it and silently reinterpret every message.
+	# Sealed once, on both ends, after every type is registered: the table each end sends
+	# the other is a promise about what it has, and a type registered after it went out is
+	# one the peer was told this end does not have.
 	net.messages.seal()
+
+	# [b]A client whose game messages cannot work with this server's is dropped, in words.[/b]
+	# dot-net compares the two schema tables and refuses a pair where either lacks a type
+	# the other REQUIRES, but it owns no socket and can only say so; this is the socket.
+	# The same line DotGameNetcode.refuse_peer is for games built on dot-game.
+	net.peer_schema_refused.connect(_refuse_peer)
 
 	return net.start()
 
@@ -1130,3 +1136,11 @@ func _cmd_score(ctx: DotCmdContext) -> void:
 func _cmd_restart(ctx: DotCmdContext) -> void:
 	game.start(game.current_tick())
 	ctx.reply("Match restarted.")
+
+
+## Disconnects a peer whose message schema this server cannot play with, with dot-net's
+## sentence as the reason. See `peer_schema_refused` above.
+func _refuse_peer(peer_id: int, error: DotError) -> void:
+	var session: DotClientSession = server.session_of(peer_id) if server != null else null
+	if session != null:
+		server.kick(session, error.message, error)

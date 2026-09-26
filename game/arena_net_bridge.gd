@@ -203,8 +203,13 @@ func _send(peer_id: int, payload: PackedByteArray, delivery: int) -> void:
 
 	if delivery == DotNetMessage.Delivery.UNRELIABLE:
 		link.send_snapshot(peer_id, payload)
-	else:
+	elif net.is_server:
 		link.send_event(peer_id, payload)
+	else:
+		# A client's reliable send is a request. dot-net sends exactly one through here --
+		# its message schema, as it starts -- and it used to go to `send_event`, a call only
+		# the server may make, which the server's end refuses.
+		link.send_request(payload)
 
 
 # --- Membership ------------------------------------------------------------
