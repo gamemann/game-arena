@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-332 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
+334 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -978,6 +978,14 @@ The east-west gantry is driven by a bot **separately** from the north-south one 
 than assumed from it: they are different boxes meeting different arms of the ring, and
 this family's whole `[gate-sweep-1]` file is times a shape was checked in one instance
 and believed about the others.
+
+## `dm_pit` gained a lookout, so the perch has somebody to look at
+
+**Extended 2026-09-26 (dm_pit 1.4.0).** The perch saw the whole pit and nothing on the map could look back at it from above the ring, so whoever held it held the map. **The lookout** is a 1.5 x 2 m block at 4.5 on the east arm, against the east wall, one 0.9 m hop off the ring. The perch is still the higher of the two, but it is now one of two places that watch each other, and the ring between them is in both sightlines. One high point is a throne; two are a duel.
+
+It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0.8 m a player is: the ring is a loop, and a lookout that closed it would make it two dead ends. It sits between the east-west bridge (z -1..1) and the south-east stair's landing (z 7.5..10.5), so neither arrival lands on it. No spawn was added.
+
+`headless_match` has a bot on the east arm hold east and jump until it is grounded on the lookout (armed: without the box it ends at 3.73 m), and traces eye to eye from the lookout to the perch against every box. The survey still reports 0 closed slots, everything reached, and 0 trapped. Rendered: `tools/screenshot.sh dm_pit`, roof view.
 
 ## `dm_pit`, and the filter that had never said no
 

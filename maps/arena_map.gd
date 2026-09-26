@@ -924,6 +924,33 @@ static func dm_pit() -> ArenaMap:
 	)
 	map.add_climb("dm_pit: the shelf onto the perch", shelf, perch)
 
+	# --- The lookout on the east arm ---------------------------------------
+	#
+	# Added 2026-09-26. [b]One high point is a throne; two are a duel.[/b] The perch
+	# saw the whole pit and nothing on the map could look back at it from above the
+	# ring, so whoever held it held the map. The lookout is the answer from across the
+	# room: one 0.9 m hop off the east arm, against the east wall, with a clear line
+	# to the perch over both bridges (`headless_match` traces it). Now the perch is
+	# the higher of two places that watch each other, and the ring between them is in
+	# both of their sights.
+	#
+	# [b]1.5 m deep, against the wall, so the arm keeps 1.5 m of walkway[/b], nearly
+	# twice the 0.8 m a player is. The arm is a loop and a lookout that closed it would
+	# turn the ring into two dead ends. Between the bridge (z -1..1) and the south-east
+	# stair's landing (z 7.5..10.5), so neither arrival lands on it.
+	const LOOKOUT_TOP := 4.5
+
+	var lookout := AABB(
+		Vector3(12.5, RING_Y + RING_T, 3.0), Vector3(1.5, LOOKOUT_TOP - RING_Y - RING_T, 2.0)
+	)
+
+	map.add_box(lookout)
+	map.add_climb(
+		"dm_pit: the east arm onto the lookout",
+		AABB(Vector3(RING_IN, RING_Y, -RING_IN), Vector3(3.0, RING_T, 22.0)),
+		lookout
+	)
+
 	map.add_perimeter()
 
 	# --- Spawns ------------------------------------------------------------
