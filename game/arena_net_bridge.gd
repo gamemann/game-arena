@@ -396,6 +396,11 @@ func client_tick(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> void
 	if net == null or net.is_server:
 		return
 
+	# A networked client never calls `game.tick`, so the spectate layer is advanced here
+	# or not at all. See `ArenaSpectate.client_tick`.
+	if game != null and game.spectate != null:
+		game.spectate.client_tick(tick)
+
 	var command := ArenaNetCommand.new()
 	command.tick = tick
 	command.delta = net.clock.tick_duration()
@@ -754,6 +759,10 @@ func _on_event(message: DotNetMessage) -> void:
 		ArenaEvents.Kind.KILL:
 			var kill := ArenaEvents.read_kill(reader)
 			if bool(kill["ok"]):
+				# The client's death camera. Fed here rather than by `player_killed`,
+				# which only the authority emits. See `ArenaSpectate.on_kill_event`.
+				if game.spectate != null:
+					game.spectate.on_kill_event(kill)
 				kill_received.emit(kill)
 		ArenaEvents.Kind.MATCH:
 			var state := ArenaEvents.read_match(reader)

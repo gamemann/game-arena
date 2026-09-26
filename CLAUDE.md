@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-332 + 92 + 136 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
+332 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -697,6 +697,8 @@ reading the log has to work out.
 The camera is driven once a **frame** rather than once a tick, for the reason this
 family measured at 47% in g2gfast: a camera moved on the tick timeline steps at the tick
 rate however smoothly the thing it is following is interpolated.
+
+**Until 2026-09-25 none of that reached a networked client.** The spectate layer was built in `_build_world_layers`, which returns on a non-authority, so a client had no layer; and had it had one, it was fed by `player_killed` (only the authority emits it — dot-combat resolves no death on a mirror) and ticked by `game.tick` (a networked client never calls it — the bridge simulates the predicted player itself). Every check about the death camera ran on an authoritative game, where the same code is fed and ticked, so a dead player in a browser looked at the floor for the whole of every death while `headless_match` passed. A client now builds the layer (`_build_spectate`), the bridge feeds it the KILL event (`ArenaSpectate.on_kill_event`) and ticks it (`client_tick`), and a respawn is read off the replicated health: a viewer seen dead and alive again is playing. The client's manager is **authoritative over its own camera**: this server sends no spectator views, and a dot-spectate mirror runs no timers, so a mirror here would hold the death camera until the respawn (and dot-spectate now refuses `on_death` on one, loudly). `headless_net`'s "the death camera on a client" is the check, and it fails without the fix (four of its six checks, then an abort).
 
 ### Two bugs the integration found
 

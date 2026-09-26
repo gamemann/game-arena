@@ -31,13 +31,13 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 136
+const CHECKS := 142
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 13
+const SECTIONS := 14
 
 var _passed := 0
 var _failed := 0
@@ -82,6 +82,7 @@ func _run() -> void:
 	_test_voice_wire()
 	_test_forced_noclip_is_predicted()
 	_test_blind_and_beacon()
+	_test_client_death_camera()
 	_test_disconnect()
 
 	print("")
@@ -740,6 +741,108 @@ func _test_voice_wire() -> void:
 	client_link.queue_free()
 	remove_child(server_link)
 	remove_child(client_link)
+	_done()
+
+
+## Runs the harness for [param ticks] more ticks: inputs up, the server, snapshots down,
+## the clients. What [method _run_ticks] does, from wherever the server has got to.
+func _pump(ticks: int) -> void:
+	for _i in range(ticks):
+		var tick := _server_game.current_tick() + 1
+		for peer_id in _clients:
+			var entry: Dictionary = _clients[peer_id]
+			var pair := _commands_for(peer_id, tick)
+			_server_bridge.receive_input(peer_id, entry["bridge"].encode_input(tick, pair[0], pair[1]))
+		_server_bridge.server_tick(tick)
+		for entry_down in _downstream:
+			var peer: int = entry_down["peer"]
+			var targets: Array = _clients.keys() if peer == 0 else [peer]
+			for target in targets:
+				if _clients.has(target):
+					_clients[target]["bridge"].receive_snapshot(entry_down["bytes"])
+		_downstream.clear()
+		for peer_id in _clients:
+			var entry: Dictionary = _clients[peer_id]
+			var pair := _commands_for(peer_id, tick)
+			entry["net"].clock.tick = tick
+			entry["bridge"].client_tick(tick, pair[0], pair[1])
+
+
+## A player dies and THEIR CLIENT draws the death camera, then hands it over.
+##
+## [b]Until 2026-09-25 a networked client drew no death camera at all.[/b] The spectate
+## layer was built on every side, but on a client it was fed by `game.player_killed`, which
+## only the authority emits (dot-combat resolves no deaths on a mirror), and ticked by
+## `game.tick`, which a networked client never calls — so `is_spectating` was false for the
+## whole of every death and the camera stayed on the body. Every check about the camera
+## ran on an offline or authoritative game, where the same code is fed and ticked.
+func _test_client_death_camera() -> void:
+	print("")
+	_section("[the death camera on a client]")
+
+	var client: Dictionary = _clients[2]
+	var client_game: ArenaGame = client["game"]
+	var victim := 11
+	var killer := 12
+
+	# Nobody respawns inside the chain, so every check below measures the chain.
+	_server_game.match_node.rules.respawn_delay_sec = 60.0
+
+	var health := _server_game.combat.health_of(victim)
+	health.invulnerable_until_tick = -1
+	var damage := DotDamage.make(killer, victim, health.health + health.armour + 50.0, _server_game.combat.damage_type(&""))
+	damage.tick = _server_game.current_tick()
+	var applied := health.apply(damage)
+	_server_game.combat.entity_killed.emit(victim, applied)
+	_pump(2)
+
+	var fell := client_game.player_for(victim).controller.state.position
+
+	# The KILL event, encoded by the server's registry and received by the client's the way
+	# a link delivers it. The harness carries snapshots and not events.
+	var writer := DotNetWriter.new()
+	var _enc := _server_net.messages.encode(
+		ArenaEvent.new(ArenaEvents.Kind.KILL, ArenaEvents.write_kill(killer, victim, "rifle", false)),
+		writer
+	)
+	var _got := (client["bridge"] as ArenaNetBridge).receive_event(writer.to_bytes())
+
+	_check(
+		client_game.spectate != null and client_game.spectate.is_spectating(victim),
+		"a dead player's own client is watching something rather than lying on the floor"
+	)
+	var eye := client_game.spectate.camera_for(victim) if client_game.spectate != null else Transform3D.IDENTITY
+	_check(
+		eye != Transform3D.IDENTITY and Vector2(eye.origin.x - fell.x, eye.origin.z - fell.z).length() < 0.5,
+		"from where they fell on that client", "%s against %s" % [eye.origin, fell]
+	)
+
+	_pump(TICK_RATE * 3)
+	var view := client_game.spectate.manager.view(str(victim)) if client_game.spectate != null else DotSpectatorView.new()
+	_check(
+		view.mode == DotSpectatorView.Mode.FIRST_PERSON or view.mode == DotSpectatorView.Mode.CHASE,
+		"and the chain hands over on the client rather than holding the death camera",
+		DotSpectatorView.Mode.keys()[view.mode]
+	)
+	_check(view.target == str(killer), "to the one other player", view.target)
+	_check(
+		client_game.spectate.camera_for(victim).origin.distance_to(
+			client_game.player_for(killer).controller.state.position
+		) < 3.0,
+		"and the camera is on them"
+	)
+
+	# The server brings them back — what its respawn does, called directly, because this
+	# harness's match has been through a map change and a warmup by now and when it would
+	# respawn somebody is dot-match's business, not this check's. What is under test is
+	# the client reading "alive again" off the replicated health, having heard no spawn.
+	_server_game.player_for(victim).spawn(_server_game.map.spawns[0], _server_game.current_tick())
+	_pump(TICK_RATE)
+	_check(
+		client_game.player_for(victim).is_alive() and not client_game.spectate.is_spectating(victim),
+		"and the client stops watching once the server has them alive again",
+		"alive=%s watching=%s server alive=%s" % [client_game.player_for(victim).is_alive(), client_game.spectate.is_spectating(victim), _server_game.player_for(victim).is_alive()]
+	)
 	_done()
 
 

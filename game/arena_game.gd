@@ -527,6 +527,13 @@ func _build_progress() -> DotResult:
 ## Nothing errored: a null layer is a legitimate thing for a mode with no layer to have,
 ## and the only symptom was a mode that did not do what it says.
 func _reconcile_world_layers() -> void:
+	if not is_authority and mode != null:
+		# A networked client builds one layer of the world's: the spectator camera, which
+		# is drawn where it is computed. Until it did, a client had no spectate layer at
+		# all and a dead player's camera stayed on the body for the whole of every death.
+		_build_spectate()
+		return
+
 	if not is_authority or mode == null:
 		return
 
@@ -549,6 +556,27 @@ func _reconcile_world_layers() -> void:
 		remove_child(props)
 		props.queue_free()
 		props = null
+
+
+## The spectate layer, on every side. Idempotent.
+func _build_spectate() -> void:
+	if spectate != null:
+		return
+
+	spectate = ArenaSpectate.new()
+	spectate.name = "Spectate"
+	spectate.game = self
+	add_child(spectate)
+
+	var spectate_ready := spectate.setup()
+
+	if not spectate_ready.ok:
+		DotLog.warn(
+			CHANNEL, "spectating is off", {"why": spectate_ready.error.message}
+		)
+		remove_child(spectate)
+		spectate.queue_free()
+		spectate = null
 
 
 ## Build whatever is missing. Idempotent, because [method _reconcile_world_layers]
@@ -580,21 +608,7 @@ func _build_world_layers() -> void:
 			effects.queue_free()
 			effects = null
 
-	if spectate == null:
-		spectate = ArenaSpectate.new()
-		spectate.name = "Spectate"
-		spectate.game = self
-		add_child(spectate)
-
-		var spectate_ready := spectate.setup()
-
-		if not spectate_ready.ok:
-			DotLog.warn(
-				CHANNEL, "spectating is off", {"why": spectate_ready.error.message}
-			)
-			remove_child(spectate)
-			spectate.queue_free()
-			spectate = null
+	_build_spectate()
 
 	if mode.objective_layout != &"" and objectives == null:
 		objectives = ArenaObjectives.new()

@@ -38,7 +38,14 @@ func setup() -> DotResult:
 
 	manager = DotSpectatorManager.new()
 	manager.name = "SpectatorManager"
-	manager.authoritative = game.is_authority
+	# [b]Authoritative on a client too, over its own camera and nothing else.[/b] This
+	# game's server sends no spectator views — a client learns of a death from the KILL
+	# event and of a respawn from the replicated health — so a MIRROR here would be one
+	# nobody tells anything, and a mirror runs no timers: the death camera it was handed
+	# would never hand over. The client runs the same rules from the same mode over the
+	# players it already draws, and decides nothing the server has to trust; what the
+	# server enforces is what it replicates. See dot-spectate's CLAUDE.md, decision 7.
+	manager.authoritative = true
 	manager.rules = _rules()
 	manager.participants_fn = _participants
 	manager.team_fn = func(key: String) -> int: return game.team_of(int(key))
@@ -61,6 +68,9 @@ func setup() -> DotResult:
 		"authoritative": manager.authoritative,
 	})
 
+	# The authority's signals. A networked client emits neither — dot-combat resolves no
+	# death on a mirror and dot-match's respawn queue runs on the authority — so a client
+	# is fed by the bridge instead: [method on_kill_event] and [method client_tick].
 	if not game.player_killed.is_connected(_on_killed):
 		game.player_killed.connect(_on_killed)
 	if not game.player_spawned.is_connected(_on_spawned):
@@ -114,6 +124,56 @@ func _pose_of(key: String) -> Transform3D:
 func tick(_delta: float) -> void:
 	if manager != null:
 		manager.advance(game.current_tick())
+
+
+## Keys seen dead while watching, on a client. See [method client_tick].
+var _seen_dead: Dictionary = {}
+
+
+## A networked client's tick, from [code]ArenaNetBridge.client_tick[/code].
+##
+## [b]Needed because a networked client never calls `game.tick`[/b] — the bridge
+## simulates the predicted player itself — so [method tick] never runs there, and a
+## death camera started on a client that nothing advanced sat on the death camera until
+## the respawn. It also stops a viewer the server has brought back: a client hears no
+## `player_spawned`, so the respawn is read off the replicated health — a viewer who was
+## seen dead and is alive again is playing. "Seen dead" rather than "alive", because the
+## KILL event can arrive before the snapshot that says so, and stopping on "alive" then
+## would end the death camera on the tick it started.
+func client_tick(tick: int) -> void:
+	if manager == null:
+		return
+
+	manager.advance(tick)
+
+	for key in manager.viewers():
+		var player := game.player_for(int(key))
+		if player == null:
+			manager.stop(key)
+			_seen_dead.erase(key)
+			continue
+		if not player.is_alive():
+			_seen_dead[key] = true
+		elif _seen_dead.has(key):
+			_seen_dead.erase(key)
+			manager.on_spawn(key)
+
+
+## A KILL event arrived, on a networked client. The same chain [method _on_killed] starts
+## on the authority, from where THIS machine drew the victim.
+func on_kill_event(info: Dictionary) -> void:
+	if manager == null:
+		return
+	var victim := int(info.get("victim_id", 0))
+	var killer := int(info.get("killer_id", 0))
+	var player := game.player_for(victim)
+	if player == null or player.controller == null:
+		# A kill for somebody this client does not hold: nobody here to draw a camera for.
+		return
+	manager.on_death(
+		str(victim), player.controller.state.position, str(killer) if killer != 0 else "",
+		game.current_tick()
+	)
 
 
 ## The camera a viewer should be drawn from. Identity when they are playing.
