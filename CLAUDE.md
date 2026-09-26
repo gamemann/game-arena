@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-334 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+334 + 103 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -919,6 +919,8 @@ that is forgotten is the one that files a peer-to-peer host's score to a real bo
 host holds the match clock, the score and every hitbox, and handing that over mid-round
 produces a round nobody can agree about. A private match whose host left has ended, and
 saying so is better than continuing wrongly.
+
+**It meets over a real HTTP rendezvous in a check, awaited end to end (`[p2p-await-games]`).** The sandboxed check uses the loopback signaller, which answers inside the call, so a caller that forgot `await` would pass against it. `headless_presentation`'s **a private match that meets over HTTP** (ported from game-playground's d4ff040, on ports 38800-38860 so the two suites can run together) stands up `RendezvousStub`, a four-route rendezvous on a local TCP port answering four frames after each request, hosts with one `ArenaParty` and joins with another through `DotP2PSession` and `DotP2PSignallerHttp`, and asserts each answer is the one the stub sent and arrived only after it answered, that the rendezvous was told the host's code and name, that the joiner learns who is there and does not elect itself, that a 403 leaves the party closed with a reason, and (arena's own addition) that a match hosted this way still files nothing. Trust and migration change nothing on the signalling path, so every playground assertion applies here as written. Armed by answering every join with an empty peer list (one check fired) and by refusing everything with a 500 (seven fired).
 
 ## "Settings" opened the interface's settings
 
