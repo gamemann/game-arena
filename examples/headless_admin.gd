@@ -35,8 +35,8 @@ const PORT := 27082
 const SERVER_DIR := "user://arena_admin"
 const TICK_RATE := 64
 
-const SECTIONS := 9
-const CHECKS := 43
+const SECTIONS := 10
+const CHECKS := 45
 
 var _passed := 0
 var _failed := 0
@@ -76,6 +76,7 @@ func _run() -> void:
 		await _test_respawn_clears()
 		await _test_immunity_and_self()
 		await _test_blind_and_beacon()
+		await _test_return_after_a_map_change()
 		await _test_reporting()
 
 	_teardown()
@@ -642,6 +643,36 @@ func _test_reporting() -> void:
 		if record.evidence.get("action", "") == "slap":
 			slapped = true
 	_check(slapped, "and on the player's own moderation history", "%d records" % history.size())
+	_done()
+
+
+## A `return` point is a place on a map, so a map change has to forget every one of them.
+func _test_return_after_a_map_change() -> void:
+	_section("return, across a map change")
+
+	_put_ada_on_the_floor()
+	var ada_key := StringName(str(_ada().player_id))
+	var _brought := await _say(_admin, "!bring Ada")
+	_check(
+		_module.services.mod_tools.can_return(ada_key),
+		"!bring Ada gives her somewhere to be returned to"
+	)
+
+	# The director's own signal, not `maps.change_to`: that waits on dot-map's sync
+	# host for every peer to load the map, and a session adopted here has no peer, so
+	# it never completes. What is under test is the module's answer to a change,
+	# which is exactly what the signal reaches. The swap itself is headless_match's.
+	var def := DotMapDef.new()
+	def.id = &"dm_atrium"
+	_module.maps.map_changed.emit(def)
+
+	var answer := await _say(_admin, "!return Ada")
+	_check(
+		not _module.services.mod_tools.can_return(ada_key)
+			and " ".join(answer).contains("nowhere"),
+		"and afterwards !return has nowhere to put her",
+		" / ".join(answer)
+	)
 	_done()
 
 
