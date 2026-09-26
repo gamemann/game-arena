@@ -139,13 +139,15 @@ class Climb:
 
 # --- What the movement can actually do -------------------------------------
 #
-# [b]The three numbers every gap on every map here is sized against, copied from
-# `ArenaPlayer.arena_tunables()` deliberately.[/b] A map is content: `by_id` is called
-# from a tool and from a catalogue listing with no player anywhere in the tree, and
-# reaching into the game's player class from a map would make content depend on the
-# game rather than the other way round. The family's answer to a deliberate copy is a
-# check that the copies agree, and `headless_match` asserts these three against the
-# tunables the server actually applies.
+# [b]The numbers every gap on every map here is sized against.[/b] The arithmetic
+# itself — the climb limit and the reach of a jump landing higher than it left — is
+# `DotFpsTunables`' own (`climb_limit`, `jump_reach`), asked of the very tunables
+# `ArenaPlayer.arena_tunables()` hands the server, so there is one formula and one set
+# of numbers. A map is content: `by_id` is called from a tool and from a catalogue
+# listing with no player anywhere in the tree, which is why that is the STATIC builder
+# and not a node, and why it is loaded lazily rather than preloaded — the player script
+# preloads this one. The constants below stay because the survey and the suite read
+# them directly, and `headless_match` asserts they agree with the tunables.
 
 ## Ground speed, m/s. `DotFpsTunables.max_speed`.
 const MOVE_SPEED := 9.0
@@ -160,13 +162,19 @@ const MOVE_GRAVITY := 22.0
 ## Metres. `DotFpsTunables.step_height`: a rise under this is WALKED, not jumped.
 const STEP_HEIGHT := 0.4
 
-## How much of the jump has to be left over at the top.
-##
-## A player landing at exactly [constant JUMP_HEIGHT] arrives with zero vertical speed
-## at the one instant of the arc where a tick either side of it is short — which is a
-## step that works when the tick lands right and does not when it does not. A map whose
-## routes are 90% of the apex is a map that works every time.
-const CLIMB_MARGIN := 0.9
+## How much of the jump has to be left over at the top: `DotFpsTunables.CLIMB_MARGIN`,
+## which says why nine tenths.
+const CLIMB_MARGIN := DotFpsTunables.CLIMB_MARGIN
+
+## The tunables arena plays with, built once; see the note above [constant MOVE_SPEED].
+static var _tunables: DotFpsTunables = null
+
+
+static func _movement() -> DotFpsTunables:
+	if _tunables == null:
+		_tunables = load("res://game/arena_player.gd").arena_tunables()
+
+	return _tunables
 
 
 ## The highest top face a player standing on flat ground can reach, in metres.
@@ -178,10 +186,10 @@ const CLIMB_MARGIN := 0.9
 ## written: a route the map's own documentation called "the fast way up" that nothing
 ## has ever climbed, because nothing had ever been asked to.
 static func climb_limit() -> float:
-	return JUMP_HEIGHT * CLIMB_MARGIN
+	return _movement().climb_limit()
 
 
-## The clear air a player running at [constant MOVE_SPEED] crosses in one jump, landing
+## The clear air a player running at full ground speed crosses in one jump, landing
 ## [param rise] metres higher than they left.
 ##
 ## [b]The landing height is the whole point of this function.[/b] The airtime everybody
@@ -190,20 +198,13 @@ static func climb_limit() -> float:
 ## for 0.67 s flat and 0.40 s onto a step 1.2 m up, which is 6.1 m of reach against
 ## 3.6. `game-playground` sized a jump course with the first number, was 30% out, and
 ## was unfinishable past platform three from the day it was built — see `[reach-1]` in
-## `nightly-todo.md`. This is that arithmetic for this game's movement.
+## `nightly-todo.md`. `DotFpsTunables.jump_reach` is that arithmetic; this asks it of
+## this game's movement.
 ##
 ## Returns 0.0 for a rise no jump reaches at all, which is the honest answer: there is
 ## no gap you can cross onto something you cannot get on top of.
 static func jump_reach(rise: float) -> float:
-	var launch := sqrt(2.0 * MOVE_GRAVITY * JUMP_HEIGHT)
-	var remaining := launch * launch - 2.0 * MOVE_GRAVITY * rise
-
-	if remaining < 0.0:
-		return 0.0
-
-	# The DESCENDING root. The ascending one is the same height on the way up, which is
-	# a shorter jump that lands on the near lip rather than the far one.
-	return MOVE_SPEED * (launch + sqrt(remaining)) / MOVE_GRAVITY
+	return _movement().jump_reach(rise)
 
 
 ## Declares that [param to_box] is meant to be reached from [param from_box].
