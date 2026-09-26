@@ -851,6 +851,14 @@ func _on_map_changed(map: DotMapDef) -> void:
 	if vote != null:
 		vote.note_changed()
 
+	# [b]Every `return` point is a place on the map that just went.[/b] DotModTools
+	# keeps a stack of positions per player, and without this `return Ada` after a
+	# change put her where she had stood on the previous map, inside whatever the new
+	# one has there. `[modtools-return-1]`; playground, hungario and the lobby do the
+	# same.
+	if services != null and services.mod_tools != null:
+		services.mod_tools.clear_history()
+
 	if services != null:
 		services.announce("Now playing %s." % map.name_or_id())
 

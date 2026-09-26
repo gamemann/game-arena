@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-334 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 44 over nine.
+334 + 92 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
