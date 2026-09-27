@@ -1,0 +1,47 @@
+[gd_scene load_steps=6 format=3]
+
+[sub_resource type="Gradient" id="soft"]
+offsets = PackedFloat32Array(0, 0.35, 1)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.55, 1, 1, 1, 0)
+
+[sub_resource type="GradientTexture2D" id="soft_tex"]
+gradient = SubResource("soft")
+width = 32
+height = 32
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 0.5)
+
+[sub_resource type="StandardMaterial3D" id="spark_mat"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+billboard_mode = 3
+billboard_keep_scale = true
+albedo_texture = SubResource("soft_tex")
+
+[sub_resource type="QuadMesh" id="spark_quad"]
+material = SubResource("spark_mat")
+size = Vector2(0.05, 0.05)
+
+[sub_resource type="Gradient" id="spark_ramp"]
+offsets = PackedFloat32Array(0, 0.3, 1)
+colors = PackedColorArray(1, 0.9, 0.55, 1, 1, 0.6, 0.18, 1, 0.9, 0.3, 0.05, 0)
+
+[node name="ImpactSpark" type="Node3D"]
+
+[node name="Sparks" type="CPUParticles3D" parent="."]
+amount = 12
+lifetime = 0.35
+one_shot = true
+explosiveness = 1.0
+mesh = SubResource("spark_quad")
+direction = Vector3(0, 0, 1)
+spread = 60.0
+gravity = Vector3(0, -9.8, 0)
+initial_velocity_min = 2.5
+initial_velocity_max = 6.5
+scale_amount_min = 0.6
+scale_amount_max = 1.4
+color_ramp = SubResource("spark_ramp")

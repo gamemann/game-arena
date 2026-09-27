@@ -40,7 +40,12 @@ const BEACON_SOUND := &"beacon"
 ## is the same conversion.
 const DEGREES_PER_COUNT := 0.022
 
-static var FX_DIR := ArenaPaths.rebase(ArenaPaths.rebase("res://scenes/fx"))
+## Where a muzzle flash is drawn, from the eye, in the aim's frame: forward, down, right.
+const MUZZLE_OFFSET := Vector3(0.12, -0.14, -0.55)
+
+## Where the four effect scenes are. Rebased once: [method ArenaPaths.rebase] is idempotent,
+## so the second call this line used to make changed nothing either way.
+static var FX_DIR := ArenaPaths.rebase("res://scenes/fx")
 
 var settings: DotSettingsManager = null
 var audio: DotAudioManager = null
@@ -556,6 +561,17 @@ func _build_fx() -> DotResult:
 	var res := fx.setup()
 	if not res.ok:
 		return res.wrap("the arena's effects")
+
+	# [b]Said out loud, because a missing scene is otherwise a DEBUG line.[/b] Until
+	# 2026-09-27 all four scenes this catalogue names were missing and every muzzle flash,
+	# spark, hole and gib in this game was refused for it, with no suite noticing.
+	# `headless_presentation` now asserts the list is empty; this is for a build that
+	# lost one anyway.
+	var missing := fx.catalogue.missing_scenes()
+	if not missing.is_empty():
+		DotLog.warn(CHANNEL, "effect scenes missing; those effects will not draw", {
+			"paths": ", ".join(missing),
+		})
 	return DotResult.success(null)
 
 
@@ -761,6 +777,51 @@ func swallows_input() -> bool:
 
 
 # --- The events a deathmatch has -------------------------------------------
+
+## A transform at [param at] whose -Z points along [param direction].
+##
+## What every effect scene here is built against: a muzzle flash sprays along -Z, a spark
+## flies back up +Z toward whoever fired, and the bullet hole's decal projects along -Z.
+## [b]Projecting along the shot rather than against a surface normal[/b] is what lets a
+## hole land on a wall, a floor or a ramp with nothing but the point the shot stopped at,
+## which is all a [DotShot] carries.
+static func facing(at: Vector3, direction: Vector3) -> Transform3D:
+	var forward := direction.normalized() if direction.length_squared() > 0.0 else Vector3.FORWARD
+	# Straight up or down has no yaw to keep; any other up vector will do. 4.7's
+	# `looking_at` copes with a parallel one too, with an engine WARNING per shot.
+	var up := Vector3.RIGHT if absf(forward.dot(Vector3.UP)) > 0.99 else Vector3.UP
+	return Transform3D(Basis.looking_at(forward, up), at)
+
+
+## One tick of the local player's weapon use: a flash per shot, a spark and a hole per
+## impact, and the hit marker.
+##
+## [b]The flash is pushed out in front of the eye.[/b] A shot starts at the view, and a
+## flash drawn there is drawn around the camera. Half a metre along the aim and a little
+## below it is where a gun would be if this game drew one.
+func on_used(outcome: DotWeaponOutcome) -> void:
+	if outcome == null or not outcome.used:
+		return
+
+	for shot in outcome.shots:
+		var aim := facing(shot.origin, shot.direction)
+		var muzzle := aim.translated_local(MUZZLE_OFFSET)
+		# The weapon's id rather than a slot number. A slot is where a player put
+		# something; an id is what it is, and a sound catalogue keyed on a slot would
+		# play the rifle whenever anybody put a shotgun in slot one.
+		var weapon_id: StringName = shot.weapon_id if shot.weapon_id != &"" else &"rifle"
+		on_fired(weapon_id, muzzle, true)
+
+		# Impacts are a list because a shotgun is one shot with several of them, and a
+		# single impact sound for eight pellets is a shotgun that sounds like a rifle. Each
+		# faces along the aim, not along its own pellet: close enough for a decal, and the
+		# pellet directions are not kept per impact.
+		for at in shot.impacts:
+			on_impact(facing(at, shot.direction), false)
+
+		if not shot.damages.is_empty():
+			on_hit_confirmed()
+
 
 func on_fired(weapon_id: StringName, muzzle: Transform3D, mine: bool) -> void:
 	audio.play_at(StringName("fire_%s" % weapon_id), muzzle.origin)

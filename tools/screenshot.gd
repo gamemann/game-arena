@@ -5,6 +5,7 @@ const ArenaGame := preload("../game/arena_game.gd")
 const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
+const ArenaPresentation := preload("../game/arena_presentation.gd")
 
 ## Renders a map to a PNG so a person can look at it.
 ##
@@ -16,6 +17,7 @@ const ArenaPlayer := preload("../game/arena_player.gd")
 ##   xvfb-run -a godot --path . --script tools/screenshot.gd -- --map dm_atrium
 ##   tools/screenshot.sh dm_box --admin      # an administrator's beacon and blind
 ##   tools/screenshot.sh dm_atrium --view keep -30,3,-28 -15,2,-12   # one more frame
+##   tools/screenshot.sh dm_box --fx 0,1.7,10 30,1.5,12   # shots from the first point at the second
 ##
 ## [b]`--admin` puts players in the map and renders what the two screen-shaped mod tools
 ## look like[/b]: a beaconed player on open floor beside one who is not, the same beacon
@@ -79,6 +81,17 @@ func _initialize() -> void:
 
 	if args.has("--admin"):
 		_stage_admin(map, id)
+		return
+
+	var fx_at := args.find("--fx")
+	if fx_at >= 0:
+		var eye: Variant = _vector(args[fx_at + 1]) if fx_at + 2 < args.size() else null
+		var aim_at: Variant = _vector(args[fx_at + 2]) if fx_at + 2 < args.size() else null
+		if eye == null or aim_at == null:
+			push_error("--fx wants <eye x,y,z> <aim at x,y,z>")
+			quit(1)
+			return
+		_stage_fx(map, id, eye, aim_at)
 		return
 
 	var far := map.extent * 1.5
@@ -255,6 +268,101 @@ func _stage_admin(map: ArenaMap, id: StringName) -> void:
 			# The HUD fades a blind in over a quarter of a second; software rendering is
 			# slow enough that three frames can be less than that.
 			"wait": 12,
+		},
+	]
+
+
+# --- --fx -------------------------------------------------------------------
+
+## A burst of rifle shots at a wall, drawn by the real presentation layer the way a client
+## draws its own: [method ArenaPresentation.on_used] with a [DotWeaponOutcome] whose
+## impacts are where the map's own trace says each shot stopped.
+##
+## [b]The particles are slowed to a twentieth of real speed and restarted once spawned.[/b]
+## A muzzle flash lives 80 ms and a software renderer under xvfb takes longer than that per
+## frame, so at full speed the frame this saves is the one after it went out. The holes are
+## decals and are not affected.
+func _stage_fx(map: ArenaMap, id: StringName, eye: Vector3, aim_at: Vector3) -> void:
+	var presentation := ArenaPresentation.new()
+	presentation.name = "Presentation"
+	root.add_child(presentation)
+	var built := presentation.setup()
+	if not built.ok:
+		push_error("the presentation layer: %s" % built.error.message)
+
+	var trace := map.to_trace()
+	var aim := (aim_at - eye).normalized()
+	var side := aim.cross(Vector3.UP).normalized()
+	var refused := {}
+	presentation.fx.spawned.connect(func(fx_id: StringName, node: Node, why: StringName) -> void:
+		if node == null:
+			refused["%s: %s" % [fx_id, why]] = true
+	)
+	var fire := func() -> void:
+		# A small group, the last one freshest: holes from the earlier shots, the spark
+		# and the flash from the last. One shot per frame's budget, as a client fires one
+		# a tick: six in one frame is over dot-fx's budget and the last are refused.
+		for i in range(6):
+			presentation.present(0.016, eye, aim)
+			var angle := float(i) * 1.1
+			var spread := side * sin(angle) * 0.012 * i + Vector3.UP * cos(angle) * 0.012 * i
+			var dir := (aim + spread).normalized()
+			var hit := trace.ray(eye, dir, 500.0)
+			var shot := DotShot.new()
+			shot.weapon_id = &"rifle"
+			shot.origin = eye
+			shot.direction = dir
+			if hit.ok():
+				shot.impacts = [hit.point]
+				if i == 0:
+					print("fx: the first shot stopped at %s, %.1f m away" % [hit.point, hit.distance])
+			var outcome := DotWeaponOutcome.new()
+			outcome.used = true
+			outcome.add_shot(shot)
+			presentation.on_used(outcome)
+		for particles in presentation.fx.find_children("*", "CPUParticles3D", true, false):
+			(particles as CPUParticles3D).speed_scale = 0.05
+			# And started again at the slowed speed. A one-shot's first update ages it by
+			# the whole frame's delta, and a software frame is longer than a flash lives,
+			# so without this the flash has already finished when the slowing lands.
+			(particles as CPUParticles3D).restart()
+		if not refused.is_empty():
+			print("fx: refused %s" % ", ".join(PackedStringArray(refused.keys())))
+			refused.clear()
+
+	var hit0 := trace.ray(eye, aim, 500.0)
+	var wall := hit0.point if hit0.ok() else aim_at
+
+	_shots = [
+		{
+			# Through the shooter's own eye: the flash low and right, the spark on the wall.
+			"name": "%s_fx_eye" % String(id),
+			"from": eye,
+			"at": eye + aim,
+			"arm": fire,
+			"wait": 4,
+		},
+		{
+			# Beside the wall, looking at the holes, re-fired so the spark is fresh again.
+			"name": "%s_fx_wall" % String(id),
+			"from": wall - aim * 2.2 + side * 1.2 + Vector3.UP * 0.3,
+			"at": wall,
+			"arm": fire,
+			"wait": 4,
+		},
+		{
+			# A death two metres short of the wall, seen from where the shots came from.
+			"name": "%s_fx_death" % String(id),
+			"from": eye + side * 1.5,
+			"at": wall - aim * 2.0 + Vector3.UP * 0.5,
+			"arm": func() -> void:
+				var where := Transform3D(Basis.IDENTITY, Vector3(wall.x, map.floor_y, wall.z) - aim * 2.0)
+				presentation.present(0.016, eye, aim)
+				presentation.on_died(where)
+				for particles in presentation.fx.find_children("Gibs", "CPUParticles3D", true, false):
+					(particles as CPUParticles3D).speed_scale = 0.2
+					(particles as CPUParticles3D).restart(),
+			"wait": 4,
 		},
 	]
 

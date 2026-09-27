@@ -1,0 +1,36 @@
+[gd_scene load_steps=4 format=3]
+
+[sub_resource type="StandardMaterial3D" id="gib_mat"]
+transparency = 1
+vertex_color_use_as_albedo = true
+roughness = 0.6
+
+[sub_resource type="BoxMesh" id="gib_box"]
+material = SubResource("gib_mat")
+size = Vector3(0.12, 0.12, 0.12)
+
+[sub_resource type="Gradient" id="gib_ramp"]
+offsets = PackedFloat32Array(0, 0.7, 1)
+colors = PackedColorArray(0.75, 0.08, 0.06, 1, 0.45, 0.04, 0.03, 1, 0.3, 0.02, 0.02, 0)
+
+[node name="DeathBurst" type="Node3D"]
+
+[node name="Gibs" type="CPUParticles3D" parent="."]
+position = Vector3(0, 1, 0)
+amount = 24
+lifetime = 1.2
+one_shot = true
+explosiveness = 1.0
+mesh = SubResource("gib_box")
+emission_shape = 3
+emission_box_extents = Vector3(0.3, 0.6, 0.3)
+direction = Vector3(0, 1, 0)
+spread = 70.0
+gravity = Vector3(0, -12, 0)
+initial_velocity_min = 3.0
+initial_velocity_max = 7.0
+angular_velocity_min = -360.0
+angular_velocity_max = 360.0
+scale_amount_min = 0.6
+scale_amount_max = 1.4
+color_ramp = SubResource("gib_ramp")

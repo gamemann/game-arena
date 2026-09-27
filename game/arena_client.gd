@@ -1202,25 +1202,7 @@ func _on_local_used(outcome: DotWeaponOutcome) -> void:
 	if presentation == null or outcome == null or not outcome.used:
 		return
 
-	for shot in outcome.shots:
-		var muzzle := Transform3D.IDENTITY
-		muzzle.origin = shot.origin
-		# The weapon's id rather than a slot number. A slot is where a player put
-		# something; an id is what it is, and a sound catalogue keyed on a slot would
-		# play the rifle whenever anybody put a shotgun in slot one.
-		var weapon_id: StringName = shot.weapon_id if shot.weapon_id != &"" else &"rifle"
-		presentation.on_fired(weapon_id, muzzle, true)
-
-		# Where the pellets landed, from the client's own prediction. Impacts are a list
-		# because a shotgun is one shot with several of them, and a single impact sound
-		# for eight pellets is a shotgun that sounds like a rifle.
-		for at in shot.impacts:
-			var hit := Transform3D.IDENTITY
-			hit.origin = at
-			presentation.on_impact(hit, false)
-
-		if not shot.damages.is_empty():
-			presentation.on_hit_confirmed()
+	presentation.on_used(outcome)
 
 
 func _on_local_damaged(damage: DotDamage) -> void:

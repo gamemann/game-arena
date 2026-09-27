@@ -545,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-346 + 103 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+346 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -559,7 +559,7 @@ exact wording and went stale the moment 4.7 reworded "ObjectDB instances leaked 
 exit" — a guard that cries wolf about correct files is a guard people stop reading.
 Grep for `SCRIPT ERROR`, `Parse Error` and `Failed to load script` instead.
 
-`tools/screenshot.sh <map> [--admin] [--view <name> <x,y,z> <x,y,z>]...` renders a map from three angles (and one more per `--view`) into `screenshots/`
+`tools/screenshot.sh <map> [--admin] [--view <name> <x,y,z> <x,y,z>]... [--fx <eye> <aim at>]` renders a map from three angles (and one more per `--view`; `--fx` instead renders six rifle shots from `<eye>` at a wall, through the eye, beside the wall, and a death) into `screenshots/`
 (gitignored). It needs `xvfb-run`, because it needs a real rendering context — under
 `--headless` every frame it saves is empty, which is worse than no screenshot because
 it looks like one. **A map is a rendered thing**: this family has shipped a 0 x 0
@@ -876,6 +876,16 @@ many at once, how loud, and how far away it stops mattering**, which is a docume
 burning, slows, invulnerability and being down — things that happen over time to an entity
 and change the simulation. `ArenaPresentation` is what any of that *looks* like, and an
 effect there never changes the simulation, which is what lets a frame budget drop one.
+
+### The effect scenes, which did not exist until 2026-09-27
+
+`fx_catalogue()` named `muzzle_flash`, `impact_spark`, `bullet_hole` and `death_burst` under `scenes/fx/` from the day it was written, and **the directory did not exist**. dot-fx refuses a scene it cannot find and says so at DEBUG, because a client whose pack is still arriving legitimately asks for scenes it does not have — so every flash, spark, hole and gib in this game was refused, silently, while `headless_presentation` asserted that the catalogue validates (it does, with no scenes, by design) and that the gib at tier 3 was refused *for the missing file*, which had made a check out of the bug. Found from mg-buses-from-hell's barrel (e60edff), the first game in the family that shipped its effect scenes.
+
+The four are plain scenes with no script and no external resource, so a delivered pack has no path inside them to rewrite: `CPUParticles3D` for the flash, the spark and the gibs (CPU rather than GPU so the headless and Dummy renderers run them like anything else), a small `OmniLight3D` on the flash, and a `Decal` with a generated radial texture for the hole. **Every one is built against one frame, `ArenaPresentation.facing(at, direction)`: -Z along the shot.** The flash sprays along it, the spark flies back up it, and the hole's decal is turned so it projects along it — which is what lets a hole land on a wall, a floor or a ceiling with only the point the shot stopped at, since a `DotShot` carries no surface normal. The client used to hand the presentation an identity basis, so a decal would only ever have projected downward. `ArenaPresentation.on_used(outcome)` is that loop now, moved out of `ArenaClient._on_local_used` so the suite drives the exact path; the flash is placed half a metre along the aim and a little below and right (`MUZZLE_OFFSET`), because a shot starts at the eye and a flash drawn there is drawn round the camera. `_build_fx` warns when a scene is missing, the way buses' `BfhFx.setup` does.
+
+`headless_presentation`'s *a shot is drawn* asserts `missing_scenes()` is empty, that `on_used` puts a flash in front of and below the eye, a spark and a hole at the impact, that the hole's decal projects along the shot (and straight up onto a ceiling), and that a death bursts. Armed: a scene removed (four checks), the decal's turn removed (two), the muzzle offset removed (one). Rendered with `tools/screenshot.sh dm_box --fx 18,1.7,11 30,1.4,11.6` and looked at, which is what changed the flash from six additive white squares to a soft round glow (untextured particle quads are squares) and the sparks from white to orange.
+
+**A one-shot shorter than a frame is not drawn.** `CPUParticles3D` ages a one-shot by the whole delta of its first frame, so the 80 ms flash is gone before it is drawn on a frame longer than that. Safe by dot-fx's rule and irrelevant at 60 fps; it is why `--fx` slows the particles to a twentieth and restarts them, because a software renderer under xvfb is well past 80 ms a frame.
 
 ### The camera is written in exactly one place
 

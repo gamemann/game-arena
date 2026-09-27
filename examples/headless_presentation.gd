@@ -23,7 +23,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 103
+const CHECKS := 112
 
 var _passed := 0
 var _failed := 0
@@ -46,6 +46,7 @@ func _run() -> void:
 	_test_schema()
 	_test_audio_is_a_firefight()
 	_test_effects_and_the_player_who_asked_for_none()
+	_test_a_shot_is_drawn()
 	_test_shake_is_computed_not_applied()
 	_test_console()
 	_test_party_is_sandboxed()
@@ -114,7 +115,7 @@ func _test_schema() -> void:
 	)
 	_check(
 		ArenaPresentation.fx_catalogue().validate().ok,
-		"and so does the effect catalogue with no scenes"
+		"and so does the effect catalogue, which loads no scene to validate"
 	)
 	_done()
 
@@ -246,22 +247,130 @@ func _test_effects_and_the_player_who_asked_for_none() -> void:
 		"at the lowest tier the expensive effect does not exist"
 	)
 	p.settings.set_value(&"fx_quality", 3)
-	# The scene is not present in this repository, so what is asserted is the refusal's
-	# REASON: at tier 3 it is refused for the missing file rather than for the tier, which
-	# is the difference between "this build has no art" and "this setting is wrong".
+	# Until 2026-09-27 this asserted the refusal's reason was `missing`, because the scene
+	# was not in the repository -- which made a check out of the bug. It is drawn now.
 	var why := []
 	p.fx.spawned.connect(func(_id: StringName, node: Node, reason: StringName) -> void:
-		if node == null:
-			why.append(reason)
+		why.append(reason if node == null else &"drawn")
 	)
 	p.fx.spawn(&"death_burst", at)
 	_check(
-		why.size() == 1 and why[0] == &"missing",
-		"and at the highest it is refused for the scene it names rather than for the tier"
+		why == [&"drawn"],
+		"and at the highest it is drawn (%s)" % str(why)
 	)
 
 	p.queue_free()
 	_done()
+
+
+# --- 3b ---------------------------------------------------------------------
+
+## [b]Every effect this game names was refused until 2026-09-27[/b], because
+## `scenes/fx/` did not exist, and dot-fx logs a missing scene at DEBUG. Every check above
+## passed throughout: a catalogue validates without its scenes, by design. So this asks the
+## two questions that could not pass then: are the files there, and does a shot, taken the
+## way the client takes one, put nodes in the world.
+func _test_a_shot_is_drawn() -> void:
+	_section("A shot is drawn: a flash at the gun, a spark and a hole where it stopped")
+
+	var missing := ArenaPresentation.fx_catalogue().missing_scenes()
+	_check(
+		missing.is_empty(),
+		"every scene the effect catalogue names is present (missing: %s)" % ", ".join(missing)
+	)
+
+	var p := _make()
+	var drawn := {}
+	p.fx.spawned.connect(func(id: StringName, node: Node, reason: StringName) -> void:
+		drawn[id] = node if node != null else reason
+	)
+
+	var eye := Vector3(0.0, 1.6, 0.0)
+	var aim := Vector3(1.0, 0.0, 0.2).normalized()
+	var wall := eye + aim * 10.0
+	p.present(0.016, eye, aim)
+	p.on_used(_outcome(eye, aim, [wall]))
+
+	var flash: Variant = drawn.get(&"muzzle_flash")
+	_check(
+		flash is Node3D and (flash as Node3D).is_inside_tree(),
+		"firing draws a muzzle flash (%s)" % str(flash)
+	)
+	if flash is Node3D:
+		var off: Vector3 = (flash as Node3D).global_position - eye
+		_check(
+			off.dot(aim) > 0.3 and off.dot(aim) < 1.0 and off.y < 0.0,
+			"in front of the eye and below it, not around the camera (%s)" % str(off)
+		)
+		_check(
+			(flash as Node).find_children("*", "CPUParticles3D").size() > 0,
+			"and it is particles, not an empty node"
+		)
+	else:
+		_check(false, "in front of the eye and below it, not around the camera")
+		_check(false, "and it is particles, not an empty node")
+
+	var spark: Variant = drawn.get(&"impact_spark")
+	_check(
+		spark is Node3D and (spark as Node3D).global_position.distance_to(wall) < 0.01,
+		"the impact draws a spark where the shot stopped (%s)" % str(spark)
+	)
+
+	var hole: Variant = drawn.get(&"bullet_hole")
+	_check(
+		hole is Node3D and (hole as Node3D).global_position.distance_to(wall) < 0.01,
+		"and a bullet hole (%s)" % str(hole)
+	)
+	_check(
+		_projects_along(hole, aim),
+		"whose decal projects along the shot, so it lands on the wall it hit"
+	)
+
+	# Straight up is an aim parallel to the up vector `facing` would otherwise hand
+	# `looking_at`. 4.7 copes (with a WARNING, which `facing` avoids), so this holds the
+	# answer rather than the path: the hole goes on the ceiling. The ceiling rather than
+	# the floor, because a decal that ignored the aim entirely would still project down.
+	drawn.clear()
+	var up := Vector3.UP
+	p.present(0.016, eye, up)
+	p.on_used(_outcome(eye, up, [Vector3(0.0, 5.0, 0.0)]))
+	_check(
+		_projects_along(drawn.get(&"bullet_hole"), up),
+		"and a shot straight up puts its hole on the ceiling (%s)" % str(drawn.get(&"bullet_hole"))
+	)
+
+	drawn.clear()
+	var dead := Transform3D.IDENTITY
+	dead.origin = Vector3(3.0, 0.0, 0.0)
+	p.present(0.016, eye, aim)
+	p.on_died(dead)
+	_check(drawn.get(&"death_burst") is Node3D, "and a death bursts (%s)" % str(drawn.get(&"death_burst")))
+
+	p.queue_free()
+	_done()
+
+
+func _outcome(from: Vector3, aim: Vector3, impacts: Array[Vector3]) -> DotWeaponOutcome:
+	var out := DotWeaponOutcome.new()
+	out.used = true
+	var shot := DotShot.new()
+	shot.weapon_id = &"rifle"
+	shot.origin = from
+	shot.direction = aim
+	shot.impacts = impacts
+	out.add_shot(shot)
+	return out
+
+
+## Whether [param hole] holds a [Decal] whose projection (its -Y) runs along [param aim].
+func _projects_along(hole: Variant, aim: Vector3) -> bool:
+	if not hole is Node:
+		return false
+	var decals := (hole as Node).find_children("*", "Decal")
+	if decals.is_empty():
+		return false
+	var decal := decals[0] as Decal
+	return (-decal.global_basis.y).dot(aim.normalized()) > 0.99
 
 
 # --- 4 ----------------------------------------------------------------------
