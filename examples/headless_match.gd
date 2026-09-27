@@ -51,13 +51,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 346
+const CHECKS := 354
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 27
+const SECTIONS := 28
 
 var _passed := 0
 var _failed := 0
@@ -118,6 +118,7 @@ func _run() -> void:
 
 	await _test_effects()
 	await _test_spectating()
+	await _test_ffa_spawn_sides()
 	await _test_king_of_the_hill()
 	await _test_capture_the_flag()
 
@@ -559,6 +560,142 @@ func _first_other_team(game: ArenaGame, id: int) -> int:
 		if other != id and game.team_of(other) != side:
 			return other
 	return 0
+
+
+# --- Spawning in a free-for-all ---------------------------------------------
+
+## In a free-for-all, every other player is an enemy to the spawn director.
+##
+## [b]The roster hands out sides even when the mode has none.[/b] `DotTeamRoster` is
+## built with a standard blue/red pair and auto-assigns whenever dot-match has no teams,
+## so in a free-for-all half the players carry the respawning player's roster side. The
+## director asks [code]enemies_fn(team)[/code] and [code]friends_fn(team)[/code] with that
+## side, and a side-aware answer there would make a free-for-all spawn treat half the
+## lobby as friends ([code][arena-ffa-sides-1][/code]).
+##
+## The arena's own rules pick at random among the sites, which never reads a distance,
+## so the last check switches the director to its furthest-from-enemies mode for one
+## choice: that is the selector the positions exist for, and the only way to watch a
+## roster "friend" being avoided the way an enemy is.
+func _test_ffa_spawn_sides() -> void:
+	_section("free-for-all: nobody is a friend at a spawn")
+
+	var game := ArenaGame.new()
+	game.name = "FfaSpawnGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.free_for_all(50)
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_atrium())
+	if not _check(ready.ok, "a free-for-all game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+
+	for index in range(4):
+		var _added := game.add_player(900 + index, "Loner %d" % index)
+
+	game.match_node.rules.respawn_delay_sec = 120.0
+	_go_live(game)
+	_ffa_spawn_scenario(game, "from the start")
+
+	# [b]The case the queue item was written about.[/b] A team mode's sides stay in the
+	# roster across a change into a free-for-all: `_adopt_match_sides` only forces a side
+	# dot-match gave, and a free-for-all gives none, so the four keep red and blue.
+	var team := _first_team_mode()
+	var to_team := game.change_map(ArenaMap.dm_atrium(), team)
+	var to_ffa := game.change_map(ArenaMap.dm_atrium(), ArenaMode.free_for_all(50))
+	_check(
+		to_team.ok and to_ffa.ok,
+		"the game goes into a team mode and back into a free-for-all",
+		"%s / %s" % [str(to_team.error), str(to_ffa.error)]
+	)
+	_ffa_spawn_scenario(game, "after a team mode")
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+	_done()
+
+
+## Three checks: what the director is told about players 901..903 when 900 respawns in
+## [param game]'s free-for-all, and which of two sites it then picks. One of the three
+## shares 900's roster side where anybody does, and stands two metres from one site; the
+## other two stand twelve metres from the other.
+func _ffa_spawn_scenario(game: ArenaGame, when: String) -> void:
+	var stack := game.player_stack
+	var respawner := 900
+	var side := stack.teams.team_of(str(respawner))
+	var sides := PackedStringArray()
+
+	for index in range(4):
+		sides.append("%d %s" % [900 + index, String(stack.teams.team_of(str(900 + index)))])
+
+	var friend := 0
+	for index in range(1, 4):
+		if stack.teams.team_of(str(900 + index)) == side:
+			friend = 900 + index
+			break
+	if friend == 0:
+		friend = 901
+
+	var enemies: Array[int] = []
+	for index in range(1, 4):
+		if 900 + index != friend:
+			enemies.append(900 + index)
+
+	var site_a := Vector3(-20.0, 0.0, 0.0)
+	var site_b := Vector3(20.0, 0.0, 0.0)
+	var friend_at := site_a + Vector3(2.0, 0.0, 0.0)
+	_stand(game, respawner, Vector3(0.0, 0.0, 60.0))
+	_stand(game, friend, friend_at)
+	_stand(game, enemies[0], site_b + Vector3(0.0, 0.0, 12.0))
+	_stand(game, enemies[1], site_b + Vector3(0.0, 0.0, -12.0))
+
+	var told_enemies: Array = stack.spawns.enemies_fn.call(side)
+	var told_friends: Array = stack.spawns.friends_fn.call(side)
+	var missing := PackedStringArray()
+
+	for id in [friend, enemies[0], enemies[1]]:
+		if not told_enemies.has(game.player_for(id).controller.state.position):
+			missing.append(str(id))
+
+	_check(
+		missing.is_empty(),
+		"%s, every other player is an enemy to the director (%s)" % [when, ", ".join(sides)],
+		"not enemies: %s" % ", ".join(missing)
+	)
+
+	_check(
+		not told_friends.has(friend_at),
+		"and nobody is a friend, %d on 900's roster side included" % friend,
+		"friends: %s" % str(told_friends)
+	)
+
+	var saved_mode := stack.spawns.rules.mode
+	stack.spawns.rules.mode = DotSpawnRules.Mode.FURTHEST
+	stack.spawns.clear_sites()
+	stack.spawns.add_site(DotSpawnSite.point(&"beside_the_friend", site_a))
+	stack.spawns.add_site(DotSpawnSite.point(&"twelve_from_enemies", site_b))
+
+	var chosen := stack.choose_spawn(respawner)
+	var picked := ""
+	if chosen.ok:
+		picked = String((chosen.value as DotSpawnChoice).site.id)
+
+	stack.spawns.rules.mode = saved_mode
+	stack.refresh_spawns()
+
+	_check(
+		picked == "twelve_from_enemies",
+		"and furthest-from-enemies avoids the spawn 2 m from %d for one 12 m from two "
+			% friend + "enemies",
+		"picked '%s' %s" % [picked, "" if chosen.ok else str(chosen.error)]
+	)
 
 
 # --- Objectives ------------------------------------------------------------
