@@ -15,6 +15,7 @@ const ArenaPlayer := preload("../game/arena_player.gd")
 ##
 ##   xvfb-run -a godot --path . --script tools/screenshot.gd -- --map dm_atrium
 ##   tools/screenshot.sh dm_box --admin      # an administrator's beacon and blind
+##   tools/screenshot.sh dm_atrium --view keep -30,3,-28 -15,2,-12   # one more frame
 ##
 ## [b]`--admin` puts players in the map and renders what the two screen-shaped mod tools
 ## look like[/b]: a beaconed player on open floor beside one who is not, the same beacon
@@ -102,6 +103,46 @@ func _initialize() -> void:
 			"at": Vector3(0.0, 3.0, 0.0),
 		},
 	]
+
+	# `--view <name> <x,y,z> <x,y,z>`, repeatable: one more frame, from the first point
+	# looking at the second. The three above are fixed so two renders of a map are
+	# comparable across nights; a new piece of a map is usually somewhere none of them
+	# points, and the keep on dm_atrium was a blank wall in the eye frame and a lid in
+	# the overview -- neither says whether its doorways read as doorways.
+	var at := 0
+
+	while true:
+		at = args.find("--view", at)
+		if at < 0 or at + 3 >= args.size():
+			break
+
+		var from: Variant = _vector(args[at + 2])
+		var target: Variant = _vector(args[at + 3])
+
+		if from == null or target == null:
+			push_error("--view wants <name> <x,y,z> <x,y,z>, got %s" % str(args.slice(at, at + 4)))
+		else:
+			_shots.append({
+				"name": "%s_%s" % [String(id), args[at + 1]],
+				"from": from,
+				"at": target,
+			})
+
+		at += 4
+
+
+## `"x,y,z"` as a Vector3, or null when it is not three numbers.
+static func _vector(text: String) -> Variant:
+	var parts := text.split(",")
+
+	if parts.size() != 3:
+		return null
+
+	for part in parts:
+		if not part.strip_edges().is_valid_float():
+			return null
+
+	return Vector3(float(parts[0]), float(parts[1]), float(parts[2]))
 
 
 var _wait := 0

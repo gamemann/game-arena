@@ -453,6 +453,11 @@ static func dm_box() -> ArenaMap:
 ## piers that stand only at its two long edges. It is cover from the ring and from
 ## nothing else. Its roof is a firing position 0.4 m below the ring, reached by a ten
 ## tread stair at the back of the yard or by stepping across from the crates.
+##
+## [b]The north-west keep[/b] (2026-09-27) is the same answer for the other half: until
+## it, all the ground the ring cannot see was in the south, which is blue's. A roofed
+## room with a doorway at each end and a firing slit to the west, and a roof at 5.5 --
+## over the ring -- reached by one jump west off the ring's north arm.
 static func dm_atrium() -> ArenaMap:
 	var map := ArenaMap.new()
 	map.id = &"dm_atrium"
@@ -700,6 +705,111 @@ static func dm_atrium() -> ArenaMap:
 			Vector3(-10.0, 0.0, 26.1 - float(index) * 0.9),
 			Vector3(4.0, 0.36 * float(index + 1), 0.9)
 		))
+
+	# --- The north-west keep -----------------------------------------------
+	#
+	# [b]Added 2026-09-27 (1.4.0), because the arcade answered the roof for one half of
+	# the map only.[/b] Spawns here are tagged by the sign of z, and every piece of
+	# ground cover the ring cannot see -- the bunker, the arcade -- is in the south,
+	# blue's half. Red started in a 60 x 20 m north yard with the ring on one side, the
+	# perch on the other and nothing to stand behind. The keep is red's answer, and it
+	# is not the arcade again: a closed room rather than a colonnade, and its roof is a
+	# high point rather than a tier under the ring.
+	#
+	# - [b]Inside[/b], a 4.5 x 10 m room with a doorway at each end, north to the yard
+	#   and south to the foot of the north-west stair. Roofed, so nothing on the ring or
+	#   the perch sees into it, and walled, so the only way to shoot into it is down a
+	#   doorway -- which is what makes it cover rather than a shed.
+	# - [b]On top[/b], a 6.5 x 12 m roof at 5.5, 0.9 over the ring, so whoever holds the
+	#   ring is no longer the highest person in the north-west. Reached from the
+	#   ring's north arm, by a 2 m jump west across the alley. Nothing on the ground
+	#   climbs it, which is what stops the room below and the roof above being one
+	#   position held from both ends.
+	#
+	# [b]The two gaps are the load-bearing numbers.[/b] The alley between the keep and
+	# the building is 2 m and the lane between the keep and the stair is 2 m. Either one
+	# under 0.8 is a slot nothing can walk through (`[gate-sweep-1]`); either one past
+	# [method jump_reach] of a 0.9 m rise (4.6 m) is a roof nobody reaches. 2 m is a
+	# walkable alley from below and one easy jump from above. It is also why the keep
+	# is not flush with the building: a keep flush with it is a 0.9 m step up off the
+	# ring with nothing to jump, which makes the roof part of the ring.
+	#
+	# No spawn was added: five red and five blue is what this map ships, and red's
+	# (-25, -22) is a ten-second walk from the north doorway already.
+	const KEEP_X := -18.5
+	const KEEP_W := 6.5
+	const KEEP_Z := -18.0
+	const KEEP_D := 12.0
+	const KEEP_H := 4.9
+	const KEEP_T := 1.0
+	const KEEP_DOOR := 2.5
+	const KEEP_DOOR_H := 3.0
+	const KEEP_ROOF := 0.6
+
+	# The doorway's west jamb, so the door is centred on the keep's width.
+	var door_x := KEEP_X + (KEEP_W - KEEP_DOOR) * 0.5
+	var jamb_w := (KEEP_W - KEEP_DOOR) * 0.5
+
+	# North and south faces, each split around its doorway with a lintel over it.
+	for z in [KEEP_Z, KEEP_Z + KEEP_D - KEEP_T]:
+		map.add_box(AABB(Vector3(KEEP_X, 0.0, z), Vector3(jamb_w, KEEP_H, KEEP_T)))
+		map.add_box(AABB(
+			Vector3(door_x + KEEP_DOOR, 0.0, z), Vector3(jamb_w, KEEP_H, KEEP_T)
+		))
+		map.add_box(AABB(
+			Vector3(door_x, KEEP_DOOR_H, z),
+			Vector3(KEEP_DOOR, KEEP_H - KEEP_DOOR_H, KEEP_T)
+		))
+
+	# The east face, solid, between the two ends. It looks across the 2 m alley at the
+	# building's wall, and an opening there would be one nobody can use.
+	map.add_box(AABB(
+		Vector3(KEEP_X + KEEP_W - KEEP_T, 0.0, KEEP_Z + KEEP_T),
+		Vector3(KEEP_T, KEEP_H, KEEP_D - 2.0 * KEEP_T)
+	))
+
+	# [b]The west face has a firing slit, and the two heights are the whole design of
+	# it.[/b] Solid, this face was a blank 12 m wall -- the first render showed a room
+	# that reads from outside exactly like a block. The slit is 4 m long at eye height:
+	# the sill at 1.2 is OVER [method climb_limit] (1.125), so nobody vaults through it
+	# and the keep keeps two ways in; the opening is 0.8, UNDER a crouching player
+	# (0.9), so the sill is not a ledge anybody can crouch in either. Measured: at 1.0
+	# the survey finds 3 m² of sill it can reach, which is a shelf inside a wall that
+	# nobody designed. It
+	# faces the west yard and the foot of the stair, which is where somebody coming for
+	# the keep on foot comes from.
+	const SLIT_Z := KEEP_Z + KEEP_D * 0.5 - 2.0
+	const SLIT_L := 4.0
+	const SLIT_SILL := 1.2
+	const SLIT_TOP := 2.0
+
+	map.add_box(AABB(
+		Vector3(KEEP_X, 0.0, KEEP_Z + KEEP_T),
+		Vector3(KEEP_T, KEEP_H, SLIT_Z - KEEP_Z - KEEP_T)
+	))
+	map.add_box(AABB(
+		Vector3(KEEP_X, 0.0, SLIT_Z + SLIT_L),
+		Vector3(KEEP_T, KEEP_H, KEEP_Z + KEEP_D - KEEP_T - SLIT_Z - SLIT_L)
+	))
+	map.add_box(AABB(Vector3(KEEP_X, 0.0, SLIT_Z), Vector3(KEEP_T, SLIT_SILL, SLIT_L)))
+	map.add_box(AABB(
+		Vector3(KEEP_X, SLIT_TOP, SLIT_Z), Vector3(KEEP_T, KEEP_H - SLIT_TOP, SLIT_L)
+	))
+
+	# The roof covers the walls' tops as well as the room, so no wall top is a ledge.
+	var keep_roof := AABB(
+		Vector3(KEEP_X, KEEP_H, KEEP_Z), Vector3(KEEP_W, KEEP_ROOF, KEEP_D)
+	)
+
+	map.add_box(keep_roof)
+
+	# The ring's north arm onto the roof: 0.9 up, 2 m across, west. Read off the boxes;
+	# the arm here is the same AABB the roof ring was built with above.
+	map.add_climb(
+		"dm_atrium: the ring's north arm onto the keep",
+		AABB(Vector3(-10.0, WALL_H, -10.0), Vector3(20.0, 0.6, 4.0)),
+		keep_roof
+	)
 
 	map.add_perimeter()
 

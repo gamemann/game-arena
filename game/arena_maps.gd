@@ -59,7 +59,9 @@ const MAP_VERSIONS := {
 	# 1.3.0: the north-west stair moved 0.75 m east to meet the building, and the
 	# arcade's last piers 0.5 m east to meet the crates — both closing slots narrower
 	# than a player that `[gate-sweep-1]` found (2026-09-24).
-	&"dm_atrium": "1.3.0",
+	# 1.4.0: the north-west keep, a roofed room in red's half with a high point on
+	# top, reached by a 2 m jump off the ring's north arm (2026-09-27).
+	&"dm_atrium": "1.4.0",
 	# 1.1.0: the east-west bridge, the south-west shelf and the perch (2026-09-18).
 	# [b]Backdated.[/b] That change moved the geometry and did not move the version,
 	# so every record set on the one-bridge dm_pit is recorded against the two-bridge

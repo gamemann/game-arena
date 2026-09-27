@@ -543,7 +543,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-334 + 103 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+340 + 103 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -557,7 +557,7 @@ exact wording and went stale the moment 4.7 reworded "ObjectDB instances leaked 
 exit" — a guard that cries wolf about correct files is a guard people stop reading.
 Grep for `SCRIPT ERROR`, `Parse Error` and `Failed to load script` instead.
 
-`tools/screenshot.sh <map> [--admin]` renders a map from three angles into `screenshots/`
+`tools/screenshot.sh <map> [--admin] [--view <name> <x,y,z> <x,y,z>]...` renders a map from three angles (and one more per `--view`) into `screenshots/`
 (gitignored). It needs `xvfb-run`, because it needs a real rendering context — under
 `--headless` every frame it saves is empty, which is worse than no screenshot because
 it looks like one. **A map is a rendered thing**: this family has shipped a 0 x 0
@@ -988,6 +988,16 @@ and believed about the others.
 It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0.8 m a player is: the ring is a loop, and a lookout that closed it would make it two dead ends. It sits between the east-west bridge (z -1..1) and the south-east stair's landing (z 7.5..10.5), so neither arrival lands on it. No spawn was added.
 
 `headless_match` has a bot on the east arm hold east and jump until it is grounded on the lookout (armed: without the box it ends at 3.73 m), and traces eye to eye from the lookout to the perch against every box. The survey still reports 0 closed slots, everything reached, and 0 trapped. Rendered: `tools/screenshot.sh dm_pit`, roof view.
+
+## `dm_atrium` gained a keep, so red's half has somewhere the ring cannot see
+
+**Extended 2026-09-27 (dm_atrium 1.4.0).** Spawns on this map are tagged by the sign of z, and every piece of ground cover the ring cannot see — the bunker, the arcade — was in the south, blue's half. Red started in a 60 x 20 m north yard with the ring on one side and the perch on the other and nothing to stand behind. **The keep** is a 6.5 x 12 m block in the north-west (x -18.5..-12, z -18..-6): a roofed 4.5 x 10 m room inside it with a 2.5 x 3 m doorway at each end, north to the yard and south to a lane at the foot of the north-west stair, and a roof at 5.5 on top, 0.9 over the ring. It is not the arcade again: a closed room rather than a colonnade, and a roof that is a high point rather than a tier under the ring.
+
+**The two 2 m gaps are the load-bearing numbers.** The alley between the keep and the building and the lane between the keep and the stair are both 2 m: a walkable passage from below, and from the ring's north arm one 0.9 m-up jump west onto the roof (declared as a climb, 2.0 m against 4.64 m of reach). Flush with the building, the roof would be a step off the ring and part of it; under 0.8 either gap is a slot. Nothing on the ground climbs the roof.
+
+**The west wall has a firing slit, because the first render showed a block.** Solid, the default eye frame was a blank 12 m wall. The slit is 4 m long, sill at 1.2 (over the 1.125 climb limit, so nobody vaults through it) and 0.8 of opening (under the 0.9 a crouching player needs, so the sill is not a shelf). At 1.0 of opening the survey finds 3 m² of sill it can reach, which is why the number is what it is. No spawn was added: five red and five blue is what this map ships.
+
+`headless_match`'s *dm_atrium* section asserts the room is roofed and the ring cannot see into it, the roof is open sky, the slit is open at eye height and wall at the knee and over the head, a bot walks in at the north door and out at the south at running speed (printed: 18.6 of the 18.6 m route, 9.04 m/s door to door against 9.00), and a bot runs the ring's north arm and jumps the alley onto the roof (printed: took off at 9.00 m/s). Armed: the alley widened to 5 m (the roof drive, the climb sweep and the survey all fail), the south doorway blocked, the bot at 0.6 of forward (in-and-out passes, speed fails at 5.41 m/s), the roof removed, the slit closed. Survey: 3578 m² standable, 0 unreached, 0 trapped, 0 closed slots. Rendered with `tools/screenshot.sh dm_atrium --view <name> <from> <at>`, which is new: one extra frame per `--view`, because the three fixed frames are for comparing nights and a new piece of a map is usually somewhere none of them points.
 
 ## `dm_pit`, and the filter that had never said no
 

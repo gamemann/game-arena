@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 334
+const CHECKS := 340
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -3771,7 +3771,7 @@ func _test_atrium() -> void:
 	# map was above the jump apex — but they are still three separate changes to three
 	# separate maps. dm_box reached 1.2.0 by its own two steps — the crates on
 	# 2026-09-22, the gantries and nests on 2026-09-24.
-	var expected := {&"dm_atrium": "1.3.0", &"dm_pit": "1.4.0", &"dm_box": "1.2.0"}
+	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.4.0", &"dm_box": "1.2.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
@@ -3864,6 +3864,149 @@ func _test_atrium() -> void:
 		emerged.y < 1.0 and absf(emerged.z - 15.5) < 1.5,
 		"and does it on the ground, in the lane, rather than over the top",
 		"ended at %s" % str(emerged)
+	)
+
+	# --- The north-west keep ------------------------------------------------
+	#
+	# [b]Cover, asked the way the arcade's is: of the sky and of the ring.[/b] A room is
+	# the one shape a box count reads identically whether it is a room or a solid
+	# block, and a solid block would pass every assertion on this map except these.
+	var in_keep := Vector3(-15.25, 1.0, -12.0)
+	var under_keep := trace.ray(in_keep, Vector3.UP, 40.0)
+	var ring_eye := Vector3(-8.0, 4.6 + 1.6, -8.0)
+	var ring_to_keep := false
+
+	for box in map.boxes:
+		if box.intersects_segment(ring_eye, in_keep + Vector3(0.0, 0.6, 0.0)):
+			ring_to_keep = true
+
+	_check(
+		under_keep.ok() and under_keep.blocked and ring_to_keep,
+		"the north-west keep is roofed, and the ring cannot see into it"
+	)
+
+	var over_keep := trace.ray(Vector3(-15.25, 5.6, -12.0), Vector3.UP, 40.0)
+
+	_check(
+		not (over_keep.ok() and over_keep.blocked),
+		"and its roof is open sky, a firing position rather than a ceiling"
+	)
+
+	# The west slit: open at eye height, wall at the knee and over the head. A slit
+	# that reached the floor would be a third doorway, and one that closed would put
+	# back the blank wall the first render of the keep showed.
+	var slit_eye := trace.ray(Vector3(-16.0, 1.6, -12.0), Vector3.LEFT, 4.0)
+	var slit_knee := trace.ray(Vector3(-16.0, 0.6, -12.0), Vector3.LEFT, 4.0)
+	var slit_head := trace.ray(Vector3(-16.0, 2.6, -12.0), Vector3.LEFT, 4.0)
+
+	_check(
+		not (slit_eye.ok() and slit_eye.blocked)
+			and slit_knee.ok() and slit_knee.blocked
+			and slit_head.ok() and slit_head.blocked,
+		"and its west wall is a firing slit at eye height, wall above and below"
+	)
+
+	# [b]In at the north door and out at the south, walked.[/b] A doorway is a hole in a
+	# list of boxes and a hole is invisible, so the only thing that says the room is a
+	# room is something passing through it. Held south (+Z) from the north yard; the
+	# lane south of the keep ends against the side of the north-west stair, so the bot
+	# stops there. Distance and speed are PRINTED against the route and max_speed,
+	# because a crawling bot also gets through a doorway eventually and a check that it
+	# passes as well is not a check (`[bot-drive-1]`).
+	var tunables := ArenaPlayer.arena_tunables()
+	var keep_start := Vector3(-15.25, 0.2, -23.0)
+	# Where the lane south of the keep ends for a bot holding south: the stair's side
+	# at z -4, less the motor's 0.35 m radius.
+	var keep_end_z := -4.35
+	walker.controller.teleport(keep_start)
+
+	var south := DotFpsCommand.new()
+	south.yaw = 0.0
+	south.move = Vector2(0.0, -1.0)
+
+	var went_in := false
+	var door_north_tick := -1
+	var door_south_tick := -1
+
+	for tick in range(tick_rate * 4):
+		walker.controller.apply_command(south)
+		walker.controller.simulate_tick(tick_rate * 16 + tick, delta)
+
+		var at: Vector3 = walker.controller.state.position
+
+		if at.z > -17.0 and at.z < -7.0 and at.x > -17.5 and at.x < -13.0 and at.y < 1.0:
+			went_in = true
+
+		if door_north_tick < 0 and at.z >= -18.0:
+			door_north_tick = tick
+
+		if door_south_tick < 0 and at.z >= -6.0:
+			door_south_tick = tick
+
+	var out_at: Vector3 = walker.controller.state.position
+	var through := float(door_south_tick - door_north_tick) * delta
+	var keep_speed := 12.0 / through if door_south_tick > door_north_tick and door_north_tick >= 0 else 0.0
+
+	print("  ..    keep: covered %.1f of the %.1f m route; %.2f m/s door to door against max_speed %.2f"
+		% [out_at.z - keep_start.z, keep_end_z - keep_start.z, keep_speed, tunables.max_speed])
+
+	_check(
+		went_in and out_at.z > -6.0 and out_at.y < 0.5,
+		"a bot walks into the keep at its north door and out at its south",
+		"inside %s, ended at %s" % [went_in, str(out_at)]
+	)
+	_check(
+		keep_speed >= tunables.max_speed - 1.0,
+		"and does it at running speed, not squeezing through",
+		"%.2f m/s against max_speed %.2f" % [keep_speed, tunables.max_speed]
+	)
+
+	# [b]The roof, reached the only way it is reached: off the ring's north arm.[/b]
+	# Held west along the arm and jump pressed at its west edge, which is what a player
+	# does -- holding jump the whole way would bleed the run to the air cap, see
+	# `_test_bot_ground_speed`. Grounded on the roof at 5.5, west of the alley, is the
+	# arrival.
+	var arm_start := Vector3(-2.0, 4.7, -8.0)
+	walker.controller.teleport(arm_start)
+
+	var west := DotFpsCommand.new()
+	west.yaw = 0.0
+	west.move = Vector2(-1.0, 0.0)
+
+	var on_keep := false
+	var takeoff_speed := 0.0
+	var takeoff_x := 0.0
+
+	for tick in range(tick_rate * 3):
+		var at: Vector3 = walker.controller.state.position
+		var jumping := at.x <= -9.4
+
+		if jumping and takeoff_speed == 0.0:
+			var v: Vector3 = walker.controller.state.velocity
+			takeoff_speed = Vector2(v.x, v.z).length()
+			takeoff_x = at.x
+
+		west.set_button(DotFpsCommand.BUTTON_JUMP, jumping)
+		walker.controller.apply_command(west)
+		walker.controller.simulate_tick(tick_rate * 24 + tick, delta)
+
+		var now: Vector3 = walker.controller.state.position
+
+		if walker.controller.state.is_grounded() and now.y > 5.45 and now.x < -12.0:
+			on_keep = true
+			break
+
+	var roof_at: Vector3 = walker.controller.state.position
+
+	print("  ..    keep roof: covered %.1f m against the %.1f m to the roof's edge; took off at x %.2f doing %.2f m/s against max_speed %.2f"
+		% [arm_start.x - roof_at.x, arm_start.x - (-12.0), takeoff_x, takeoff_speed,
+			tunables.max_speed])
+
+	_check(
+		on_keep,
+		"a bot runs the ring's north arm and jumps the alley onto the keep's roof",
+		"ended at (%.1f, %.2f, %.1f), took off at %.2f m/s"
+			% [roof_at.x, roof_at.y, roof_at.z, takeoff_speed]
 	)
 
 	walker.queue_free()
