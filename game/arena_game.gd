@@ -778,7 +778,45 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 
 	map_changed.emit(map)
 
+	# After the announcement, so every layer that rebinds on it — the player stack's
+	# spawn sites and spawn rules, the effects' resolver hook — has done so before the
+	# first spawn on the new map asks it anything.
+	_respawn_for_new_map()
+
 	return DotResult.success(map)
+
+
+## Puts every player in the match at a spawn point of the map that was just built.
+##
+## [b]A position is a place in a room, and the room was replaced.[/b] Before this, a map
+## change re-bodied each player against the new geometry and left them where they had
+## been standing in the old one. Wherever the new map has a box, a player carried over
+## into it is inside solid geometry, and the flat body resolves that by whichever face
+## is nearest — which for a player standing on the floor inside a box is the floor.
+## Found building `dm_atrium`'s keep: a box across its south door landed on a position
+## a `dm_box` player had carried over, and headless_match found him under the floor.
+##
+## Through [method _on_respawn_due], which is the round start's path: the director's
+## choice with its enemy distance and team sides, spawn protection, a cleared effect set
+## and the loadout. A player who was dead is put back too, because the timer that would
+## have revived them belonged to the match that was just freed and the new one's warmup
+## does not drain a queue. Spectators stay out, exactly as the round start leaves them.
+##
+## [b]The authority only.[/b] A mirroring client runs `change_map` to rebuild its own
+## geometry; where anybody stands is the server's decision, and the snapshot after the
+## respawn carries it — the predictor adopts the server's state and replays on top.
+func _respawn_for_new_map() -> void:
+	if not is_authority or match_node == null:
+		return
+
+	for id in player_ids():
+		var key := str(id)
+		var record := match_node.scoreboard.find(key)
+
+		if record == null or not record.present or record.spectating:
+			continue
+
+		_on_respawn_due(key, match_node.choose_spawn(key, _tick), _tick)
 
 
 ## Frees everything that belongs to the map, in the order the connections require.

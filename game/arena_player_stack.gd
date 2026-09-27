@@ -396,6 +396,13 @@ func refresh_spawns() -> void:
 		site.priority = int(round(point.weight))
 		site.cooldown_ticks = point.cooldown_ticks
 		site.enabled = point.enabled
+		# [b]And the side it belongs to, which the copy used to leave out.[/b] The map
+		# tags a team's points and dot-match sends each side to its own through
+		# `DotTeam.spawn_tag`; a site with no team admits everybody, so once the director
+		# was the one choosing, a team mode spawned both sides out of one pool again —
+		# the thing the tags were written to stop. Found by the first check that looked
+		# at WHICH spawn a team player landed on (`[arena-mapchange-floor-1]`).
+		site.team = _side_of_tags(point.tags)
 		spawns.add_site(site)
 
 	DotLog.debug(CHANNEL, "spawn sites", {"count": spawns.sites().size()})
@@ -493,7 +500,26 @@ func _on_map_changed(_map: ArenaMap) -> void:
 	# long spawn protection lasts. Refreshing the sites against the old duration would
 	# grant the previous mode's protection until the next changelevel.
 	refresh_spawn_rules()
+	_adopt_match_sides()
 	refresh_spawns()
+
+
+## Takes every player's side from the match again, after a change built a new one.
+##
+## [method _on_player_added] adopts dot-match's assignment at a join, and a map change
+## is not a join: the new match re-adds everybody and may put them on other sides, or on
+## sides at all where the last mode had none. Left alone, the roster answers the
+## director with the previous mode's side, and a player asks for spawns that belong to
+## the other team.
+func _adopt_match_sides() -> void:
+	if not game.is_authority or teams == null:
+		return
+
+	for id in game.player_ids():
+		var side := _side_of_id(game.team_of(id))
+
+		if side != &"":
+			var _forced := teams.force_team(str(id), side, &"match")
 
 
 ## Drops a player from every record. Call from `ArenaGame.remove_player`.
@@ -720,6 +746,19 @@ func _side_of_id(team_id: int) -> StringName:
 	for i in range(listed.size()):
 		if listed[i] != null and listed[i].id == team_id:
 			return playing[i] if i < playing.size() else &""
+
+	return &""
+
+
+## The roster side whose match team claims a spawn point with one of [param tags], or
+## empty for a point any side may use — which is every point outside a team mode.
+func _side_of_tags(tags: Array[StringName]) -> StringName:
+	if tags.is_empty():
+		return &""
+
+	for team in game.teams():
+		if team != null and team.spawn_tag != &"" and tags.has(team.spawn_tag):
+			return _side_of_id(team.id)
 
 	return &""
 

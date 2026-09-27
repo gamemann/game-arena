@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 340
+const CHECKS := 346
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -2978,6 +2978,75 @@ func _test_map_change() -> void:
 		"%d below it" % below
 	)
 
+	# --- A box where somebody was standing -------------------------------
+	#
+	# [b]The check above passes on the shipped maps by luck of layout.[/b] A map change
+	# used to keep every player's position and swap the geometry under them, so a
+	# player standing where the next map has a box was inside it, and the flat body
+	# resolved that downwards: building `dm_atrium`'s keep, a box across its south door
+	# landed on a position carried over from `dm_box` and one player ended the section
+	# under the floor. Here the coincidence is made on purpose: a player is put on a
+	# known patch of open floor, and the map changed to is this one plus a box on
+	# exactly that patch.
+	var trap_map := ArenaMap.by_id(_game.map.id)
+	var standing: Variant = _open_floor_away_from_spawns(trap_map)
+
+	if _check(
+		standing != null,
+		"there is open floor away from every spawn to build a box on",
+		String(trap_map.id)
+	):
+		var carried: ArenaPlayer = _game.players()[0]
+		carried.controller.teleport(standing as Vector3, 0.0, 0.0)
+		trap_map.add_box(_trap_at(standing as Vector3))
+
+		var trapped := _game.change_map(trap_map)
+
+		_check(
+			trapped.ok,
+			"the map changes to one with a box where player %d is standing"
+				% carried.player_id,
+			str(trapped.error)
+		)
+
+		var inside := _players_inside_boxes(trap_map)
+		_check(
+			inside.is_empty(),
+			"and nobody is inside a box of the new map once it has",
+			"inside: %s" % str(inside)
+		)
+
+		var astray := PackedStringArray()
+
+		for player in _game.players():
+			var nearest := _nearest_spawn(trap_map, player.controller.state.position)
+
+			if float(nearest[1]) > 0.5:
+				astray.append("%d %.1f m from a spawn" % [player.player_id, float(nearest[1])])
+
+		_check(
+			astray.is_empty(),
+			"every player is at a spawn point of the new map, respawned rather than "
+			+ "carried over",
+			", ".join(astray)
+		)
+
+		for tick in range(32):
+			_game.tick(_commands_for_tick(1100 + tick))
+
+		var under := 0
+
+		for player in _game.players():
+			if player.controller.state.position.y < trap_map.floor_y - 1.0:
+				under += 1
+
+		inside = _players_inside_boxes(trap_map)
+		_check(
+			under == 0 and inside.is_empty(),
+			"and after half a second of play nobody is inside a box or under the floor",
+			"%d under it, inside: %s" % [under, str(inside)]
+		)
+
 	# --- The mode gate, over a live rotation -------------------------------
 	#
 	# [b]Last, because it moves the game into a team mode and back.[/b] Nothing below
@@ -2994,6 +3063,27 @@ func _test_map_change() -> void:
 		var to_team := _game.change_map(ArenaMap.by_id(_game.map.id), team)
 
 		if _check(to_team.ok, "the game moves into a team mode", str(to_team.error)):
+			# The respawn a map change now does is the round start's, so it has to
+			# honour the sides the new mode just assigned: a side's spawn tag, or an
+			# untagged point both may use.
+			var wrong_side := PackedStringArray()
+
+			for player in _game.players():
+				var nearest := _nearest_spawn(_game.map, player.controller.state.position)
+				var tag := _game.map.spawn_tag(int(nearest[0]))
+				var wanted := _spawn_tag_of_team(_game.team_of(player.player_id))
+
+				if float(nearest[1]) > 0.5 or (tag != &"" and tag != wanted):
+					wrong_side.append("%d (%s) at a %s spawn, %.1f m" % [
+						player.player_id, String(wanted), String(tag), float(nearest[1])
+					])
+
+			_check(
+				wrong_side.is_empty(),
+				"and the change puts each side at its own spawns",
+				", ".join(wrong_side)
+			)
+
 			director.restrict_rotation()
 
 			_check(
@@ -3039,6 +3129,86 @@ func _test_map_change() -> void:
 	director.queue_free()
 	remove_child(director)
 	_done()
+
+
+## The two-metre box [method _test_map_change] builds on top of a player.
+func _trap_at(standing: Vector3) -> AABB:
+	return AABB(standing + Vector3(-1.0, -0.05, -1.0), Vector3(2.0, 2.4, 2.0))
+
+
+## The first patch of bare floor, scanning in a fixed order, where a trap box would
+## touch no other box and would sit at least four metres from every spawn — so the only
+## way a player ends up inside it is by having been left there.
+func _open_floor_away_from_spawns(map: ArenaMap) -> Variant:
+	var reach := int(map.extent) - 3
+
+	for x in range(-reach, reach + 1, 2):
+		for z in range(-reach, reach + 1, 2):
+			var at := Vector3(float(x), map.floor_y + 0.05, float(z))
+			var trap := _trap_at(at)
+			var clear := true
+
+			for box in map.boxes:
+				# The floor itself is the one box a trap stands on rather than in.
+				if box.end.y <= map.floor_y + 0.01:
+					continue
+
+				if box.intersects(trap.grow(0.5)):
+					clear = false
+					break
+
+			if not clear:
+				continue
+
+			if float(_nearest_spawn(map, at)[1]) < 4.0:
+				continue
+
+			return at
+
+	return null
+
+
+## Which spawn of [param map] is nearest [param at], and how far: [index, metres].
+func _nearest_spawn(map: ArenaMap, at: Vector3) -> Array:
+	var best := -1
+	var best_distance := INF
+
+	for index in range(map.spawns.size()):
+		var distance := map.spawns[index].origin.distance_to(at)
+
+		if distance < best_distance:
+			best = index
+			best_distance = distance
+
+	return [best, best_distance]
+
+
+## The spawn tag of match team [param team_id], or empty outside a team mode.
+func _spawn_tag_of_team(team_id: int) -> StringName:
+	for team in _game.teams():
+		if team.id == team_id:
+			return team.spawn_tag
+
+	return &""
+
+
+## Every player whose body is inside a box of [param map], by id. Two points up the
+## body rather than the feet, because a player standing ON a box has their feet on its
+## top face and is exactly where they should be.
+func _players_inside_boxes(map: ArenaMap) -> Array[int]:
+	var out: Array[int] = []
+
+	for player in _game.players():
+		var feet := player.controller.state.position
+
+		for box in map.boxes:
+			var solid := box.grow(-0.05)
+
+			if solid.has_point(feet + Vector3.UP * 0.3) or solid.has_point(feet + Vector3.UP * 1.2):
+				out.append(player.player_id)
+				break
+
+	return out
 
 
 # --- Monsters --------------------------------------------------------------

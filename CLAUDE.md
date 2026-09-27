@@ -328,6 +328,8 @@ What survives a change and what does not:
   person on this server, not about a room. They are re-bodied against the new geometry
   — `ArenaPlayer.rebind_map`, and **assigning the body is not enough**, because
   `DotFpsMotor` holds a reference to the one it was built with.
+- **Their positions do not.** A position is a place in a room, and the room was replaced. Until 2026-09-27 a change kept everybody where they stood, so a player whose spot was a box on the next map was inside it and the flat body pushed him down through the floor (found building `dm_atrium`'s keep). `_respawn_for_new_map` now puts every present, non-spectating player through `_on_respawn_due` after `map_changed` — the round start's path, so the director, team sides, spawn protection and loadouts all apply — on the authority only; a client follows through the predictor's rewind. `headless_match` builds a box on the spot a player is standing and asserts nobody is inside a box, everybody is at a spawn, and each side is at its own; `headless_net` asserts the client's predicted player follows.
+- **The director did not know about sides until then.** `ArenaPlayerStack.refresh_spawns` copied dot-match's points into dot-spawn sites without their team tag, and the roster kept the previous mode's sides across a change, so once the director was choosing, a team mode spawned both sides out of one pool again. Sites carry the side of the match team whose `spawn_tag` claims them, and `_adopt_match_sides` re-reads dot-match's assignment on every map change.
 - **The match does not.** A new map is a new match.
 - **The combat manager does not**, because its trace *is* the map.
 
@@ -543,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-340 + 103 + 142 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+346 + 103 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never

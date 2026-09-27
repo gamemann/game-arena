@@ -31,7 +31,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 142
+const CHECKS := 144
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -651,6 +651,41 @@ func _test_map_sync_wire() -> void:
 		client_game.map.id == target,
 		"and so is the client, having rebuilt the world itself",
 		String(client_game.map.id)
+	)
+
+	# [b]Where the player stands is the server's, and the client has to follow it.[/b] A
+	# map change respawns everybody on the authority (`[arena-mapchange-floor-1]`: a
+	# position carried over can be inside a box of the next map) and does nothing of the
+	# kind on a mirror, which only rebuilds its geometry. So the client's own predicted
+	# player is left where it stood in the old map until a snapshot says otherwise, and
+	# this is the check that one does — through the predictor, whose rewind adopts the
+	# server's state and replays on top of it, over the same one-in-five loss.
+	var peer: int = _clients.keys()[0]
+	var session_id := int(client_entry["session"])
+	var on_server: ArenaPlayer = _server_bridge.behaviour_for(session_id).player
+	var on_client: ArenaPlayer = client_bridge.behaviour_for(session_id).player
+	var respawned_at := on_server.controller.state.position
+	var nearest := INF
+
+	for spawn in _server_game.map.spawns:
+		nearest = minf(nearest, spawn.origin.distance_to(respawned_at))
+
+	_check(
+		nearest < 0.5,
+		"the server put this client's player at a spawn of the new map",
+		"%.1f m from the nearest" % nearest
+	)
+
+	var _follow := _flight_window(peer, 48, 0)
+	var gap := on_client.controller.state.position.distance_to(
+		on_server.controller.state.position
+	)
+	_check(
+		gap < 0.1 and on_client.global_position.distance_to(on_server.controller.state.position) < 0.1,
+		"and the client's predicted player followed the respawn, in the state and on the node",
+		"%.2f m apart in the state, %.2f on the node" % [
+			gap, on_client.global_position.distance_to(on_server.controller.state.position)
+		]
 	)
 
 	host.queue_free()
