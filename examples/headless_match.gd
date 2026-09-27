@@ -2496,6 +2496,16 @@ func _test_interface() -> void:
 			subject.arsenal.select(slot_index, _game.current_tick())
 			break
 
+	# [b]And standing on the ground, uncrouched.[/b] `DotWeaponBallistics.spread_for`
+	# returns the airborne spread whatever the speed, so a subject that the finished
+	# match left in mid-air -- a bot mid-hop off a crate -- read "4.6 -> 4.6" holding a
+	# rifle: one run in eight on 2026-09-27, with every weapon fix above already in.
+	# Only the posture is set; the position is wherever the match left it.
+	var posture_was := subject.controller.state.mode
+	var crouch_was := subject.controller.state.crouch_fraction
+	subject.controller.state.mode = DotFpsState.Mode.GROUND
+	subject.controller.state.crouch_fraction = 0.0
+
 	subject.controller.state.velocity = Vector3.ZERO
 	hud.refresh_all()
 	var still := hud.crosshair.gap_pixels()
@@ -2512,6 +2522,8 @@ func _test_interface() -> void:
 				else "nothing"
 		]
 	)
+	subject.controller.state.mode = posture_was
+	subject.controller.state.crouch_fraction = crouch_was
 
 	# [b]And it turns spread into pixels through the field of view the camera is really
 	# drawing with.[/b] It was a constant 75 while the camera was the player's setting
