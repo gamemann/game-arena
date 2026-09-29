@@ -235,7 +235,8 @@ static func _floor_at(y: float) -> AABB:
 
 
 ## The shipped arena: a square room, a raised centre, four pillars, two ledges, and
-## since 2026-09-24 two gantries joining the ledges and a nest on two of the pillars.
+## since 2026-09-24 two gantries joining the ledges and a nest on two of the pillars —
+## and since 2026-09-29 a walked stair from the floor to the foot of each nest.
 ##
 ## Symmetric on purpose. A symmetric map makes every spawn point score identically for
 ## the spawn selector, which is exactly the tie its name-based tie-break exists for —
@@ -400,6 +401,54 @@ static func dm_box() -> ArenaMap:
 		map.add_climb("dm_box: the %s gantry onto the west ledge" % which, gantry, west_ledge)
 		map.add_climb("dm_box: the %s gantry onto its nest step" % which, gantry, step)
 		map.add_climb("dm_box: the %s nest step onto the pillar" % which, step, pillar)
+
+	# --- The two nest stairs (2026-09-29) ----------------------------------
+	#
+	# [b]Every way onto the upper loop was a jump, and every one was at a wall.[/b] The
+	# crates stand against the ledges at x ±17, so the loop could be joined only at its
+	# two ends, by somebody who could chain four jumps, and never from the middle of the
+	# room where most of the fighting is. A stair is the walked way up: slower to read
+	# from the top, open to anybody, and in the open.
+	#
+	# Ten treads of 0.36 — under `DotFpsTunables.step_height` (0.4), so held forward
+	# climbs it; the number and the reason are dm_atrium's and dm_pit's — each 0.9 deep,
+	# running along the gantry's outer face and climbing TOWARD the nest pillar. The last
+	# tread is at 3.6, flush with the gantry beside it, and its far face is flush with the
+	# pillar's west face at x 2.5.
+	#
+	# [b]Ending against the pillar is the load-bearing decision.[/b] A stair running
+	# beside a gantry ends in air if it ends anywhere else: a player running up it at
+	# 9 m/s leaves the top tread before they have turned onto the walkway, which reads as
+	# the stair throwing them off. Against the pillar the run ends at a wall, the gantry
+	# is one step to the side, and the nest step is 0.9 above it. That is also the trade:
+	# the stair climbs straight at the nest, so whoever holds the nest looks down the
+	# whole of it — `headless_match` traces that — and the fastest way to the third tier
+	# is the most watched 9 m on the map.
+	#
+	# 3 m wide, z -13.5..-10.5, the pillar's own width: narrower would leave a lip of
+	# pillar face at the top that is a corner to catch on, and it keeps the floor between
+	# the stair and the north wall 10.5 m wide, well clear of the spawn at (0, -18).
+	#
+	# [b]Built as the north stair and its half-turn, not as two stairs.[/b] The half-turn
+	# of a box is computed from the box, so the property this map ships for — every box
+	# has a twin turned about the origin — holds by construction rather than by two
+	# lists of numbers agreeing.
+	const STAIR_TREADS := 10
+	const STAIR_RISE := 0.36
+	const STAIR_DEPTH := 0.9
+	const STAIR_Z := -13.5
+	const STAIR_W := 3.0
+	const STAIR_TOP_X := 2.5
+
+	for index in range(STAIR_TREADS):
+		var tread := AABB(
+			Vector3(
+				STAIR_TOP_X - float(STAIR_TREADS - index) * STAIR_DEPTH, 0.0, STAIR_Z
+			),
+			Vector3(STAIR_DEPTH, STAIR_RISE * float(index + 1), STAIR_W)
+		)
+		map.add_box(tread)
+		map.add_box(AABB(Vector3(-tread.end.x, 0.0, -tread.end.z), tread.size))
 
 	map.add_perimeter()
 

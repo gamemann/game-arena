@@ -78,7 +78,9 @@ const MAP_VERSIONS := {
 	# with no way up since the map was written (2026-09-22).
 	# 1.2.0: two gantries joining the ledges into a loop, and a nest on the pillars at
 	# (4, -12) and (-4, 12), reached by one 0.9 m step off each gantry (2026-09-24).
-	&"dm_box": "1.2.0",
+	# 1.3.0: two nest stairs, ten walked treads from the floor up the outside of each
+	# gantry to the foot of its nest pillar (2026-09-29).
+	&"dm_box": "1.3.0",
 }
 
 

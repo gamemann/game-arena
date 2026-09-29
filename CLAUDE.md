@@ -545,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-346 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+364 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1010,6 +1010,14 @@ It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0
 **The west wall has a firing slit, because the first render showed a block.** Solid, the default eye frame was a blank 12 m wall. The slit is 4 m long, sill at 1.2 (over the 1.125 climb limit, so nobody vaults through it) and 0.8 of opening (under the 0.9 a crouching player needs, so the sill is not a shelf). At 1.0 of opening the survey finds 3 m² of sill it can reach, which is why the number is what it is. No spawn was added: five red and five blue is what this map ships.
 
 `headless_match`'s *dm_atrium* section asserts the room is roofed and the ring cannot see into it, the roof is open sky, the slit is open at eye height and wall at the knee and over the head, a bot walks in at the north door and out at the south at running speed (printed: 18.6 of the 18.6 m route, 9.04 m/s door to door against 9.00), and a bot runs the ring's north arm and jumps the alley onto the roof (printed: took off at 9.00 m/s). Armed: the alley widened to 5 m (the roof drive, the climb sweep and the survey all fail), the south doorway blocked, the bot at 0.6 of forward (in-and-out passes, speed fails at 5.41 m/s), the roof removed, the slit closed. Survey: 3578 m² standable, 0 unreached, 0 trapped, 0 closed slots. Rendered with `tools/screenshot.sh dm_atrium --view <name> <from> <at>`, which is new: one extra frame per `--view`, because the three fixed frames are for comparing nights and a new piece of a map is usually somewhere none of them points.
+
+## `dm_box` gained two nest stairs, a walked way onto the upper loop
+
+**Extended 2026-09-29 (dm_box 1.3.0).** Every way onto the upper loop was a chain of four jumps up a crate stack, and both stacks stand at the x walls, so the loop could only be joined at its ends and never from the middle of the room. **The nest stairs** are ten treads of 0.36 (under the 0.4 `step_height`, so held forward climbs them; the number is dm_atrium's and dm_pit's) and 0.9 deep, 3 m wide, running along each gantry's outer face (north: x -6.5..2.5, z -13.5..-10.5) and climbing toward the nest pillar. The top tread is at 3.6, level with the gantry beside it, and 0.9 under the nest step. The south stair is the north one's half-turn, computed from the boxes, so the map is still its own half-turn about the origin. No spawn was added or moved.
+
+**Ending against the pillar is the load-bearing decision.** A stair beside a gantry that ends anywhere else ends in air, and a player running up it at 9 m/s leaves the top tread before turning onto the walkway. Armed with the stair 2.5 m short of the pillar, the bot runs off the end and lands on the floor. Flush means the run stops at a wall and the gantry is one sidestep away. It is also the trade: the stair climbs straight at the nest, so whoever holds the nest looks down all 9 m of it, and the quickest way to the third tier is the most watched one. Stopped 0.5 m short instead, it leaves a 0.5 m slot between the tread and the pillar, which the survey reports as two closed slots.
+
+`headless_match`'s *dm_box: the upper level, climbed* walks a bot up each stair separately without pressing jump (printed: 7.9 m of stair in 0.86 s, 9.14 m/s against 9.00, both stairs), asserts that pace is within 1.5 of `max_speed`, that half a second more of running leaves it standing on the top tread against the pillar, that it then steps onto the gantry, and that a chest-height line from the nest's eye reaches every tread. Armed four ways: south stair removed (the half-turn check and the south drive fail), a 1 m parapet on the nest edge (the sightline fails on all ten treads), bot at 0.6 of forward (pace fails at 5.45 m/s), and the stair 0.5 m and then 2.5 m short of the pillar (two closed slots; the run-off). Survey: dm_box 2680 m² standable, 18 unreached (the two declared pillar tops), 0 trapped, 0 closed slots. Rendered: `tools/screenshot.sh dm_box --view nest_stair -13,2.2,-19 1,3,-11 --view stair_from_nest 4,6.6,-12 -6,1,-12`.
 
 ## `dm_pit`, and the filter that had never said no
 

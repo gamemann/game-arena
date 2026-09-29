@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 354
+const CHECKS := 364
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1915,6 +1915,132 @@ func _test_box_upper() -> void:
 		"and climbs off the north gantry, up its step, onto the nest",
 		"ended at (%.1f, %.2f, %.1f)" % [perched.x, perched.y, perched.z]
 	)
+
+	# --- The two nest stairs (2026-09-29) --------------------------------------
+	#
+	# [b]Walked, and each one separately.[/b] The south stair is the north one's
+	# half-turn by construction, but a turned box list is still a different list of
+	# boxes meeting a different gantry, and `[gate-sweep-1]` is a file of shapes checked
+	# once and believed twice. Held along the stair toward the pillar with NO jump —
+	# a stair is the walked way up, and a bot that hopped it would bleed to the 1.2 m/s
+	# air cap (`_test_bot_ground_speed`) and prove nothing about pace. The time from the
+	# first tread to standing on the last is PRINTED against max_speed and asserted
+	# within 1.5 of it, because a bot that crawls up also arrives (`[bot-drive-1]`).
+	# Then turned toward the gantry, which is the step the stair exists to lead to.
+	var tunables := ArenaPlayer.arena_tunables()
+	var trace := map.to_trace()
+
+	for flight in [
+		{"name": "north", "sign": 1.0, "up_yaw": -90.0, "across_yaw": 180.0},
+		{"name": "south", "sign": -1.0, "up_yaw": 90.0, "across_yaw": 0.0},
+	]:
+		var s: float = flight["sign"]
+		# In the stair's own frame (the north one's): the foot of the first tread is at
+		# x -6.5 and the last tread ends against the pillar at x 2.5, z -13.5..-10.5.
+		climber.controller.teleport(Vector3(s * -9.0, 0.1, s * -12.0), flight["up_yaw"], 0.0)
+
+		var foot_tick := -1
+		var top_tick := -1
+		var top_x := 0.0
+
+		for step in range(64 * 4):
+			var command := DotFpsCommand.new()
+			command.yaw = flight["up_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+			var at: Vector3 = climber.controller.state.position
+			var local_x := at.x * s
+
+			if foot_tick < 0 and local_x >= -6.5:
+				foot_tick = step
+
+			if climber.controller.state.is_grounded() and at.y > 3.55:
+				top_tick = step
+				top_x = local_x
+				break
+
+		var climb_time := float(top_tick - foot_tick) * delta
+		var climb_pace := (top_x + 6.5) / climb_time if top_tick > foot_tick and foot_tick >= 0 else 0.0
+		var topped: Vector3 = climber.controller.state.position
+
+		print("  ..    %s nest stair: %.1f m of stair in %.2f s, %.2f m/s against max_speed %.2f"
+			% [flight["name"], top_x + 6.5, climb_time, climb_pace, tunables.max_speed])
+
+		_check(
+			top_tick >= 0,
+			"a bot walks up the %s nest stair from the floor, jump never pressed" % flight["name"],
+			"ended at (%.1f, %.2f, %.1f)" % [topped.x, topped.y, topped.z]
+		)
+		_check(
+			climb_pace >= tunables.max_speed - 1.5,
+			"and climbs it at running pace",
+			"%.2f m/s against max_speed %.2f" % [climb_pace, tunables.max_speed]
+		)
+
+		# The run ends against the pillar rather than off the end of the stair: held on
+		# for another half second, the bot is still standing on the top tread.
+		for step in range(32):
+			var command := DotFpsCommand.new()
+			command.yaw = flight["up_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+		var held: Vector3 = climber.controller.state.position
+
+		_check(
+			climber.controller.state.is_grounded() and held.y > 3.55 and held.x * s < 2.5,
+			"and a run up it ends against the nest pillar, still on the top tread",
+			"ended at (%.1f, %.2f, %.1f)" % [held.x, held.y, held.z]
+		)
+
+		var onto_gantry := false
+
+		for step in range(64 * 2):
+			var command := DotFpsCommand.new()
+			command.yaw = flight["across_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+			var at: Vector3 = climber.controller.state.position
+
+			if climber.controller.state.is_grounded() and at.y > 3.55 and at.z * s > -9.5:
+				onto_gantry = true
+				break
+
+		var across: Vector3 = climber.controller.state.position
+
+		_check(
+			onto_gantry,
+			"and steps off its top tread onto the %s gantry" % flight["name"],
+			"ended at (%.1f, %.2f, %.1f)" % [across.x, across.y, across.z]
+		)
+
+		# [b]The trade, traced.[/b] The stair climbs straight at the nest, so an eye on
+		# the nest sees a player's chest on every tread of it. A stair the nest could not
+		# see down would be a free way to the third tier.
+		var eye := Vector3(s * 4.0, 5.0 + 1.6, s * -12.0)
+		var hidden := PackedStringArray()
+
+		for index in range(10):
+			var chest := Vector3(s * (-6.05 + 0.9 * float(index)), 0.36 * float(index + 1) + 1.2, s * -12.0)
+			var line := chest - eye
+			var hit := trace.ray(eye, line.normalized(), line.length() - 0.05)
+
+			if hit.ok() and hit.blocked:
+				hidden.append("tread %d" % (index + 1))
+
+		_check(
+			hidden.is_empty(),
+			"and the %s nest sees down every tread of its stair" % flight["name"],
+			", ".join(hidden)
+		)
 
 	climber.queue_free()
 	remove_child(climber)
@@ -4088,9 +4214,9 @@ func _test_atrium() -> void:
 	# [b]All three moved on 2026-09-22, which is the first time that has happened and
 	# does not weaken the check.[/b] They moved for one cause — every climb on every
 	# map was above the jump apex — but they are still three separate changes to three
-	# separate maps. dm_box reached 1.2.0 by its own two steps — the crates on
-	# 2026-09-22, the gantries and nests on 2026-09-24.
-	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.4.0", &"dm_box": "1.2.0"}
+	# separate maps. dm_box reached 1.3.0 by its own three steps — the crates on
+	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29.
+	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.4.0", &"dm_box": "1.3.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
