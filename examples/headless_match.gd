@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 364
+const CHECKS := 374
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1413,7 +1413,272 @@ func _test_pit() -> void:
 			"and is flush with both arms of the ring rather than slotted off them",
 			"%.2f m west, %.2f m south" % [west_slot, south_slot]
 		)
+
+	if found_shelf and found_perch:
+		_test_pit_shelf_stair(map, shelf, perch)
+
 	_done()
+
+
+## `dm_pit`'s shelf stair (2026-09-30, 1.5.0): the pit floor to the third tier, walked.
+##
+## [b]Driven, not described.[/b] The treads are read back off the box list and their
+## shape asserted (eleven, each rise under `step_height`, the top one under the shelf,
+## the foot meeting the south-east stair's), and then three bots: one steps off the pit
+## floor into the valley and walks up; one runs the whole valley from the east arm,
+## down one stair and up the other, holding west and never jump, with its pace from the
+## foot to the shelf PRINTED and asserted within 1.5 of `max_speed` (`[bot-drive-1]`: a
+## crawling bot also arrives); and the run ends against the perch still on the shelf,
+## one hop under it. Then the trade: an eye on the perch sees a chest on every tread.
+func _test_pit_shelf_stair(map: ArenaMap, shelf: AABB, perch: AABB) -> void:
+	var tunables := ArenaPlayer.arena_tunables()
+	var shelf_top: float = shelf.position.y + shelf.size.y
+	var shelf_east: float = shelf.position.x + shelf.size.x
+	var treads: Array[AABB] = []
+	var south_east_foot := AABB()
+
+	for box in map.boxes:
+		if is_equal_approx(box.position.z, 7.5) and is_equal_approx(box.size.z, 3.0) \
+				and box.position.x < 2.0 - 0.001:
+			treads.append(box)
+		elif is_equal_approx(box.position.x, 2.0) and is_equal_approx(box.position.z, 7.5):
+			south_east_foot = box
+
+	treads.sort_custom(func(a: AABB, b: AABB) -> bool: return a.size.y < b.size.y)
+
+	if not _check(treads.size() == 11, "dm_pit: the shelf stair has eleven boxes, the landing under the bridge one of them", str(treads.size())):
+		return
+
+	var steep := PackedStringArray()
+	var below: float = south_east_foot.size.y
+
+	for tread in treads:
+		var rise: float = tread.size.y - below
+
+		if rise >= tunables.step_height:
+			steep.append("%.2f at x %.2f" % [rise, tread.position.x])
+
+		below = tread.size.y
+
+	var lip: float = shelf_top - treads[-1].size.y
+	steep.append_array(PackedStringArray() if lip < tunables.step_height else PackedStringArray(["shelf lip %.2f" % lip]))
+
+	_check(
+		steep.is_empty(),
+		"and every rise on it, the shelf's lip included, is under step_height",
+		", ".join(steep)
+	)
+	_check(
+		absf(treads[-1].position.x - shelf_east) < 0.001
+			and absf(treads[0].end.x - south_east_foot.position.x) < 0.001
+			and treads[0].size.y > south_east_foot.size.y,
+		"and it runs flush from the shelf to the south-east stair's first tread",
+		"top tread at x %.2f against the shelf at %.2f; foot ends at %.2f, the other stair starts at %.2f"
+			% [treads[-1].position.x, shelf_east, treads[0].end.x, south_east_foot.position.x]
+	)
+
+	# Headroom: the north-south bridge crosses the lane. Every tread with a box over
+	# it keeps `stand_height` clear, or the stair is a wall at the height of a head.
+	var low := PackedStringArray()
+
+	for tread in treads:
+		for box in map.boxes:
+			if box.position.y >= tread.end.y - 0.001 and box.position.x < tread.end.x \
+					and box.end.x > tread.position.x and box.position.z < tread.end.z \
+					and box.end.z > tread.position.z:
+				var clear: float = box.position.y - tread.end.y
+
+				if clear < tunables.stand_height:
+					low.append("%.2f over the tread at x %.2f" % [clear, tread.position.x])
+
+	_check(
+		low.is_empty(),
+		"and a player stands upright on every tread, under the bridge included",
+		", ".join(low)
+	)
+
+	var walker := ArenaPlayer.new()
+	walker.name = "ShelfStairWalker"
+	add_child(walker)
+	walker.setup(ArenaPlayer.Mode.HEADLESS, map, 9005, "shelf stair walker")
+
+	var delta := 1.0 / 64.0
+	var tick := 0
+
+	# --- From the pit floor --------------------------------------------------
+	#
+	# Standing on the floor north of the valley, step south onto its lowest tread (the
+	# south-east stair's first, at 0.36), stop, then turn west and walk up. Arrival is grounded above 4.45 west of the shelf's
+	# east face. No jump anywhere.
+	walker.controller.teleport(Vector3(2.45, 0.1, 6.0), 180.0, 0.0)
+
+	for step in range(20):
+		var command := DotFpsCommand.new()
+		command.yaw = 180.0
+		command.move = Vector2(0.0, 1.0)
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+	for step in range(24):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+	var in_valley: Vector3 = walker.controller.state.position
+	var from_floor := false
+
+	for step in range(64 * 3):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		command.move = Vector2(0.0, 1.0)
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+		var at: Vector3 = walker.controller.state.position
+
+		if walker.controller.state.is_grounded() and at.y > shelf_top - 0.05 and at.x < shelf_east:
+			from_floor = true
+			break
+
+	var ended: Vector3 = walker.controller.state.position
+
+	_check(
+		from_floor and in_valley.y > 0.3,
+		"a bot steps off the pit floor into the valley and walks up onto the shelf",
+		"valley at (%.1f, %.2f, %.1f), ended at (%.1f, %.2f, %.1f)"
+			% [in_valley.x, in_valley.y, in_valley.z, ended.x, ended.y, ended.z]
+	)
+
+	# --- The valley, end to end ---------------------------------------------
+	#
+	# From the east arm, facing west (yaw 90), holding forward only: down the
+	# south-east stair, through the dip, up the shelf stair. The time from the foot of
+	# the shelf stair (x = 2) to standing on the shelf is the pace.
+	walker.controller.teleport(Vector3(12.5, 3.7, 9.0), 90.0, 0.0)
+
+	var left_arm := -1
+	var foot := -1
+	var top := -1
+	var top_x := 0.0
+	var lowest := 99.0
+
+	for step in range(64 * 5):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		command.move = Vector2(0.0, 1.0)
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+		var at: Vector3 = walker.controller.state.position
+		lowest = minf(lowest, at.y)
+
+		if left_arm < 0 and at.x < 11.0:
+			left_arm = step
+
+		if foot < 0 and at.x <= 2.0:
+			foot = step
+
+		if walker.controller.state.is_grounded() and at.y > shelf_top - 0.05 and at.x < shelf_east:
+			top = step
+			top_x = at.x
+			break
+
+	var climb_time := float(top - foot) * delta
+	var pace := (2.0 - top_x) / climb_time if top > foot and foot >= 0 else 0.0
+	var route_time := float(top - left_arm) * delta if top > left_arm and left_arm >= 0 else 0.0
+	var arrived: Vector3 = walker.controller.state.position
+
+	print("  ..    dm_pit shelf stair: east arm to shelf %.1f m in %.2f s, down to %.2f; "
+		% [11.0 - top_x, route_time, lowest]
+		+ "stair %.1f m in %.2f s, %.2f m/s against max_speed %.2f"
+		% [2.0 - top_x, climb_time, pace, tunables.max_speed])
+
+	_check(
+		top >= 0 and lowest < 0.5,
+		"a bot runs the valley from the east arm down and up onto the shelf, jump never pressed",
+		"ended at (%.1f, %.2f, %.1f), lowest %.2f" % [arrived.x, arrived.y, arrived.z, lowest]
+	)
+	_check(
+		pace >= tunables.max_speed - 1.5,
+		"and climbs the shelf stair at running pace",
+		"%.2f m/s against max_speed %.2f" % [pace, tunables.max_speed]
+	)
+
+	# Held on for another half second the run ends against the perch, still on the
+	# shelf; and one hop from there is the perch.
+	for step in range(32):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		command.move = Vector2(0.0, 1.0)
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+	var held: Vector3 = walker.controller.state.position
+
+	_check(
+		walker.controller.state.is_grounded() and held.y > shelf_top - 0.05
+			and held.x > perch.end.x,
+		"and the run ends against the perch, standing on the shelf",
+		"ended at (%.1f, %.2f, %.1f)" % [held.x, held.y, held.z]
+	)
+
+	var perched := false
+
+	for step in range(64 * 2):
+		var command := DotFpsCommand.new()
+		command.yaw = 90.0
+		command.move = Vector2(0.0, 1.0)
+		command.set_button(DotFpsCommand.BUTTON_JUMP, true)
+		walker.controller.apply_command(command)
+		walker.controller.simulate_tick(tick, delta)
+		tick += 1
+
+		var at: Vector3 = walker.controller.state.position
+
+		if walker.controller.state.is_grounded() and at.y > perch.end.y - 0.05:
+			perched = true
+			break
+
+	var hopped: Vector3 = walker.controller.state.position
+
+	_check(
+		perched,
+		"and one hop from there is the perch, so the floor's stair leads to the top tier",
+		"ended at (%.1f, %.2f, %.1f)" % [hopped.x, hopped.y, hopped.z]
+	)
+
+	walker.queue_free()
+	remove_child(walker)
+
+	# --- The trade, traced ----------------------------------------------------
+	var trace := map.to_trace()
+	var eye := Vector3(perch.get_center().x, perch.end.y + 1.6, perch.get_center().z)
+	var hidden := PackedStringArray()
+
+	# The one tread east of the north-south bridge is behind it from the perch, and
+	# that is the valley's only cover: the stair proper is everything west of it.
+	for index in range(treads.size()):
+		if treads[index].position.x >= 1.0 - 0.001:
+			continue
+
+		var chest := Vector3(treads[index].get_center().x, treads[index].end.y + 1.2, 9.0)
+		var line := chest - eye
+		var hit := trace.ray(eye, line.normalized(), line.length() - 0.05)
+
+		if hit.ok() and hit.blocked:
+			hidden.append("tread %d" % (index + 1))
+
+	_check(
+		hidden.is_empty(),
+		"and the perch sees down every tread of the shelf stair west of the bridge",
+		", ".join(hidden)
+	)
 
 
 ## What a bot driven the way every bot in this family is driven actually MOVES at.
@@ -4216,7 +4481,7 @@ func _test_atrium() -> void:
 	# map was above the jump apex — but they are still three separate changes to three
 	# separate maps. dm_box reached 1.3.0 by its own three steps — the crates on
 	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29.
-	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.4.0", &"dm_box": "1.3.0"}
+	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.5.0", &"dm_box": "1.3.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:

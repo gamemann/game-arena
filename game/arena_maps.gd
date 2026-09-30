@@ -73,7 +73,10 @@ const MAP_VERSIONS := {
 	# pinches against the stairs that `[gate-sweep-1]` found (2026-09-24).
 	# 1.4.0: the lookout on the east arm, a second high point facing the perch
 	# (2026-09-26).
-	&"dm_pit": "1.4.0",
+	# 1.5.0: the shelf stair, twelve treads from the pit floor up the shelf's east
+	# face, meeting the south-east stair foot to foot; one spawn moved off its lane
+	# (2026-09-30).
+	&"dm_pit": "1.5.0",
 	# 1.1.0: three crates to each of the two ledges, which had been standable geometry
 	# with no way up since the map was written (2026-09-22).
 	# 1.2.0: two gantries joining the ledges into a loop, and a nest on the pillars at

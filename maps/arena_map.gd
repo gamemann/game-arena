@@ -1084,6 +1084,67 @@ static func dm_pit() -> ArenaMap:
 	)
 	map.add_climb("dm_pit: the shelf onto the perch", shelf, perch)
 
+	# --- The shelf stair ---------------------------------------------------
+	#
+	# Added 2026-09-30 (1.5.0). [b]The third tier could only be reached from the
+	# second.[/b] A player on the pit floor who wanted the perch went up a stair onto
+	# the ring, round it to the west arm and hopped, so the fight for the map's best
+	# view was a fight between people already on the ring and the pit was only ever
+	# the place they shot into. The shelf stair walks from the pit floor straight up
+	# the shelf's east face: eleven boxes climbing west, the top one 0.18 under the
+	# shelf, so the whole way up is walked and the perch is one hop from the floor's
+	# own stair rather than from the ring.
+	#
+	# [b]It shares the south-east stair's lane (z 7.5..10.5) and meets it foot to
+	# foot at x = 2[/b], so the two make one valley: down off the east arm, through a
+	# dip at 0.36, and up onto the shelf, held in one direction. That is the second
+	# thing it is for — a way from the lookout's side of the map to the perch's that
+	# goes THROUGH the pit instead of round the ring above it. There is nowhere else
+	# for it: the east-west bridge crosses the pit at z -1..1 with its underside at
+	# 3.0, so any stair running north off the shelf passes under it with a metre of
+	# headroom, and the south half of the pit east of the shelf is exactly 9 m to the
+	# other stair's foot.
+	#
+	# [b]The north-south bridge runs over it.[/b] The bridge is x -1..1 for the whole
+	# depth of the pit with its underside at 3.0, so anything a player stands on while
+	# any part of them is under it can be no higher than 3.0 less `stand_height`
+	# (1.8). The first draft ran twelve even treads from x = 2 and a bot walked into
+	# the bridge's side on the fourth, at 1.44; the second put a landing at 0.72
+	# exactly the bridge's width, and a bot stopped at its west edge, because the
+	# step up off it happens with the hull still 0.35 under the bridge. So: one tread
+	# at 0.72 off the other stair's first, a LANDING at 1.08 (1.92 of headroom) that
+	# runs a hull's width and a bit (0.8) past the bridge's west edge, and nine
+	# treads from 1.44 to 4.32 against the shelf. Every rise, the shelf's 0.18 lip
+	# included, is the 0.36 a bot walks; the nine are 0.58 deep, which is all the
+	# room there is. The trade is the one the nest stairs make on dm_box: it climbs
+	# straight at the perch, so whoever holds the perch looks down every tread of it
+	# (`headless_match` traces all eleven boxes).
+	const SHELF_STAIR_RISE := 0.36
+	const SHELF_STAIR_FOOT := 2.0
+	const SHELF_STAIR_TREADS := 9
+	const BRIDGE_WEST := -1.0
+	const BRIDGE_EAST := 1.0
+	const LANDING_WEST := BRIDGE_WEST - 0.8
+
+	map.add_box(AABB(
+		Vector3(BRIDGE_EAST, 0.0, 7.5),
+		Vector3(SHELF_STAIR_FOOT - BRIDGE_EAST, SHELF_STAIR_RISE * 2.0, 3.0)
+	))
+	map.add_box(AABB(
+		Vector3(LANDING_WEST, 0.0, 7.5),
+		Vector3(BRIDGE_EAST - LANDING_WEST, SHELF_STAIR_RISE * 3.0, 3.0)
+	))
+
+	var tread_depth := (LANDING_WEST - (shelf.position.x + shelf.size.x)) \
+		/ float(SHELF_STAIR_TREADS)
+
+	for index in range(SHELF_STAIR_TREADS):
+		# index 0 is at the landing's west edge; the last is against the shelf.
+		map.add_box(AABB(
+			Vector3(LANDING_WEST - float(index + 1) * tread_depth, 0.0, 7.5),
+			Vector3(tread_depth, SHELF_STAIR_RISE * float(index + 4), 3.0)
+		))
+
 	# --- The lookout on the east arm ---------------------------------------
 	#
 	# Added 2026-09-26. [b]One high point is a throne; two are a duel.[/b] The perch
@@ -1122,7 +1183,9 @@ static func dm_pit() -> ArenaMap:
 	var points: Array[Vector3] = [
 		Vector3(-8.0, 0.1, 0.0),
 		Vector3(8.0, 0.1, 2.0),
-		Vector3(0.0, 0.1, 8.5),
+		# Was (0, 8.5), which is on the shelf stair's lane; moved 3 m north onto open
+		# floor between the two south pillars (1.5.0).
+		Vector3(0.0, 0.1, 5.5),
 		Vector3(-4.0, 0.1, -4.0),
 		Vector3(4.5, 0.1, -2.0),
 		Vector3(-12.5, 3.7, -6.0),
