@@ -860,6 +860,40 @@ static func dm_atrium() -> ArenaMap:
 		keep_roof
 	)
 
+	# --- The east stair ------------------------------------------------------
+	#
+	# [b]Added 2026-10-01 (1.5.0), because the east yard was the one part of this map
+	# with no way up of its own.[/b] A player in the 14 x 10 m yard between the perch and
+	# the landing -- spawn (26, -4) stands in it -- had the north-west stair 40 m away
+	# or the crates' five jumps round the corner. Twelve treads of 0.36 now climb SOUTH
+	# from the yard floor at z = -4 to the landing's north face at z = 6, 3 m wide at x
+	# 13..16: walked, not jumped, the number dm_box's and dm_pit's stairs use.
+	#
+	# [b]Ending flush against the landing is the load-bearing decision.[/b] The top
+	# tread is 4.32, 0.18 under the landing, so a player holding forward walks off the
+	# stair onto it without a jump and the landing's own 0.1 step puts them on the
+	# ring. Stopped short, the run leaves the top tread into the corridor behind it.
+	#
+	# [b]The trade is the perch.[/b] The perch's top is 2.4 m over the top tread and 2 m
+	# north-east of the foot, so whoever holds it looks down the whole stair -- the walked
+	# way up from the east yard is the most watched one, like the nest stairs on
+	# dm_box. And it stands 3 m off the building's east wall, so the east doorway opens
+	# onto a 3 m corridor rather than closing; 2 m clear of the perch's first steps, so
+	# the foot is a pocket a player fits in rather than a slot.
+	#
+	# No spawn was added or moved: (26, -4) is 10 m east of the foot already.
+	const EAST_STAIR_X := 13.0
+	const EAST_STAIR_W := 3.0
+	const EAST_STAIR_Z := -4.0
+	const EAST_STAIR_TREADS := 12
+	var east_tread := (landing.position.z - EAST_STAIR_Z) / float(EAST_STAIR_TREADS)
+
+	for index in range(EAST_STAIR_TREADS):
+		map.add_box(AABB(
+			Vector3(EAST_STAIR_X, 0.0, EAST_STAIR_Z + float(index) * east_tread),
+			Vector3(EAST_STAIR_W, 0.36 * float(index + 1), east_tread)
+		))
+
 	map.add_perimeter()
 
 	# --- Spawns ------------------------------------------------------------

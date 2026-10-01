@@ -545,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-374 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+378 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1026,6 +1026,14 @@ It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0
 **The north-south bridge crossing the lane is the load-bearing number.** Its underside is at 3.0, so anything a player stands on while any part of the hull is under it can be no higher than 1.2. Twelve even treads walked into the bridge's side at 1.44; a landing exactly the bridge's width stopped the bot at its west edge, because the step up off it happens with the hull still 0.35 under the bridge. The landing runs 0.8 past the bridge's west edge for that reason, and `headless_match` checks `stand_height` of headroom over every tread.
 
 `headless_match`'s *dm_pit* section reads the eleven boxes back off the list (every rise, the shelf lip included, under `step_height`; flush from the shelf to the other stair's first tread), steps a bot off the floor into the valley and up, runs one from the east arm through the valley without jump (printed: 18.1 m east arm to shelf in 2.20 s, the 9.1 m stair in 1.02 s, 8.99 m/s against 9.00, asserted within 1.5), holds it on until it stops against the perch still on the shelf, hops it onto the perch, and traces a chest on every tread west of the bridge from the perch's eye (the one tread east of it is behind the bridge, the valley's only cover). Armed three ways: the landing ended at the bridge edge (six checks, the bot stuck at 1.09), the treads removed (the count check, and the section's total), and the bot at 0.6 of forward (pace fails at 5.41 m/s). Survey: dm_pit 974 m² standable, 0 unreached, 0 trapped, 0 closed slots, 3 tight. Rendered: `tools/screenshot.sh dm_pit --view shelf_stair 6,3.2,4.5 -8,2.5,9.5 --view from_perch -10,7.2,10.5 2,0.5,8.5`.
+
+## `dm_atrium` gained an east stair, so the east yard has its own way up
+
+**Extended 2026-10-01 (dm_atrium 1.5.0).** The 14 x 10 m east yard between the perch and the landing (spawn (26, -4) stands in it) was the one part of the map with no way up of its own: the north-west stair was 40 m away and the crates were five jumps round the corner. **The east stair** is twelve treads of 0.36 (walked, the number every stair here uses), 0.83 deep and 3 m wide at x 13..16, climbing south from the yard floor at z = -4 to the landing's north face at z = 6. The top tread is 4.32, 0.18 under the landing, so held forward walks onto the landing and the landing's 0.1 step is the ring. It stands 3 m off the building's east wall, so the east doorway opens onto a 3 m corridor rather than closing, and 2 m clear of the perch's first steps, so its foot is a pocket rather than a slot. No spawn was added or moved.
+
+**Ending flush against the landing is the load-bearing decision**: stopped 1 m short, the bot runs off the top tread into the corridor and lands on the floor. **The trade is the perch**, 2.4 m over the top tread: from its south-west corner it looks down every tread, so the walked way up from the east yard is the most watched one. (From the middle of the perch its own edge hides the lower eight treads, which is the edge doing its job; the check stands where a player watching the yard stands.)
+
+`headless_match`'s *dm_atrium* section reads the twelve treads back off the box list (every rise and the landing lip under `step_height`, top flush with the landing), walks a bot from the yard up the stair onto the landing without jump (printed: 10.1 m foot to landing in 1.11 s, 9.07 m/s against 9.00, asserted within 1.5), and traces a chest on every tread from the perch's corner. Armed three ways: the stair ending 1 m short of the landing (the flush check and the drive fail, the bot ends on the floor at z 5.6), the bot at 0.6 of forward (pace fails at 5.42 m/s), and a 1 m parapet round the perch (the sightline fails on four treads, and the survey reports the perch top unreached). Survey: dm_atrium 3572 m² standable, 0 unreached, 0 trapped, 0 closed slots, 2 tight. Rendered: `tools/screenshot.sh dm_atrium --view east_stair 27,2.2,3 13,2,0 --view from_perch 16.4,8.3,-4.4 14.5,2,3`.
 
 ## `dm_pit`, and the filter that had never said no
 

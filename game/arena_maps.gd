@@ -61,7 +61,9 @@ const MAP_VERSIONS := {
 	# than a player that `[gate-sweep-1]` found (2026-09-24).
 	# 1.4.0: the north-west keep, a roofed room in red's half with a high point on
 	# top, reached by a 2 m jump off the ring's north arm (2026-09-27).
-	&"dm_atrium": "1.4.0",
+	# 1.5.0: the east stair, twelve walked treads from the east yard up to the
+	# landing's north face (2026-10-01).
+	&"dm_atrium": "1.5.0",
 	# 1.1.0: the east-west bridge, the south-west shelf and the perch (2026-09-18).
 	# [b]Backdated.[/b] That change moved the geometry and did not move the version,
 	# so every record set on the one-bridge dm_pit is recorded against the two-bridge

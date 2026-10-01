@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 374
+const CHECKS := 378
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -4481,7 +4481,7 @@ func _test_atrium() -> void:
 	# map was above the jump apex — but they are still three separate changes to three
 	# separate maps. dm_box reached 1.3.0 by its own three steps — the crates on
 	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29.
-	var expected := {&"dm_atrium": "1.4.0", &"dm_pit": "1.5.0", &"dm_box": "1.3.0"}
+	var expected := {&"dm_atrium": "1.5.0", &"dm_pit": "1.5.0", &"dm_box": "1.3.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
@@ -4717,6 +4717,111 @@ func _test_atrium() -> void:
 		"a bot runs the ring's north arm and jumps the alley onto the keep's roof",
 		"ended at (%.1f, %.2f, %.1f), took off at %.2f m/s"
 			% [roof_at.x, roof_at.y, roof_at.z, takeoff_speed]
+	)
+
+	# --- The east stair (1.5.0) ---------------------------------------------
+	#
+	# Read back off the box list: twelve treads at x 13..16, every rise and the step
+	# onto the landing under `step_height`, the top tread flush with the landing.
+	var east_treads: Array[AABB] = []
+	var landing_box := AABB()
+
+	for box in map.boxes:
+		if is_equal_approx(box.position.x, 13.0) and is_equal_approx(box.size.x, 3.0) \
+				and box.position.y < 0.001:
+			east_treads.append(box)
+		elif is_equal_approx(box.position.x, 10.0) and is_equal_approx(box.position.z, 6.0) \
+				and is_equal_approx(box.size.y, 4.5):
+			landing_box = box
+
+	east_treads.sort_custom(func(a: AABB, b: AABB) -> bool: return a.position.z < b.position.z)
+
+	var east_steep := PackedStringArray()
+	var east_below := 0.0
+
+	for tread in east_treads:
+		if tread.size.y - east_below >= tunables.step_height:
+			east_steep.append("%.2f at z %.2f" % [tread.size.y - east_below, tread.position.z])
+
+		east_below = tread.size.y
+
+	if not east_treads.is_empty() and landing_box.size.y - east_treads[-1].size.y >= tunables.step_height:
+		east_steep.append("landing lip %.2f" % (landing_box.size.y - east_treads[-1].size.y))
+
+	_check(
+		east_treads.size() == 12 and east_steep.is_empty() and landing_box.size.y > 0.0
+			and absf(east_treads[-1].end.z - landing_box.position.z) < 0.001,
+		"the east stair is twelve walked treads, its top flush with the landing",
+		"%d treads, steep: %s, top ends at z %.2f against the landing at %.2f" % [
+			east_treads.size(), ", ".join(east_steep),
+			east_treads[-1].end.z if not east_treads.is_empty() else 0.0,
+			landing_box.position.z
+		]
+	)
+
+	# Driven: from the yard north of the foot, facing south (yaw 180), forward held and
+	# jump never pressed. The pace is foot (z = -4) to grounded on the landing.
+	walker.controller.teleport(Vector3(14.5, 0.1, -5.0), 180.0, 0.0)
+
+	var east_foot := -1
+	var east_top := -1
+	var east_top_z := 0.0
+	var east_peak := 0.0
+
+	for tick in range(tick_rate * 3):
+		var step := DotFpsCommand.new()
+		step.yaw = 180.0
+		step.move = Vector2(0.0, 1.0)
+		walker.controller.apply_command(step)
+		walker.controller.simulate_tick(tick_rate * 40 + tick, delta)
+
+		var at: Vector3 = walker.controller.state.position
+		east_peak = maxf(east_peak, at.y)
+
+		if east_foot < 0 and at.z >= -4.0:
+			east_foot = tick
+
+		if walker.controller.state.is_grounded() and at.y > 4.45 and at.z > 6.0:
+			east_top = tick
+			east_top_z = at.z
+			break
+
+	var east_time := float(east_top - east_foot) * delta
+	var east_pace := (east_top_z + 4.0) / east_time if east_top > east_foot and east_foot >= 0 else 0.0
+	var east_end: Vector3 = walker.controller.state.position
+
+	print("  ..    east stair: foot to landing %.1f m in %.2f s, %.2f m/s against max_speed %.2f"
+		% [east_top_z + 4.0, east_time, east_pace, tunables.max_speed])
+
+	_check(
+		east_top >= 0,
+		"a bot walks up the east stair from the yard onto the landing, jump never pressed",
+		"ended at (%.1f, %.2f, %.1f), peak %.2f" % [east_end.x, east_end.y, east_end.z, east_peak]
+	)
+	_check(
+		east_pace >= tunables.max_speed - 1.5,
+		"and climbs it at running pace",
+		"%.2f m/s against max_speed %.2f" % [east_pace, tunables.max_speed]
+	)
+
+	# The trade: the perch looks down every tread. From its south-west corner, where
+	# somebody watching the east yard stands -- from the middle of it the perch's own
+	# edge hides the lower eight treads, which is the edge doing its job.
+	var perch_eye := Vector3(16.4, 6.7 + 1.6, -4.4)
+	var east_hidden := PackedStringArray()
+
+	for index in range(east_treads.size()):
+		var chest := Vector3(14.5, east_treads[index].end.y + 1.2, east_treads[index].get_center().z)
+		var line := chest - perch_eye
+		var hit := trace.ray(perch_eye, line.normalized(), line.length() - 0.05)
+
+		if hit.ok() and hit.blocked:
+			east_hidden.append("tread %d" % (index + 1))
+
+	_check(
+		east_hidden.is_empty(),
+		"and the perch sees down every tread of it",
+		", ".join(east_hidden)
 	)
 
 	walker.queue_free()
