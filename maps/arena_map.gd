@@ -450,6 +450,55 @@ static func dm_box() -> ArenaMap:
 		map.add_box(tread)
 		map.add_box(AABB(Vector3(-tread.end.x, 0.0, -tread.end.z), tread.size))
 
+	# --- The two corner stairs (2026-10-02) --------------------------------
+	#
+	# [b]Each ledge ended in a stub.[/b] The gantries meet the ledges at |z| 8..10.5 and
+	# the ledges run on to |z| 18, so every ledge carried 7.5 m of high ground past its
+	# last junction that led nowhere: walked into, it was a corner to be cornered in. And
+	# the floor at the two ends of the room — where three of the eight spawns stand — had
+	# only the nest stairs, which climb toward the middle. The corner stair is the end
+	# zone's way up the other way, out to the wall: ten treads of 0.36 (walked, the
+	# number every stair here uses), 0.9 deep and 3 m wide, along the north wall from
+	# x -8.5 climbing WEST to a landing that carries the west ledge on into the corner.
+	#
+	# [b]The landing is the load-bearing box.[/b] The top tread meets it flush at x -17.5
+	# and the landing runs on to the west wall, so a run up the stair ends against a wall
+	# 6.5 m on, standing at ledge height, and the ledge is one turn south. Without it the
+	# stair ends in the air beside the ledge's stub and a player running up it at 9 m/s
+	# drops 3.6 m into the corner. It is a box from 3.0 like the ledge it extends, so the
+	# corner under it stays floor — a 3 m pocket open to the south.
+	#
+	# The trade: the stair runs along the wall in the open end of the room, and the north
+	# nest looks down every tread of it. Half-turned for the south-east corner, so the
+	# property dm_box ships for holds by construction; the other two corners keep their
+	# stubs, which is what a half-turn rather than a mirror gives.
+	const CORNER_TREADS := 10
+	const CORNER_RISE := 0.36
+	const CORNER_DEPTH := 0.9
+	const CORNER_W := 3.0
+
+	var corner_landing := AABB(
+		Vector3(-map.extent, GANTRY_Y, -map.extent),
+		Vector3(west_ledge.size.x, GANTRY_T, west_ledge.position.z + map.extent)
+	)
+	map.add_box(corner_landing)
+	map.add_box(AABB(
+		Vector3(-corner_landing.end.x, corner_landing.position.y, -corner_landing.end.z),
+		corner_landing.size
+	))
+
+	for index in range(CORNER_TREADS):
+		var tread := AABB(
+			Vector3(
+				corner_landing.end.x + float(CORNER_TREADS - 1 - index) * CORNER_DEPTH,
+				0.0,
+				-map.extent
+			),
+			Vector3(CORNER_DEPTH, CORNER_RISE * float(index + 1), CORNER_W)
+		)
+		map.add_box(tread)
+		map.add_box(AABB(Vector3(-tread.end.x, 0.0, -tread.end.z), tread.size))
+
 	map.add_perimeter()
 
 	# Eight spawns around the outside, facing the middle. Enough that a full server is

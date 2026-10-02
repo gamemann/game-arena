@@ -85,7 +85,9 @@ const MAP_VERSIONS := {
 	# (4, -12) and (-4, 12), reached by one 0.9 m step off each gantry (2026-09-24).
 	# 1.3.0: two nest stairs, ten walked treads from the floor up the outside of each
 	# gantry to the foot of its nest pillar (2026-09-29).
-	&"dm_box": "1.3.0",
+	# 1.4.0: two corner stairs, ten walked treads along the north and south walls up to
+	# a landing that carries each ledge on into its corner (2026-10-02).
+	&"dm_box": "1.4.0",
 }
 
 

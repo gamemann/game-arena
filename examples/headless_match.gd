@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 378
+const CHECKS := 390
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -2307,6 +2307,171 @@ func _test_box_upper() -> void:
 			", ".join(hidden)
 		)
 
+	# --- The two corner stairs (2026-10-02) -------------------------------------
+	#
+	# Read back off the box list first, in the north-west stair's frame: ten treads
+	# against the north wall between x -17.5 and -8.5, every rise under step_height,
+	# and the top one flush with a landing that is flush with the west ledge. Then
+	# walked, each corner separately, for the reason the nest stairs give: west up the
+	# stair with no jump, paced; held on across the landing to the wall; south onto
+	# the ledge's old stub. The south-east one is the same in its own frame.
+	var corner_treads: Array[AABB] = []
+	var corner_landing := AABB()
+
+	for box in map.boxes:
+		if (
+			is_equal_approx(box.position.z, -24.0)
+			and is_equal_approx(box.size.z, 3.0)
+			and box.position.y == 0.0
+			and box.position.x >= -17.51
+			and box.end.x <= -8.49
+		):
+			corner_treads.append(box)
+
+		if (
+			is_equal_approx(box.position.x, -24.0)
+			and is_equal_approx(box.position.z, -24.0)
+			and is_equal_approx(box.end.y, 3.6)
+		):
+			corner_landing = box
+
+	corner_treads.sort_custom(func(a: AABB, b: AABB) -> bool: return a.end.y < b.end.y)
+	var corner_steep := PackedStringArray()
+	var corner_floor := 0.0
+
+	for tread in corner_treads:
+		if tread.end.y - corner_floor >= tunables.step_height:
+			corner_steep.append("%.2f -> %.2f" % [corner_floor, tread.end.y])
+
+		corner_floor = tread.end.y
+
+	_check(
+		corner_treads.size() == 10 and corner_steep.is_empty(),
+		"dm_box's north-west corner stair is ten treads, every rise under step_height",
+		"%d treads; %s" % [corner_treads.size(), ", ".join(corner_steep)]
+	)
+	_check(
+		corner_landing.has_volume()
+			and not corner_treads.is_empty()
+			and is_equal_approx(corner_treads[-1].position.x, corner_landing.end.x)
+			and is_equal_approx(corner_treads[-1].end.y, corner_landing.end.y)
+			and is_equal_approx(corner_landing.end.z, -18.0),
+		"and its top tread is flush with a landing that is flush with the west ledge",
+		"landing %s, top tread %s" % [corner_landing, corner_treads[-1] if not corner_treads.is_empty() else AABB()]
+	)
+
+	for corner in [
+		{"name": "north-west", "sign": 1.0, "up_yaw": 90.0, "ledge_yaw": 180.0},
+		{"name": "south-east", "sign": -1.0, "up_yaw": -90.0, "ledge_yaw": 0.0},
+	]:
+		var s: float = corner["sign"]
+		climber.controller.teleport(Vector3(s * -6.0, 0.1, s * -22.5), corner["up_yaw"], 0.0)
+
+		var foot_tick := -1
+		var top_tick := -1
+		var top_x := 0.0
+
+		for step in range(64 * 4):
+			var command := DotFpsCommand.new()
+			command.yaw = corner["up_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+			var at: Vector3 = climber.controller.state.position
+			var local_x := at.x * s
+
+			if foot_tick < 0 and local_x <= -8.5:
+				foot_tick = step
+
+			if climber.controller.state.is_grounded() and at.y > 3.55:
+				top_tick = step
+				top_x = local_x
+				break
+
+		var corner_time := float(top_tick - foot_tick) * delta
+		var corner_pace := (-8.5 - top_x) / corner_time if top_tick > foot_tick and foot_tick >= 0 else 0.0
+		var corner_top: Vector3 = climber.controller.state.position
+
+		print("  ..    %s corner stair: %.1f m of stair in %.2f s, %.2f m/s against max_speed %.2f"
+			% [corner["name"], -8.5 - top_x, corner_time, corner_pace, tunables.max_speed])
+
+		_check(
+			top_tick >= 0,
+			"a bot walks up the %s corner stair from the floor, jump never pressed" % corner["name"],
+			"ended at (%.1f, %.2f, %.1f)" % [corner_top.x, corner_top.y, corner_top.z]
+		)
+		_check(
+			corner_pace >= tunables.max_speed - 1.5,
+			"and climbs it at running pace",
+			"%.2f m/s against max_speed %.2f" % [corner_pace, tunables.max_speed]
+		)
+
+		# Held on for a second — more than the 6.5 m of landing takes — the run ends
+		# against the side wall, still at ledge height, not in the corner below.
+		for step in range(64):
+			var command := DotFpsCommand.new()
+			command.yaw = corner["up_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+		var corner_held: Vector3 = climber.controller.state.position
+
+		_check(
+			climber.controller.state.is_grounded()
+				and corner_held.y > 3.55
+				and corner_held.x * s < -23.0,
+			"and a run up it carries on across the landing to the wall, still at ledge height",
+			"ended at (%.1f, %.2f, %.1f)" % [corner_held.x, corner_held.y, corner_held.z]
+		)
+
+		var onto_ledge := false
+
+		for step in range(64 * 2):
+			var command := DotFpsCommand.new()
+			command.yaw = corner["ledge_yaw"]
+			command.move = Vector2(0.0, 1.0)
+			climber.controller.apply_command(command)
+			climber.controller.simulate_tick(tick, delta)
+			tick += 1
+
+			var at: Vector3 = climber.controller.state.position
+
+			if climber.controller.state.is_grounded() and at.y > 3.55 and at.z * s > -16.0:
+				onto_ledge = true
+				break
+
+		var on_stub: Vector3 = climber.controller.state.position
+
+		_check(
+			onto_ledge,
+			"and turns off the landing onto the %s ledge's end" % ("west" if s > 0.0 else "east"),
+			"ended at (%.1f, %.2f, %.1f)" % [on_stub.x, on_stub.y, on_stub.z]
+		)
+
+		# The trade: the nest on this side of the room sees a chest on every tread.
+		var corner_eye := Vector3(s * 4.0, 5.0 + 1.6, s * -12.0)
+		var corner_hidden := PackedStringArray()
+
+		for index in range(10):
+			var chest := Vector3(
+				s * (-17.05 + 0.9 * float(9 - index)), 0.36 * float(index + 1) + 1.2, s * -22.5
+			)
+			var line := chest - corner_eye
+			var hit := trace.ray(corner_eye, line.normalized(), line.length() - 0.05)
+
+			if hit.ok() and hit.blocked:
+				corner_hidden.append("tread %d" % (index + 1))
+
+		_check(
+			corner_hidden.is_empty(),
+			"and the nest on its side of the room sees every tread of it",
+			", ".join(corner_hidden)
+		)
+
 	climber.queue_free()
 	remove_child(climber)
 	_done()
@@ -4479,9 +4644,10 @@ func _test_atrium() -> void:
 	# [b]All three moved on 2026-09-22, which is the first time that has happened and
 	# does not weaken the check.[/b] They moved for one cause — every climb on every
 	# map was above the jump apex — but they are still three separate changes to three
-	# separate maps. dm_box reached 1.3.0 by its own three steps — the crates on
-	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29.
-	var expected := {&"dm_atrium": "1.5.0", &"dm_pit": "1.5.0", &"dm_box": "1.3.0"}
+	# separate maps. dm_box reached 1.4.0 by its own four steps — the crates on
+	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29,
+	# the corner stairs on 2026-10-02.
+	var expected := {&"dm_atrium": "1.5.0", &"dm_pit": "1.5.0", &"dm_box": "1.4.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:

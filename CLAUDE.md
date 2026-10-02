@@ -545,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-378 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+390 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1034,6 +1034,14 @@ It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0
 **Ending flush against the landing is the load-bearing decision**: stopped 1 m short, the bot runs off the top tread into the corridor and lands on the floor. **The trade is the perch**, 2.4 m over the top tread: from its south-west corner it looks down every tread, so the walked way up from the east yard is the most watched one. (From the middle of the perch its own edge hides the lower eight treads, which is the edge doing its job; the check stands where a player watching the yard stands.)
 
 `headless_match`'s *dm_atrium* section reads the twelve treads back off the box list (every rise and the landing lip under `step_height`, top flush with the landing), walks a bot from the yard up the stair onto the landing without jump (printed: 10.1 m foot to landing in 1.11 s, 9.07 m/s against 9.00, asserted within 1.5), and traces a chest on every tread from the perch's corner. Armed three ways: the stair ending 1 m short of the landing (the flush check and the drive fail, the bot ends on the floor at z 5.6), the bot at 0.6 of forward (pace fails at 5.42 m/s), and a 1 m parapet round the perch (the sightline fails on four treads, and the survey reports the perch top unreached). Survey: dm_atrium 3572 m² standable, 0 unreached, 0 trapped, 0 closed slots, 2 tight. Rendered: `tools/screenshot.sh dm_atrium --view east_stair 27,2.2,3 13,2,0 --view from_perch 16.4,8.3,-4.4 14.5,2,3`.
+
+## `dm_box` gained two corner stairs, so the ledges' stubs are ways in
+
+**Extended 2026-10-02 (dm_box 1.4.0).** The gantries meet the ledges at |z| 8..10.5 and the ledges run on to |z| 18, so each ledge carried 7.5 m of high ground past its last junction that led nowhere, and the floor at the two ends of the room (three of the eight spawns) had only the nest stairs, which climb toward the middle. **The corner stairs** are ten treads of 0.36 (walked), 0.9 deep and 3 m wide along the north wall (x -17.5..-8.5, z -24..-21) climbing west to a **landing** (x -24..-17.5, z -24..-18, top 3.6) that carries the west ledge on into the corner; the south-east one is its half-turn, computed from the boxes, so the map is still its own half-turn. The NE and SW corners keep their stubs, which is what a half-turn rather than a mirror gives. No spawn was added or moved.
+
+**The landing is the load-bearing box**: the top tread meets it flush and it runs on to the west wall, so a run up the stair ends against a wall at ledge height and the ledge is one turn south. Without it the bot runs off the top tread and drops 3.6 m into the corner. It is a box from 3.0 like the ledge, so the corner under it stays floor, a 3 m pocket open to the south. **The trade** is the nest on the same side, which looks down every tread.
+
+`headless_match`'s *dm_box: the upper level, climbed* reads the ten treads and the landing back off the box list (every rise under `step_height`, top tread flush with the landing, landing flush with the ledge), walks a bot up each corner stair separately without jump (printed: 7.9 m of stair in 0.86 s, 9.14 m/s against 9.00, both corners, asserted within 1.5), holds it on a second more until it stands against the side wall still at ledge height, turns it onto the ledge's old stub, and traces a chest on every tread from the nest's eye. Armed three ways: the north-west landing removed (half-turn, flush, run-on and onto-ledge checks fail; the bot ends on the floor at y 0), the bot at 0.6 of forward (pace fails at 5.44 m/s), and a 1.5 m parapet on the nest's west edge (the sightline fails on all ten treads). Survey: dm_box 2737 m² standable, 18 unreached (the two declared pillar tops), 0 trapped, 0 closed slots, 2 tight. Rendered: `tools/screenshot.sh dm_box --view corner_stair -1,3.2,-15 -16,2,-22.5 --view from_nest 4,6.6,-12 -14,2,-22.5`.
 
 ## `dm_pit`, and the filter that had never said no
 
