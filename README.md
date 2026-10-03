@@ -2,6 +2,8 @@ This is a game to demonstrate the capabilities of the [**Dot collection**](https
 
 ![Preview](https://github.com/gamemann/game-arena/blob/main/images/preview.gif?raw=true)
 
+*Play on my test server [here](https://moddingcommunity.com/arena/s/arena01/play)!*
+
 **This project and the assets under it are COMPLETELY OPEN SOURCE**. You are free to use, modify, and distribute them under the terms of the MIT license. The only thing not open source is the back-end web infrastructure. So if you opt into using your own authentication backend instead of integrating with TMC, you will need to build and integrate your own back-end infrastructure.
 
 ## From Maintainer & WARNING
