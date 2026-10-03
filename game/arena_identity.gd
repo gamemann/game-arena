@@ -13,7 +13,9 @@ const ArenaAvatars := preload("arena_avatars.gd")
 ## var identity := ArenaIdentity.new()
 ## add_child(identity)
 ## await identity.setup()
-## server.modules.load_module(identity.platform_module())
+## # By PATH: DotModuleHost constructs the module itself, and finds the hub this
+## # registered. platform_module() is for a host that adds the node by hand.
+## await server.modules.load_module("res://addons/dot_platform/dot_platform_module.gd")
 ## [/codeblock]
 
 
