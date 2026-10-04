@@ -943,6 +943,56 @@ static func dm_atrium() -> ArenaMap:
 			Vector3(EAST_STAIR_W, 0.36 * float(index + 1), east_tread)
 		))
 
+	# --- The rampart (1.6.0) -----------------------------------------------
+	#
+	# Added 2026-10-04. [b]The perch had one way on and the keep's roof had none
+	# off.[/b] The perch (6.7) was reached only from the ring's east arm, up its two
+	# steps, so whoever held it watched one approach; the keep's roof (5.5) was a high
+	# point a player jumped onto and then had nowhere to go from but down. The
+	# rampart is a 3 m walkway across red's half that joins them: from the keep roof's
+	# east edge (x = -12) to the perch's north-east corner (x = 21), along z -15..-12,
+	# 2 m north of the ring's north arm and flush with the perch's north face.
+	#
+	# [b]Every number is a step or a hop the map already uses.[/b] Its top is the keep
+	# roof plus 0.36 (5.86), so walking off the roof onto it is the walked rise every
+	# stair here is built from, and the perch is a 0.84 hop off its east end — the same
+	# size as the ring-to-shelf and gantry-to-nest hops on the other two maps. From the
+	# ring it is 1.26 up across a 2 m alley, over the jump's apex: the rampart is
+	# joined at its two ends and nowhere along its length, so it is a route rather
+	# than a second ring.
+	#
+	# The trade is the one every way onto a high point makes here: it runs straight
+	# at the perch, so whoever holds the perch sees all 33 m of it (`headless_match`
+	# traces a chest along its length), and the keep-roof end is the far end of a
+	# duel rather than a back door. Three piers carry it, 8 m apart, a metre square
+	# and centred under it, so the north yard underneath stays open floor. No spawn
+	# was added or moved.
+	const RAMPART_Z := -15.0
+	const RAMPART_T := 0.6
+	const RAMPART_PIER := 1.0
+
+	var rampart_top := keep_roof.end.y + 0.36
+	var rampart := AABB(
+		Vector3(keep_roof.end.x, rampart_top - RAMPART_T, RAMPART_Z),
+		Vector3(
+			perch_boxes[2].end.x - keep_roof.end.x, RAMPART_T,
+			perch_boxes[2].position.z - RAMPART_Z
+		)
+	)
+
+	map.add_box(rampart)
+
+	for pier_x in [-4.5, 3.5, 11.5]:
+		map.add_box(AABB(
+			Vector3(
+				pier_x, 0.0,
+				rampart.get_center().z - RAMPART_PIER * 0.5
+			),
+			Vector3(RAMPART_PIER, rampart.position.y, RAMPART_PIER)
+		))
+
+	map.add_climb("dm_atrium: the rampart onto the perch", rampart, perch_boxes[2])
+
 	map.add_perimeter()
 
 	# --- Spawns ------------------------------------------------------------

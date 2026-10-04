@@ -545,7 +545,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-390 + 112 + 144 + 105 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+396 + 112 + 149 + 107 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1042,6 +1042,14 @@ It stands against the wall so the arm keeps 1.5 m of walkway, nearly twice the 0
 **The landing is the load-bearing box**: the top tread meets it flush and it runs on to the west wall, so a run up the stair ends against a wall at ledge height and the ledge is one turn south. Without it the bot runs off the top tread and drops 3.6 m into the corner. It is a box from 3.0 like the ledge, so the corner under it stays floor, a 3 m pocket open to the south. **The trade** is the nest on the same side, which looks down every tread.
 
 `headless_match`'s *dm_box: the upper level, climbed* reads the ten treads and the landing back off the box list (every rise under `step_height`, top tread flush with the landing, landing flush with the ledge), walks a bot up each corner stair separately without jump (printed: 7.9 m of stair in 0.86 s, 9.14 m/s against 9.00, both corners, asserted within 1.5), holds it on a second more until it stands against the side wall still at ledge height, turns it onto the ledge's old stub, and traces a chest on every tread from the nest's eye. Armed three ways: the north-west landing removed (half-turn, flush, run-on and onto-ledge checks fail; the bot ends on the floor at y 0), the bot at 0.6 of forward (pace fails at 5.44 m/s), and a 1.5 m parapet on the nest's west edge (the sightline fails on all ten treads). Survey: dm_box 2737 m² standable, 18 unreached (the two declared pillar tops), 0 trapped, 0 closed slots, 2 tight. Rendered: `tools/screenshot.sh dm_box --view corner_stair -1,3.2,-15 -16,2,-22.5 --view from_nest 4,6.6,-12 -14,2,-22.5`.
+
+## `dm_atrium` gained a rampart, so the keep roof goes somewhere and the perch has a second way on
+
+**Extended 2026-10-04 (dm_atrium 1.6.0).** The perch (6.7) was reached only from the ring's east arm up its two steps, so whoever held it watched one approach; the keep's roof (5.5) was a high point a player jumped onto and could only leave by dropping. **The rampart** is a 3 m walkway across red's half joining the two: x -12..21, z -15..-12, top 5.86, from the keep roof's east edge to the perch's north face, on three 1 m piers 8 m apart (x -4.5, 3.5, 11.5) so the north yard under it stays open floor. Every number is one the map already uses: the step off the roof is the 0.36 every stair here walks, the perch is a 0.84 hop off its east end, and from the ring's north arm it is 1.26 up across a 2 m alley, over the 1.125 climb limit — so it is joined at its two ends and nowhere along its length, a route rather than a second ring. No spawn was added or moved.
+
+**The trade** is the one every way onto a high point here makes: it runs straight at the perch, so whoever holds the perch sees all 33 m of it, and the keep-roof end is the far end of a duel rather than a back door onto the throne.
+
+`headless_match`'s *dm_atrium* section reads the walkway, the keep roof, the perch and the north arm back off the box list (flush with the roof's east edge and the perch's north face, the step off the roof under `step_height`, the perch over it and under `climb_limit()`, the ring over `climb_limit()`), walks a bot off the keep roof along the rampart without jump (printed: 30.0 m roof edge to x 18 in 3.33 s, 9.02 m/s against 9.00, asserted within 1.5, never below the walkway's top), hops one off its east end onto the perch, and traces a chest every 3 m along it from the perch's north-west corner. Armed three ways: the walkway raised to 0.6 over the roof (the step check, the drive and the pace fail; the bot stops at the roof's edge), the bot at 0.6 of forward (pace fails at 5.41 m/s), and a 2 m parapet on the perch's west edge (the sightline fails on nine of ten points, and the survey reports the parapet top). A parapet on the perch's NORTH edge hides only the nearest point, because the perch's eye looks west along the walkway rather than across it. Survey: dm_atrium 3656 m² standable, 0 unreached, 0 trapped, 0 closed slots, 2 tight. Rendered: `tools/screenshot.sh dm_atrium --view rampart_from_keep -17,7.6,-13.5 18,6,-12 --view rampart_from_yard 6,3,-27 2,5,-13 --view rampart_from_perch 18,8.4,-10.5 -12,6,-13.5`.
 
 ## `dm_pit`, and the filter that had never said no
 

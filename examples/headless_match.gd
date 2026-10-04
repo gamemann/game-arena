@@ -51,7 +51,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 390
+const CHECKS := 396
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -4647,7 +4647,7 @@ func _test_atrium() -> void:
 	# separate maps. dm_box reached 1.4.0 by its own four steps — the crates on
 	# 2026-09-22, the gantries and nests on 2026-09-24, the nest stairs on 2026-09-29,
 	# the corner stairs on 2026-10-02.
-	var expected := {&"dm_atrium": "1.5.0", &"dm_pit": "1.5.0", &"dm_box": "1.4.0"}
+	var expected := {&"dm_atrium": "1.6.0", &"dm_pit": "1.5.0", &"dm_box": "1.4.0"}
 	var wrong := PackedStringArray()
 
 	for id: StringName in expected:
@@ -4988,6 +4988,152 @@ func _test_atrium() -> void:
 		east_hidden.is_empty(),
 		"and the perch sees down every tread of it",
 		", ".join(east_hidden)
+	)
+
+	# --- The rampart (1.6.0) ------------------------------------------------
+	#
+	# Read back off the box list: the walkway, the keep roof it leaves, the perch it
+	# reaches and the ring's north arm it runs beside. A walked step off the roof, a hop
+	# onto the perch, flush at both ends, and out of a jump's reach from the ring, so it
+	# is joined at its ends only.
+	var rampart := AABB()
+	var keep_top := AABB()
+	var perch_top := AABB()
+	var north_arm := AABB()
+
+	for box in map.boxes:
+		if is_equal_approx(box.position.z, -15.0) and is_equal_approx(box.size.y, 0.6):
+			rampart = box
+		elif is_equal_approx(box.position.x, -18.5) and is_equal_approx(box.position.y, 4.9):
+			keep_top = box
+		elif is_equal_approx(box.position.x, 16.0) and is_equal_approx(box.size.y, 6.7):
+			perch_top = box
+		elif is_equal_approx(box.position.z, -10.0) and is_equal_approx(box.position.y, 4.0) \
+				and is_equal_approx(box.size.x, 20.0):
+			north_arm = box
+
+	var off_roof := rampart.end.y - keep_top.end.y
+	var onto_perch := perch_top.end.y - rampart.end.y
+	var from_ring := rampart.end.y - north_arm.end.y
+
+	_check(
+		rampart.size.y > 0.0 and keep_top.size.y > 0.0 and perch_top.size.y > 0.0
+			and is_equal_approx(rampart.position.x, keep_top.end.x)
+			and is_equal_approx(rampart.end.z, perch_top.position.z)
+			and rampart.end.x >= perch_top.position.x + 1.0
+			and off_roof > 0.0 and off_roof < tunables.step_height,
+		"the rampart is a walked step off the keep roof and runs flush to the perch's face",
+		"x %.2f..%.2f z %.2f..%.2f top %.2f; keep roof ends x %.2f top %.2f; perch face z %.2f"
+			% [rampart.position.x, rampart.end.x, rampart.position.z, rampart.end.z,
+				rampart.end.y, keep_top.end.x, keep_top.end.y, perch_top.position.z]
+	)
+	_check(
+		onto_perch >= tunables.step_height and onto_perch < ArenaMap.climb_limit()
+			and from_ring > ArenaMap.climb_limit(),
+		"the perch is a hop off it, and the ring is not",
+		"%.2f onto the perch, %.2f up from the ring, climb limit %.2f"
+			% [onto_perch, from_ring, ArenaMap.climb_limit()]
+	)
+
+	# Driven: on the keep roof, held east, jump never pressed. Pace is the roof's east
+	# edge (x = -12) to x = 18, near the far end, and the bot must never drop under
+	# the walkway's top on the way.
+	walker.controller.teleport(Vector3(-15.25, 5.6, -13.5))
+
+	var along := DotFpsCommand.new()
+	along.yaw = 0.0
+	along.move = Vector2(1.0, 0.0)
+
+	var ramp_on := -1
+	var ramp_end := -1
+	var ramp_low := 99.0
+	var ramp_end_x := 0.0
+
+	for tick in range(tick_rate * 8):
+		walker.controller.apply_command(along)
+		walker.controller.simulate_tick(tick_rate * 44 + tick, delta)
+
+		var at: Vector3 = walker.controller.state.position
+
+		if ramp_on < 0 and at.x >= -12.0:
+			ramp_on = tick
+
+		if ramp_on >= 0:
+			ramp_low = minf(ramp_low, at.y)
+
+		if at.x >= 18.0:
+			ramp_end = tick
+			ramp_end_x = at.x
+			break
+
+	var ramp_time := float(ramp_end - ramp_on) * delta
+	var ramp_pace := (ramp_end_x + 12.0) / ramp_time if ramp_end > ramp_on and ramp_on >= 0 else 0.0
+
+	print("  ..    rampart: keep roof edge to x 18, %.1f m in %.2f s, %.2f m/s against max_speed %.2f, lowest %.2f"
+		% [ramp_end_x + 12.0, ramp_time, ramp_pace, tunables.max_speed, ramp_low])
+
+	_check(
+		ramp_end >= 0 and ramp_low > rampart.end.y - 0.1,
+		"a bot walks off the keep roof and along the rampart, jump never pressed",
+		"reached x %.2f, lowest %.2f against the top at %.2f"
+			% [walker.controller.state.position.x, ramp_low, rampart.end.y]
+	)
+	_check(
+		ramp_pace >= tunables.max_speed - 1.5,
+		"and crosses red's half on it at running pace",
+		"%.2f m/s against max_speed %.2f" % [ramp_pace, tunables.max_speed]
+	)
+
+	# And the hop at the far end: from the walkway's north edge, held south, jump
+	# pressed once it is within a stride of the perch's face. Grounded on the perch.
+	walker.controller.teleport(Vector3(18.5, rampart.end.y + 0.1, -14.7))
+
+	var hop := DotFpsCommand.new()
+	hop.yaw = 0.0
+	hop.move = Vector2(0.0, -1.0)
+
+	var on_perch := false
+
+	for tick in range(tick_rate * 2):
+		var at: Vector3 = walker.controller.state.position
+		hop.set_button(DotFpsCommand.BUTTON_JUMP, at.z >= -12.8)
+		walker.controller.apply_command(hop)
+		walker.controller.simulate_tick(tick_rate * 48 + tick, delta)
+
+		var now: Vector3 = walker.controller.state.position
+
+		if walker.controller.state.is_grounded() and now.y > perch_top.end.y - 0.05 and now.z > -12.0:
+			on_perch = true
+			break
+
+	var hop_at: Vector3 = walker.controller.state.position
+
+	_check(
+		on_perch,
+		"and hops off its east end onto the perch",
+		"ended at (%.1f, %.2f, %.1f)" % [hop_at.x, hop_at.y, hop_at.z]
+	)
+
+	# The trade: the perch sees every metre of it. From the perch's north-west corner,
+	# a chest every 3 m from the keep-roof end to the perch.
+	var rampart_eye := Vector3(16.4, perch_top.end.y + 1.6, -11.6)
+	var rampart_hidden := PackedStringArray()
+	var rampart_x := -11.5
+
+	while rampart_x < 16.0:
+		var chest := Vector3(rampart_x, rampart.end.y + 1.2, -13.5)
+		var line := chest - rampart_eye
+		var hit := trace.ray(rampart_eye, line.normalized(), line.length() - 0.05)
+
+		if hit.ok() and hit.blocked:
+			rampart_hidden.append("x %.1f" % rampart_x)
+
+		rampart_x += 3.0
+
+	_check(
+		rampart_hidden.is_empty(),
+		"and the perch sees the whole length of it",
+		", ".join(rampart_hidden)
 	)
 
 	walker.queue_free()
