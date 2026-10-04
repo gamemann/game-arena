@@ -1195,3 +1195,7 @@ Three things were written and not joined, and a fourth ran twice.
   them and reports which one was picked; connecting means tearing down this client's
   netcode, opening a transport at a new address and going through signon again, which
   is a launcher's job — and this game is loaded *by* one.
+
+## The map vote is drawn on the client shell (2026-10-04)
+
+The vote wrapper owns a `DotVoteBallotFeed` and polls it every `advance`; the module points its `ballot_fn` at `server.send_notice`, one copy per playing session with that session's voter id as `you`, under the topic `map_ballot`. dot-server-deploy's shell draws it as a dot-ui `DotBallotPanel` beside the server's own `game_ballot` — number keys, F3 and a click, or both, and every voter's avatar on their choice — and a click goes back as the same `!vote`-style command a player could type. Standalone, with no shell, nothing draws it and chat still carries the ballot. Defaults moved with dot-vote's: the map clock is forty-five minutes (`duration_sec` 2700, and the map director's fallback `map_seconds` with it) and the ballot opens 150 s before it. `round_based` is on, because dot-match's `round_ended` already reaches the director, so an operator's `time_up: finish_round` plays the round in progress out before the map changes.

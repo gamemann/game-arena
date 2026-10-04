@@ -109,6 +109,18 @@ var announce_fn: Callable = Callable()
 ## Whether a voter is an admin, for `rtv_admin_instant` and nomination bypasses.
 var is_admin_fn: Callable = Callable()
 
+## [code]func(state: Dictionary)[/code]: the ballot as a client draws it, sent whenever it
+## changes. The host points it at the client shell (a dot-server notice), which draws it as
+## a menu a player picks from with a number key or a click. Unset sends nothing.
+var ballot_fn: Callable = Callable()
+
+## [code]func(voter: StringName) -> Dictionary[/code]: a voter's name and avatar URL, for
+## the drawn ballot. The host's, because this file does not know who a voter is.
+var people_fn: Callable = Callable()
+
+## What [member ballot_fn] is fed from. Polled once per [method advance].
+var feed: DotVoteBallotFeed = null
+
 ## What dot-vote's commands are called here. `vote` rather than dot-vote's `votefor`,
 ## because `!vote 2` is what this game's players have always typed.
 const COMMAND_NAMES := {"vote": "vote"}
@@ -215,6 +227,19 @@ func setup() -> DotResult:
 
 	_bind_match()
 
+	# This game reports every round's end (see note_round_end), so a time limit can wait
+	# for the round in progress under `time_up: finish_round`.
+	director.round_based = true
+
+	feed = DotVoteBallotFeed.of(director, func(state: Dictionary) -> void:
+		if ballot_fn.is_valid():
+			ballot_fn.call(state)
+	)
+	feed.title = "Vote for the next map"
+	feed.command = COMMAND_NAMES["vote"]
+	feed.people_fn = func(voter: StringName) -> Dictionary:
+		return people_fn.call(voter) if people_fn.is_valid() else {}
+
 	# The map the server booted on, so the clock starts and the cooldown history has
 	# something in it. Everything after this comes through `note_changed`.
 	director.begin(source.current_id())
@@ -252,8 +277,11 @@ func _rules() -> DotVoteRules:
 	var rules := DotVoteRules.new()
 
 	rules.trigger = DotVoteRules.Trigger.TIME_LIMIT
-	rules.vote_lead_sec = 90.0
-	rules.duration_sec = 1800.0
+	# Two and a half minutes before a forty-five-minute map: room for the countdown, the
+	# ballot, a runoff and the result, so a decided map waits for the clock rather than
+	# the other way round. A match is ten minutes; a map is several of them.
+	rules.vote_lead_sec = 150.0
+	rules.duration_sec = 2700.0
 	rules.vote_duration_sec = 25.0
 	rules.method = DotVoteRules.Method.INSTANT_RUNOFF
 	rules.tie_break = DotVoteRules.TieBreak.RANDOM
@@ -323,6 +351,9 @@ func advance(delta: float) -> void:
 	_bind_match()
 	director.advance(delta)
 	_report_score()
+
+	if feed != null:
+		feed.poll()
 
 
 ## Tells the clock a round ended, for a round-limited vote.
@@ -439,7 +470,12 @@ func install_commands(host: Object) -> DotResult:
 
 		return &"console"
 
-	return commands.bind(host)
+	var bound := commands.bind(host)
+
+	if feed != null:
+		feed.command = commands.command_name("vote")
+
+	return bound
 
 
 # --- What a player does ----------------------------------------------------

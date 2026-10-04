@@ -35,6 +35,10 @@ const ArenaVote := preload("arena_vote.gd")
 
 const CHANNEL := "arena.module"
 
+## The drawn map ballot's notice topic. The client shell draws one menu per topic, and a
+## server running several games sends its own `game_ballot` beside this one.
+const MAP_BALLOT_TOPIC := &"map_ballot"
+
 ## dot-platform's own module, loaded beside this one. A path, because that is what
 ## [code]DotModuleHost.load_module[/code] takes — see [method _build_identity].
 const PLATFORM_MODULE_PATH := "res://addons/dot_platform/dot_platform_module.gd"
@@ -437,6 +441,26 @@ func _build_vote() -> DotResult:
 		var session := server.session_by_userid(String(voter).to_int())
 		# has_permission, not permissions.has: the second misses `root`.
 		return session != null and session.has_permission(DotAdminFlags.CHANGEMAP)
+
+	# The drawn ballot, to each playing session with its own voter id — this game's voters
+	# are the bare userid — so the client shell marks the player's own choice. Topic
+	# `map_ballot`, beside a server's `game_ballot` when both votes are open at once.
+	vote.ballot_fn = func(state: Dictionary) -> void:
+		for session in server.playing_sessions():
+			var data := state.duplicate()
+			data["you"] = str(session.userid)
+			server.send_notice(session, DotNotice.make(
+				&"", "", float(state.get("seconds", -1.0)), MAP_BALLOT_TOPIC, data
+			))
+
+	vote.people_fn = func(voter: StringName) -> Dictionary:
+		var session := server.session_by_userid(String(voter).to_int())
+
+		if session == null:
+			return {}
+
+		var avatar: Variant = session.identity.get("avatar_url") if session.identity != null else ""
+		return {"name": session.display_name, "avatar": avatar if avatar is String else ""}
 
 	vote.score_limit_raised.connect(func(_limit: int) -> void:
 		if bridge != null:

@@ -68,7 +68,7 @@ signal time_warning(seconds_left: float)
 @export_group("Time limit")
 
 ## How long a map runs before [signal map_over]. Zero runs it for ever.
-@export_range(0.0, 86400.0, 30.0) var map_seconds: float = 1800.0
+@export_range(0.0, 86400.0, 30.0) var map_seconds: float = 2700.0
 
 @export_range(0.0, 3600.0, 10.0) var warn_seconds: float = 120.0
 
