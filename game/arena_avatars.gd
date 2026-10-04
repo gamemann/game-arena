@@ -192,3 +192,43 @@ static func make_rig() -> Node3D:
 	rig.add_child(crest)
 
 	return rig
+
+
+## A member's site avatar as an arena figure: their top's skin is the body, their face's
+## skin the head. See `DotPlatformIdentity.avatar_translate_fn`.
+##
+## Null when the document is not the site's, so the member wears their stock figure
+## rather than a guess. The crest is arena's own and the site has none, so it is left off.
+static func from_site(foreign: DotAvatar) -> DotAvatar:
+	var top := _site_skin(foreign, &"top")
+	var face := _site_skin(foreign, &"face")
+
+	if top == "" and face == "":
+		return null
+
+	var avatar := schema().default_avatar()
+
+	if top != "":
+		avatar.set_part(SLOT_BODY, StringName("arena_body_kenney_%s" % top))
+
+	if face != "":
+		avatar.set_part(SLOT_HEAD, StringName("arena_head_kenney_%s" % face))
+
+	return avatar
+
+
+## The letter of the site's skin in [param slot] of its `builtin` document, or "".
+##
+## The site's avatar is the Kenney kit's eighteen painted skins, `skin-a` to `skin-r`,
+## chosen per face, top and legs — the same atlases this game draws, spelt the site's way.
+static func _site_skin(foreign: DotAvatar, slot: StringName) -> String:
+	if foreign == null or foreign.schema_id != &"builtin":
+		return ""
+
+	var part := String(foreign.part_in(slot))
+
+	if part.length() != 6 or not part.begins_with("skin-"):
+		return ""
+
+	var letter := part.substr(5, 1)
+	return letter if letter >= "a" and letter <= "r" else ""

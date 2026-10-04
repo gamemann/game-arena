@@ -31,7 +31,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 144
+const CHECKS := 149
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -308,6 +308,15 @@ func _join_everyone() -> void:
 	print("")
 	print("[joins]")
 
+	# What the identity layer resolved for peer 2: a member's site avatar, translated.
+	var site_doc := DotAvatar.make(&"builtin")
+	site_doc.set_part(&"top", &"skin-c")
+	site_doc.set_part(&"face", &"skin-k")
+	var dressed: DotAvatar = preload("../game/arena_avatars.gd").from_site(site_doc)
+	var dressed_session := int(_clients[2]["session"])
+	_server_bridge.avatar_fn = func(session_id: int) -> DotAvatar:
+		return dressed if session_id == dressed_session else null
+
 	for peer_id in _clients:
 		var entry: Dictionary = _clients[peer_id]
 		var added := _server_bridge.add_player(
@@ -335,6 +344,33 @@ func _join_everyone() -> void:
 	_check(
 		not _clients[2]["bridge"].apply_join(PackedByteArray([1, 2])).ok,
 		"a truncated join is refused"
+	)
+
+	# [b]A member's figure reaches the other screens.[/b] Arena's JOIN carried a name and
+	# no avatar, and its client drew everybody as stock, so nobody's choice was ever seen.
+	var watcher_game: ArenaGame = _clients[3]["game"]
+	var seen := watcher_game.player_for(dressed_session)
+	_check(
+		seen != null and seen.avatar != null and seen.avatar.digest() == dressed.digest(),
+		"another client sees the figure the server resolved for a player",
+		seen.avatar.digest() if seen != null and seen.avatar != null else "no avatar"
+	)
+	var plain := watcher_game.player_for(int(_clients[3]["session"]))
+	_check(plain != null and plain.avatar == null, "and nobody else's is invented")
+
+	# The profile arrives after seating: the server re-describes them, and a client that
+	# already has them takes the new name and figure.
+	var later_doc := DotAvatar.make(&"builtin")
+	later_doc.set_part(&"top", &"skin-e")
+	var later: DotAvatar = preload("../game/arena_avatars.gd").from_site(later_doc)
+	_check(
+		_server_bridge.refresh_player(dressed_session, "Ada", later),
+		"the server re-describes a seated player"
+	)
+	_clients[3]["bridge"].apply_join(_server_bridge.join_payload(dressed_session))
+	_check(
+		seen.display_name == "Ada" and seen.avatar.digest() == later.digest(),
+		"and a client that already has them takes the new name and figure"
 	)
 
 
@@ -1285,6 +1321,18 @@ func _test_ready_gate() -> void:
 	sent.clear()
 	bridge.send_event(0, ArenaEvents.Kind.NOTICE, ArenaEvents.write_notice("all"))
 	_check(sent.size() == 1, "a broadcast reaches exactly the ready peers", str(sent.size()))
+
+	# [b]A player who joins later is announced to everybody already in.[/b] Only the READY
+	# signon ever sent a JOIN, so a client never learned of anybody who arrived after it.
+	sent.clear()
+	var late := bridge.add_player(88, 588, "Late")
+	# Peer 88 itself is sent dot-net's message schema here, which is not this.
+	var to_ready := sent.filter(func(s: Array) -> bool: return int(s[1]) == 77)
+	_check(
+		late.ok and to_ready.size() == 1,
+		"a later joiner is announced to the peers already in",
+		str(sent)
+	)
 
 	bridge.queue_free()
 	game.queue_free()

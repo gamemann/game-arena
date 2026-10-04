@@ -730,9 +730,10 @@ func _on_player_added(added: ArenaPlayer) -> void:
 		# the same schema and deterministic in the player's storage key, so a remote
 		# player looks the same on every client that draws them — which is the whole
 		# reason `stock_avatar` hashes an id rather than picking at random.
+		# What the server said they look like, when it said; JOIN carries it.
 		added.attach_body_mesh(
 			Color.from_hsv(fmod(float(added.player_id) * 0.37, 1.0), 0.55, 0.85),
-			ArenaAvatars.stock_avatar(
+			added.avatar if added.avatar != null else ArenaAvatars.stock_avatar(
 				StringName(ArenaGame.storage_key(added.player_id))
 			)
 		)

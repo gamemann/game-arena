@@ -92,6 +92,12 @@ var camera_roll: float = 0.0
 ## What a remote player is drawn as. Null on the local player, who sees their own eyes.
 var body_mesh: Node3D = null
 
+## What this player looks like, as a dot-user-avatar document; null is the stock figure.
+##
+## Set on a server from the identity layer and carried to every client in JOIN, so a
+## member who dressed on the site is that figure on every screen.
+var avatar: DotAvatar = null
+
 ## An administrator's `blind`: this player's own screen is blacked out.
 ##
 ## [b]Set on the server and replicated to the OWNER ONLY[/b] (`ArenaPlayerNet.net_blind`).
@@ -698,6 +704,25 @@ func attach_body_mesh(colour: Color, avatar: DotAvatar = null) -> void:
 	nose.material_override = material
 	nose.position = Vector3(0.0, 1.5, -0.45)
 	body_mesh.add_child(nose)
+
+
+## Draws [param next] in place of whatever this player is wearing. Client side.
+##
+## For a JOIN that re-describes somebody: the profile arrived after they were seated, or
+## they changed. Nothing is rebuilt for the same document, a player whose body has not
+## been built yet keeps the document for when it is, and null keeps what is drawn — the
+## stock figure for anybody who never had one.
+func rewear(next: DotAvatar) -> void:
+	var before := avatar.digest() if avatar != null else ""
+	avatar = next
+
+	if next == null or body_mesh == null or before == next.digest():
+		return
+
+	remove_child(body_mesh)
+	body_mesh.queue_free()
+	body_mesh = null
+	attach_body_mesh(Color.WHITE, next)
 
 
 ## Builds the avatar's rig under [member body_mesh]. Returns whether anything drew.

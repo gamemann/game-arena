@@ -263,6 +263,10 @@ func _build_netcode() -> DotResult:
 	# client parents its copy under `DotClientLink`, which is named to match.
 	bridge.open_link(server)
 
+	# Who somebody is reaches the match: a figure as they are seated, and the real name
+	# and figure once dot-platform has them. See `_wire_identity`.
+	_wire_identity()
+
 	# Sealed once, on both ends, after every type is registered: the table each end sends
 	# the other is a promise about what it has, and a type registered after it went out is
 	# one the peer was told this end does not have.
@@ -630,6 +634,51 @@ func _module_unload() -> void:
 	if server != null and server.modules != null and server.modules.has_module("platform"):
 		var unloaded := server.modules.unload_module("platform")
 		DotLog.result(CHANNEL, "unloading the platform module", unloaded)
+
+
+## [b]Admission finishes AFTER a player is seated[/b], so the name and figure they are
+## seated with are a guest's whenever the profile store is slower than the join.
+## `player_admitted` is the moment the real ones exist; a new avatar and an operator's
+## `platform_name` are the same thing later. All three end in a JOIN to every client,
+## which a client already applies to a player it has.
+func _wire_identity() -> void:
+	if bridge == null:
+		return
+
+	bridge.avatar_fn = _avatar_for
+	hook_post("player_admitted", _on_profile)
+	hook_post("player_avatar_changed", _on_profile)
+	hook_post("player_renamed", _on_profile)
+
+
+## What a session looks like: what dot-platform resolved for them, or null for the stock
+## figure. Through the platform module's `player_for`, because the hub keys a player by
+## their scoped profile key, which only admission knows. Duck-typed: a server without
+## dot-platform is a configuration.
+func _avatar_for(session_id: int) -> DotAvatar:
+	var session := server.session_by_userid(session_id) if server != null else null
+	var platform: Object = server.modules.get_module("platform") \
+		if server != null and server.modules != null else null
+
+	if session == null or platform == null or not platform.has_method("player_for"):
+		return null
+
+	var held: Variant = platform.call("player_for", session)
+
+	if held is Object and (held as Object).get("avatar") is DotAvatar:
+		return (held as Object).get("avatar") as DotAvatar
+
+	return null
+
+
+func _on_profile(event: DotEvent) -> void:
+	var session_id := event.get_int("userid")
+	var session := server.session_by_userid(session_id) if server != null else null
+
+	if session == null or bridge == null:
+		return
+
+	bridge.refresh_player(session_id, session.display_name, _avatar_for(session_id))
 
 
 # --- Sessions --------------------------------------------------------------

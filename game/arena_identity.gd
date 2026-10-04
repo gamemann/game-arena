@@ -22,3 +22,4 @@ const ArenaAvatars := preload("arena_avatars.gd")
 func _init() -> void:
 	avatar_schema = ArenaAvatars.schema()
 	stock_avatar_fn = ArenaAvatars.stock_avatar
+	avatar_translate_fn = ArenaAvatars.from_site

@@ -42,6 +42,15 @@ const ACK_BYTES := 4
 ## Announced a player. Server side: these bytes go to every client.
 signal player_announced(payload: PackedByteArray)
 
+## The most an avatar document may take in a JOIN. Arena's three slots are about two
+## hundred bytes; the rest is room, and a cap a hostile document cannot talk past.
+const AVATAR_BYTES := 1024
+
+## `func(session_id: int) -> DotAvatar`: what a player looks like, asked as they are
+## seated and whenever the module re-announces them. Set by the module, which has the
+## identity layer; unset or null is the stock figure, which every client derives alike.
+var avatar_fn: Callable = Callable()
+
 var game: ArenaGame = null
 var net: DotNetManager = null
 
@@ -244,9 +253,44 @@ func add_player(peer_id: int, session_id: int, display_name: String) -> DotResul
 		return registered
 
 	_players_by_peer[peer_id] = session_id
-	player_announced.emit(join_payload(session_id))
+
+	var player := added.value as ArenaPlayer
+
+	if player.avatar == null and avatar_fn.is_valid():
+		var avatar: Variant = avatar_fn.call(session_id)
+		player.avatar = avatar as DotAvatar if avatar is DotAvatar else null
+
+	var payload := join_payload(session_id)
+	player_announced.emit(payload)
+
+	# [b]To everybody already in, not only to the next to arrive.[/b] A peer is sent
+	# every player when it says READY, and nothing else ever sent a JOIN — so a client
+	# never learned of anybody who joined after it, and `player_announced` was connected
+	# only in the suite, which forwarded the bytes by hand and so could not see it. Ready
+	# peers only: one that is not ready yet gets the whole roster when it is.
+	send_event(0, ArenaEvents.Kind.JOIN, payload)
 
 	return DotResult.success(identity)
+
+
+## Tells everybody who somebody is now: a profile that arrived after they were seated,
+## a new avatar, an operator's rename. Server side.
+##
+## [b]Through JOIN, which a client already applies to a player it has.[/b] A second
+## message for "this person changed" would be a second thing a late joiner has to be
+## told. An empty [param display_name] keeps the one they have.
+func refresh_player(session_id: int, display_name: String, avatar: DotAvatar) -> bool:
+	if net == null or not net.is_server or not _behaviours.has(session_id):
+		return false
+
+	var behaviour: ArenaPlayerNet = _behaviours[session_id]
+
+	if display_name != "":
+		behaviour.player.display_name = display_name
+
+	behaviour.player.avatar = avatar
+	send_event(0, ArenaEvents.Kind.JOIN, join_payload(session_id))
+	return true
 
 
 ## Mirrors a player the server has announced. Client side.
@@ -522,6 +566,11 @@ func join_payload(session_id: int) -> PackedByteArray:
 	writer.write_varint(behaviour.identity.owner_peer_id)
 	writer.write_varint(session_id)
 	writer.write_string(behaviour.player.display_name, 64)
+	# Appended, never inserted: a field before it would move every other one for a
+	# reader of the old layout. JSON rather than a skin index, so a slot added later needs
+	# no new wire; empty is the stock figure.
+	var avatar := behaviour.player.avatar
+	writer.write_string(JSON.stringify(avatar.to_dict()) if avatar != null else "", AVATAR_BYTES)
 	return writer.to_bytes()
 
 
@@ -532,11 +581,37 @@ func apply_join(payload: PackedByteArray) -> DotResult:
 	var peer_id := reader.read_varint()
 	var session_id := reader.read_varint()
 	var display_name := reader.read_string(64)
+	var avatar_text := reader.read_string(AVATAR_BYTES)
 
 	if not reader.ok():
 		return DotResult.fail(DotError.CODE_PARSE, "Truncated join.")
 
-	return mirror_player(net_id, peer_id, session_id, display_name)
+	# A document that does not parse is the stock figure, not a refused join: an avatar
+	# is cosmetic, and somebody who cannot be drawn as themselves can still be drawn.
+	var avatar: DotAvatar = null
+
+	if avatar_text != "":
+		var parsed: Variant = JSON.parse_string(avatar_text)
+
+		if parsed is Dictionary:
+			var built := DotAvatar.from_dict(parsed)
+
+			if built.ok:
+				avatar = built.value
+
+	# A JOIN for somebody this client already has is the server saying who they are NOW.
+	if _behaviours.has(session_id):
+		var known: ArenaPlayerNet = _behaviours[session_id]
+		known.player.display_name = display_name
+		known.player.rewear(avatar)
+		return DotResult.success(known)
+
+	var mirrored := mirror_player(net_id, peer_id, session_id, display_name)
+
+	if mirrored.ok and _behaviours.has(session_id):
+		(_behaviours[session_id] as ArenaPlayerNet).player.avatar = avatar
+
+	return mirrored
 
 
 # --- Events and requests ---------------------------------------------------
