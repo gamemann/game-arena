@@ -44,7 +44,7 @@ const APP_URL := "arena"
 ## against a runtime error that aborts a test function part-way: the checks after the
 ## error never happen, the ones before it still print ok, and "N passed, 0 failed" cannot
 ## show the difference. See docs/testing.md.
-const CHECKS := 107
+const CHECKS := 108
 
 var _passed := 0
 var _failed := 0
@@ -638,6 +638,13 @@ func _test_query() -> void:
 		String(snapshot.game.get("map", "")) == String(_game.map.id),
 		"and the map it names is the one that is running",
 		str(snapshot.game.get("map", ""))
+	)
+	# The standard field, which is the one A2S answers with and every listing prints. It
+	# was the content id whatever the game said in its own section.
+	_check(
+		_server.games.reported_map() == String(_game.map.id),
+		"and the query's own map field names it too, not the content id",
+		_server.games.reported_map()
 	)
 
 

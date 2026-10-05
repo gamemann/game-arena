@@ -215,6 +215,9 @@ func _module_load() -> DotResult:
 	_build_query_provider()
 	_register_game()
 
+	if game.map != null:
+		_report_map(String(game.map.id))
+
 	log_info("arena loaded", {"map": game.map.display_name})
 	return DotResult.success(null)
 
@@ -935,7 +938,16 @@ func _on_map_changed(map: DotMapDef) -> void:
 	if services != null:
 		services.announce("Now playing %s." % map.name_or_id())
 
+	_report_map(String(map.id))
+
 	log_info("map changed", {"map": String(map.id)})
+
+
+## Tells dot-server which map this is, so A2S and DQP print it in their map field (and
+## the backbone report does too) rather than this game's content id.
+func _report_map(map_id: String) -> void:
+	if server != null and server.games != null:
+		server.games.set_current_map(map_id)
 
 
 ## The map's clock ran out.
