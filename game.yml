@@ -28,3 +28,19 @@ module: game/arena_module.gd
 cvars:
   arena_scorelimit: "25"
   arena_minplayers: "1"
+
+# What this game adds to a TMC server's /admin menu (dot-server-deploy reads it; any other
+# host ignores it). Each item is the console line an admin could type, shown only to an
+# admin holding that command's flag. A server owner can rename or remove these in their own
+# cfg/admin_menu.yml, which always wins.
+metadata:
+  admin_menu:
+    title: "Arena"
+    items:
+      arena_restart:
+        label: "Restart the match"
+        command: "arena_restart"
+        confirm: true
+      arena_vote:
+        label: "Start a map vote now"
+        command: "arena_vote"
