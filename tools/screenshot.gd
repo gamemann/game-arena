@@ -410,8 +410,16 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 			"local": true,
 			"arm": func() -> void:
 				_local.controller.state.slide_time = -1.0
-				_local.controller.state.pitch = -62.0
+				# Through teleport, which sets the drawn state too: the camera draws from the
+				# controller's interpolated render state, and a pitch written into `state`
+				# alone never reached it (the first two body frames looked at the horizon).
+				_local.controller.teleport(_local.controller.state.position, _local.controller.state.yaw, -62.0)
+				# And the sampler, which owns a local player's look and writes it every tick.
+				if _local.get("sampler") != null:
+					_local.sampler.look_at_angles(_local.controller.state.yaw, -62.0)
 				_local.health.health = _local.health.max_health
+				# A real avatar: a player with none is drawn as a capsule, which has no legs to keep.
+				_local.avatar = load("res://game/arena_avatars.gd").stock_avatar(&"you")
 				# Current first: present_own_body draws nothing for a camera nobody looks through.
 				_local.camera.current = true
 				_local.present_own_body(true, _local.controller.state.yaw)

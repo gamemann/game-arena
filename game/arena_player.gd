@@ -756,8 +756,11 @@ func _mend_body() -> void:
 		held.visible = true
 
 
-## How far behind the eye your own body is drawn in first person, in metres: far enough
-## that looking down shows the torso and legs rather than the inside of the chest.
+## How far behind the eye your own body is drawn in first person, in metres. Behind, with
+## only the legs drawn (see [method present_own_body]): measured 2026-10-06 against the stock
+## blocky avatar, legs drawn under or in front of the eye show their cut tops as a flat skin-
+## coloured square in the middle of the screen, which reads worse than no body at all. A body
+## worth looking down at needs a legs model, not a box character's.
 const FIRST_PERSON_BACK := 0.18
 
 
@@ -783,12 +786,11 @@ func present_own_body(show: bool, yaw: float) -> void:
 		# The head-hiding is the helper's; the offset is done here, every frame, because
 		# it has to follow the yaw and the helper's is applied once.
 		_first_person.back_offset = 0.0
-		# The upper body too, not only the head: looking down from the eye, the shoulders
-		# are a slab a hand's width away (the first render was a grey wall), and the view
-		# model already draws the arms and hands. What is left is the waist, legs and feet.
-		_first_person.head_names = PackedStringArray(
-			["head", "face", "hat", "hair", "eye", "crest", "chest", "back", "torso", "arm", "hand"]
-		)
+		# Only the legs, by name, and everything else shadow-only. A list of what to HIDE
+		# (head, chest, arms...) was the first version, and the render still showed a grey
+		# slab across half the screen: the avatar's parts are not named what the list
+		# guessed. What to KEEP is two words every avatar here uses.
+		_first_person.shown_names = PackedStringArray(["leg", "foot", "shoe", "boot"])
 
 	body_mesh.visible = true
 	body_mesh.rotation = Vector3(0.0, deg_to_rad(yaw), 0.0)
