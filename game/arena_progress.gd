@@ -252,6 +252,10 @@ func begin(player_id: int, display_name: String = "") -> void:
 
 	var began: DotResult = await achievements.begin(key)
 
+	# The challenge bar from the first frame, not from the first kill.
+	if began.ok:
+		refresh_challenge(player_id)
+
 	if not began.ok:
 		# Not fatal, and deliberately not silent. A store that cannot be read means a
 		# player plays with no achievements rather than not playing, which is the same
@@ -312,6 +316,56 @@ func record(player_id: int, stat_id: StringName, value: float = 1.0) -> void:
 		return
 
 	stats.record(StringName(ArenaGame.storage_key(player_id)), stat_id, value)
+	refresh_challenge(player_id)
+
+
+## The achievement [param player_id] is nearest to, as the HUD's challenge bar: an index into
+## [method ArenaAwards.catalogue] and how far along it they are, or -1 when there is none.
+##
+## [b]Chosen, not configured:[/b] the locked, unhidden achievement with one counting rule that
+## the player has the most of, by fraction. The video's "Get 30 sniper kills (11/30)" is what
+## a player should be one push from, and that is whichever goal they are already closest to.
+static func challenge_for(catalogue: DotAchievementCatalogue, progress: DotAchievementProgress) -> Array:
+	var best := -1
+	var best_fraction := -1.0
+	var best_value := 0
+
+	for i in catalogue.achievements.size():
+		var a: DotAchievement = catalogue.achievements[i]
+
+		if a.hidden or a.secret or a.requirements.size() != 1 or progress.is_unlocked(a.id):
+			continue
+
+		var rule: DotAchievementRule = a.requirements[0]
+
+		if rule.op != DotAchievementRule.Op.AT_LEAST or rule.value <= 1.0:
+			continue
+
+		var held := progress.value_of(rule.stat)
+		var fraction := held / rule.value
+
+		if fraction < 1.0 and fraction > best_fraction:
+			best = i
+			best_fraction = fraction
+			best_value = int(held)
+
+	return [best, best_value]
+
+
+func refresh_challenge(player_id: int) -> void:
+	var player: Object = _game.player_for(player_id) if _game != null else null
+
+	if player == null or achievements == null:
+		return
+
+	var progress := achievements.progress_of(ArenaGame.storage_key(player_id))
+
+	if progress == null:
+		return
+
+	var picked := challenge_for(achievements.catalogue, progress)
+	player.set("challenge", int(picked[0]))
+	player.set("challenge_value", int(picked[1]))
 
 
 ## A player's session values, for a HUD or a console command.

@@ -25,7 +25,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 130
+const CHECKS := 133
 
 var _passed := 0
 var _failed := 0
@@ -1100,6 +1100,23 @@ func _test_criticals_and_the_body() -> void:
 	for _i in range(4):
 		hud._advance_popups(0.5)
 	_check(hud._popups.is_empty(), "and they are gone in a second and a half")
+
+	# The challenge bar: the achievement this player is nearest to.
+	var awards: DotAchievementCatalogue = load("res://game/arena_awards.gd").catalogue()
+	var progress := DotAchievementProgress.new()
+	progress.set_value(&"arena.kills", 11.0)
+	var picked: Array = load("res://game/arena_progress.gd").challenge_for(awards, progress)
+	var picked_def: DotAchievement = awards.achievements[int(picked[0])] if int(picked[0]) >= 0 else null
+	_check(picked_def != null and int(picked[1]) == 11 and picked_def.requirements[0].stat == &"arena.kills",
+		"a challenge is the goal a player is furthest along (%s)" % (picked_def.display_name if picked_def != null else "none"))
+	player.challenge = int(picked[0])
+	player.challenge_value = int(picked[1])
+	hud.present_challenge(true)
+	_check(hud.challenge_label.visible and hud.challenge_label.text.contains("(11/") and hud.challenge_bar.value == 11.0,
+		"and the HUD draws it with a bar (%s)" % hud.challenge_label.text)
+	player.challenge = -1
+	hud.present_challenge(true)
+	_check(not hud.challenge_label.visible, "and nothing when there is none")
 
 	for i in range(3):
 		hud.note_kill({"killer_id": 7, "victim_id": 6, "weapon": "sniper"}, 6, "Sniper")

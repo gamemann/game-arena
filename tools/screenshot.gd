@@ -358,7 +358,9 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 				_local.controller.state.slide_time = 0.3
 				for v in [201, 202, 203]:
 					_hud.note_kill({"killer_id": 112, "victim_id": v, "headshot": v == 203, "weapon": "rifle"}, 112, "You")
-				_hud.notice("Victim is on a 3 kill streak: heal"),
+				_hud.notice("Victim is on a 3 kill streak: heal")
+				_local.challenge = 1
+				_local.challenge_value = 11,
 			"wait": 30,
 		},
 		{

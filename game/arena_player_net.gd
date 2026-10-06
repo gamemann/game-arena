@@ -70,6 +70,11 @@ var net_carry: int = 0
 ## `ArenaPlayer.blinded`. Owner only: see [method _register_net_vars].
 var net_blind: bool = false
 
+## The challenge bar's achievement (+1, so 0 is none) and progress. The owner's alone: what a
+## player is working towards is nobody else's business.
+var net_challenge: int = 0
+var net_challenge_value: int = 0
+
 ## `ArenaPlayer.beacon`. Everybody's.
 var net_beacon: bool = false
 
@@ -139,6 +144,8 @@ func _register_net_vars() -> void:
 	# received it would know the moment somebody could not see them — the same reason the
 	# ammunition above is the owner's.
 	replicate(&"net_blind", DotNetVar.Type.BOOL).to_owner_only()
+	replicate(&"net_challenge", DotNetVar.Type.UINT).bits(7).to_owner_only()
+	replicate(&"net_challenge_value", DotNetVar.Type.UINT).bits(16).to_owner_only()
 	replicate(&"net_beacon", DotNetVar.Type.BOOL)
 
 	replicate(&"net_weapon", DotNetVar.Type.UINT).bits(ArenaContent.WEAPON_INDEX_BITS)
@@ -242,6 +249,8 @@ func pull() -> void:
 	net_carry = ArenaContent.carry_mask(player.arsenal)
 
 	net_blind = player.blinded
+	net_challenge = clampi(player.challenge + 1, 0, 127)
+	net_challenge_value = clampi(player.challenge_value, 0, 65535)
 	net_beacon = player.beacon
 
 	# A beaconed player is relevant to everybody, wherever they are. The beacon's whole
@@ -271,6 +280,8 @@ func _net_state_applied(tick: int) -> void:
 	_push_weapons()
 
 	player.blinded = net_blind
+	player.challenge = net_challenge - 1
+	player.challenge_value = net_challenge_value
 	player.beacon = net_beacon
 
 	# The controller writes its state out to the body node during simulation, and a

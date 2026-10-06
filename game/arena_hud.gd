@@ -3,6 +3,7 @@ extends DotHud
 
 const ArenaGame := preload("arena_game.gd")
 const ArenaPlayer := preload("arena_player.gd")
+const ArenaAwards := preload("arena_awards.gd")
 
 ## The in-game display: crosshair, health, armour, ammo, kill feed, round timer.
 ##
@@ -147,6 +148,49 @@ func notice(text: String) -> void:
 var notice_label: Label = null
 var _notice_age: float = 0.0
 const NOTICE_SEC := 4.0
+
+## The challenge bar at the top: the achievement the player is nearest to, and how near.
+var challenge_label: Label = null
+var challenge_bar: ProgressBar = null
+var _challenges: DotAchievementCatalogue = null
+
+
+func present_challenge(live: bool) -> void:
+	if challenge_label == null:
+		challenge_label = _make_label("Challenge", Control.PRESET_CENTER_TOP, Vector2(0.0, 62.0))
+		challenge_label.add_theme_font_size_override(&"font_size", 15)
+		challenge_bar = ProgressBar.new()
+		challenge_bar.name = "ChallengeBar"
+		challenge_bar.show_percentage = false
+		challenge_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		challenge_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+		challenge_bar.offset_left = -150.0
+		challenge_bar.offset_right = 150.0
+		challenge_bar.offset_top = 88.0
+		challenge_bar.offset_bottom = 94.0
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = Color(1.0, 0.78, 0.25)
+		challenge_bar.add_theme_stylebox_override(&"fill", fill)
+		var back := StyleBoxFlat.new()
+		back.bg_color = Color(0.0, 0.0, 0.0, 0.45)
+		challenge_bar.add_theme_stylebox_override(&"background", back)
+		add_child(challenge_bar)
+		_challenges = ArenaAwards.catalogue()
+
+	var index := player.challenge if player != null else -1
+	var shown := live and index >= 0 and index < _challenges.achievements.size()
+	challenge_label.visible = shown
+	challenge_bar.visible = shown
+
+	if not shown:
+		return
+
+	var a: DotAchievement = _challenges.achievements[index]
+	var target := int(a.requirements[0].value)
+	challenge_label.text = "%s — %s  (%d/%d)" % [a.display_name, a.description.trim_suffix("."), player.challenge_value, target]
+	challenge_bar.max_value = float(target)
+	challenge_bar.value = float(player.challenge_value)
+
 
 ## Seconds a "+N" popup rises and fades over.
 const POPUP_SEC := 1.3
@@ -690,6 +734,7 @@ func present_body() -> void:
 	_coins_seen = count
 
 	_advance_popups(get_process_delta_time())
+	present_challenge(live)
 
 
 ## Fades [member blind_overlay] toward whether the followed player is blinded.

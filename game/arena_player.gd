@@ -144,6 +144,12 @@ var avatar: DotAvatar = null
 ## read it would know exactly when somebody could not see them coming. `ArenaHud` draws it.
 var blinded: bool = false
 
+## The achievement this player is nearest to, for the HUD's challenge bar: an index into
+## `ArenaAwards.catalogue()` (-1: none), and how far along it they are. Set by ArenaProgress on
+## the server, replicated to the owner alone.
+var challenge: int = -1
+var challenge_value: int = 0
+
 ## An administrator's `beacon`: a pulsing ring and a column over this player that every
 ## client draws, and a ping every client hears, until it is turned off.
 ##
