@@ -6,6 +6,7 @@ const ArenaClientExtras := preload("arena_client_extras.gd")
 const ArenaEvents := preload("arena_events.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaHud := preload("arena_hud.gd")
+const ArenaMode := preload("arena_mode.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMenus := preload("arena_menus.gd")
 const ArenaNetBridge := preload("arena_net_bridge.gd")
@@ -194,6 +195,12 @@ func _ready() -> void:
 	# depending on it. `_watch_id` is -1 until HELLO names us, so nothing matches
 	# before then.
 	game.player_added.connect(_on_player_added)
+	# The mode's banner, the moment a client learns it: "Gun Game: every kill gives you a
+	# different gun", the way the genre says it when you spawn into one.
+	game.mode_shown.connect(func(shown: ArenaMode) -> void:
+		if hud != null:
+			hud.notice("%s  -  %s" % [shown.display_name, shown.description])
+	)
 
 	var built := game.setup(ArenaMap.dm_box())
 
@@ -904,7 +911,12 @@ func weapon_draws_shots() -> bool:
 ## Whether E is the prop tool's key here: only in a mode where players use props. Anywhere
 ## else E is the launch, which is what most of the arena's modes want it for.
 func props_on_e() -> bool:
-	return game != null and game.props != null and game.mode != null and game.mode.player_props
+	if game == null:
+		return false
+	# The mode the server says, not the one this client was built with: a client's own
+	# `mode` is never replaced, and in Siege it read free-for-all and E launched.
+	var shown := game.displayed_mode()
+	return shown != null and shown.player_props
 
 
 ## Whether right mouse aims (the player's setting, on by default) rather than bashes.

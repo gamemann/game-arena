@@ -35,7 +35,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 182
+const CHECKS := 183
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1131,6 +1131,16 @@ func _test_movement_rules_reach_clients() -> void:
 
 	_server_game.set_movement_rules({"launch_velocity": 14.0, "slide_boost": 2.0})
 	var _carry := _flight_window(0, 8, 0)
+
+	# The mode travels the same way: a client's own `mode` is whatever it was built with,
+	# and its banner and its keys (E is the prop tool's in a props mode) read this.
+	_server_game._announce_mode()
+	_check(
+		# shown_mode, not displayed_mode(): both ends default to free-for-all, so only the
+		# field the announcement sets can tell a told client from an untold one.
+		client_game.shown_mode != null and client_game.shown_mode.id == _server_game.mode.id,
+		"and so does the mode being played (%s)" % (client_game.displayed_mode().id if client_game.displayed_mode() else &"none")
+	)
 
 	_check(
 		is_equal_approx(float(client_game.movement_rules.get("launch_velocity", 0.0)), 14.0),

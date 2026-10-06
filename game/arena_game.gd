@@ -95,6 +95,9 @@ signal map_changed(map: ArenaMap)
 ## bridge sends it to every client; see [member movement_rules].
 signal movement_rules_changed(rules: Dictionary)
 
+## A client learned which mode is being played. Client side; the HUD shows its banner.
+signal mode_shown(shown: ArenaMode)
+
 @export_group("Simulation")
 
 @export_range(1, 240, 1) var tick_rate: int = 64
@@ -339,6 +342,8 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 			else SERVICE
 		)
 		DotRegistry.register(_registered_name, self)
+
+	_announce_mode()
 
 	return DotResult.success(null)
 
@@ -886,6 +891,7 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 	})
 
 	map_changed.emit(map)
+	_announce_mode()
 
 	# After the announcement, so every layer that rebinds on it — the player stack's
 	# spawn sites and spawn rules, the effects' resolver hook — has done so before the
@@ -1102,6 +1108,13 @@ func set_movement_rules(rules: Dictionary) -> void:
 	for player in players():
 		player.apply_movement_rules(movement_rules)
 
+	if not is_authority and rules.has("mode_index"):
+		var all := ArenaModes.all()
+		var index := int(rules["mode_index"])
+		if index >= 0 and index < all.size() and (shown_mode == null or shown_mode.id != all[index].id):
+			shown_mode = all[index]
+			mode_shown.emit(shown_mode)
+
 	movement_rules_changed.emit(movement_rules)
 
 
@@ -1109,8 +1122,26 @@ func set_movement_rules(rules: Dictionary) -> void:
 ## movement ones (RULES) because a client draws them and the server owner sets them:
 ## `break_mode` 0 none / 1 limbs / 2 explode, `break_limbs`, `break_criticals_only`, and
 ## `fp_body` (your own body in first person). Defaults in [constant SHOW_DEFAULTS].
-const SHOW_RULES: PackedStringArray = ["break_mode", "break_limbs", "break_criticals_only", "fp_body"]
+const SHOW_RULES: PackedStringArray = ["break_mode", "break_limbs", "break_criticals_only", "fp_body", "mode_index"]
 const SHOW_DEFAULTS := {"break_mode": 1.0, "break_limbs": 1.0, "break_criticals_only": 1.0, "fp_body": 0.0}
+
+
+## The mode a client is told is being played, for its banner and its keys. A client's own
+## [member mode] is whatever it was built with and is never replaced — logic reads it —
+## so what it shows comes from here. On the authority it is the mode.
+var shown_mode: ArenaMode = null
+
+
+func displayed_mode() -> ArenaMode:
+	return shown_mode if shown_mode != null else mode
+
+
+## Tells clients which mode this is, by its index in the catalogue they share. Server side.
+func _announce_mode() -> void:
+	if is_authority and mode != null:
+		var index := ArenaModes.ids().find(mode.id)
+		if index >= 0:
+			set_movement_rules({"mode_index": index})
 
 
 ## A presentation rule's current value: the server's, or the default.
