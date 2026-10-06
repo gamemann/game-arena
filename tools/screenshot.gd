@@ -287,6 +287,7 @@ var _feel_tick: int = 1
 
 func _stage_feel(map: ArenaMap, id: StringName) -> void:
 	var victim := _cast(map, 111, "Victim", Vector3(1.0, 0.05, 12.0), 180.0)
+	var hurt := _cast(map, 113, "Hurt", Vector3(4.0, 0.05, 13.0), 200.0)
 
 	_local = ArenaPlayer.new()
 	_local.name = "Local"
@@ -377,6 +378,14 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 				victim.make_dead()
 				var _b := victim.break_body(rules, Vector3(0.0, 0.0, -1.0), 7, true),
 			"wait": 8,
+		},
+		{
+			"name": "%s_feel_health" % String(id),
+			"from": Vector3(4.0, 2.4, 18.5),
+			"at": Vector3(4.0, 1.6, 13.0),
+			"arm": func() -> void:
+				hurt.health.health = 40.0,
+			"wait": 6,
 		},
 		{
 			"name": "%s_feel_drops" % String(id),

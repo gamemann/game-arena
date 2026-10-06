@@ -98,6 +98,15 @@ var camera: Camera3D = null
 ## the view model eases the weapon up and the camera zooms; nothing the server simulates.
 var aim_held: bool = false
 
+## A bar over somebody else's head for a few seconds after they are hurt, the way the
+## genre shows that a shot landed. Client side; built on first need.
+var _health_tag: Node3D = null
+var _health_fill: MeshInstance3D = null
+var _last_health: float = -1.0
+var _hurt_age: float = 999.0
+const HEALTH_TAG_SEC := 3.0
+const HEALTH_TAG_WIDTH := 0.9
+
 ## The meshes a body break hid, so a respawn can draw them again. Client side.
 var _broken: Array[MeshInstance3D] = []
 
@@ -639,6 +648,60 @@ func spawn(at: Transform3D, tick: int, protection_ticks: int = 0) -> void:
 
 
 ## Takes the player out of play without removing them.
+## The bar over a remote player's head: shown for [constant HEALTH_TAG_SEC] after their
+## health drops, facing the camera, red over dark.
+func _present_health_tag(delta: float) -> void:
+	if health == null:
+		return
+
+	var now := health.health
+	if _last_health >= 0.0 and now < _last_health - 0.01:
+		_hurt_age = 0.0
+	_last_health = now
+	_hurt_age += delta
+
+	var show := is_alive() and _hurt_age < HEALTH_TAG_SEC and health.max_health > 0.0
+	if not show:
+		if _health_tag != null:
+			_health_tag.visible = false
+		return
+
+	if _health_tag == null:
+		_health_tag = Node3D.new()
+		_health_tag.name = "HealthTag"
+		add_child(_health_tag)
+		var back := _tag_quad(Color(0.05, 0.05, 0.05, 0.75), 0.0)
+		_health_tag.add_child(back)
+		_health_fill = _tag_quad(Color(0.9, 0.15, 0.12), 0.001)
+		_health_tag.add_child(_health_fill)
+
+	_health_tag.visible = true
+	_health_tag.global_position = global_position + Vector3(0.0, 2.25, 0.0)
+	var eye := get_viewport().get_camera_3d()
+	if eye != null:
+		# The whole tag turns to the camera, so the fill stays on its background.
+		_health_tag.look_at(eye.global_position, Vector3.UP, true)
+	var fraction := clampf(now / health.max_health, 0.0, 1.0)
+	_health_fill.scale = Vector3(maxf(fraction, 0.001), 1.0, 1.0)
+	_health_fill.position.x = -HEALTH_TAG_WIDTH * (1.0 - fraction) * 0.5
+
+
+static func _tag_quad(colour: Color, forward: float) -> MeshInstance3D:
+	var quad := QuadMesh.new()
+	quad.size = Vector2(HEALTH_TAG_WIDTH, 0.09)
+	var material := StandardMaterial3D.new()
+	material.albedo_color = colour
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = quad
+	mesh.material_override = material
+	mesh.position.z = forward
+	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mesh
+
+
 ## Breaks this player's body apart on a death: [param rules] decides how much. Client
 ## side, drawing only. [param direction] is the way the killing hit travelled; the seed
 ## is the victim and the tick, so every client breaks the same body the same way.
@@ -831,6 +894,7 @@ func present(delta: float) -> void:
 		# left is to face it the way its yaw says.
 		body_mesh.global_rotation = Vector3(0.0, deg_to_rad(drawn.yaw), 0.0)
 		_present_held()
+		_present_health_tag(delta)
 
 	_present_beacon(delta, drawn.position)
 	_mend_body()

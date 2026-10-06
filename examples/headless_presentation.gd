@@ -25,7 +25,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 126
+const CHECKS := 128
 
 var _passed := 0
 var _failed := 0
@@ -1051,6 +1051,18 @@ func _test_criticals_and_the_body() -> void:
 	player.present(0.016)
 	_check(DotPlayerBodyBreak.visible_meshes(player.body_mesh).size() == whole,
 		"and a respawn puts the body back together")
+
+	# Somebody else, hurt: a bar over their head for a few seconds.
+	player.health.health = player.health.max_health
+	player.present(0.016)
+	player.health.health = player.health.max_health * 0.4
+	player.present(0.016)
+	_check(player._health_tag != null and player._health_tag.visible
+		and is_equal_approx(player._health_fill.scale.x, 0.4),
+		"a hurt player shows a bar over their head, filled to what is left")
+	player.present(ArenaPlayer.HEALTH_TAG_SEC + 0.1)
+	_check(not player._health_tag.visible, "and it goes after a few seconds")
+	player.health.health = player.health.max_health
 
 	var hud := ArenaHud.new()
 	hud.config = DotUiConfig.new()
