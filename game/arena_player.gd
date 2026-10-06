@@ -94,6 +94,20 @@ var view: Node3D = null
 ## The local player's camera. Null on a server, on a remote player, and headless.
 var camera: Camera3D = null
 
+## Whether this player is holding the aim (right mouse). Client side, presentation only:
+## the view model eases the weapon up and the camera zooms; nothing the server simulates.
+var aim_held: bool = false
+
+## The meshes a body break hid, so a respawn can draw them again. Client side.
+var _broken: Array[MeshInstance3D] = []
+
+## Draws this player's own body in first person when the server's `fp_body` rule says so.
+var _first_person: DotPlayerFirstPersonBody = null
+
+## The camera's own field of view, before an aim zooms it. Written by
+## [method set_field_of_view] so a zoom always scales the player's setting, never itself.
+var _base_fov: float = 75.0
+
 ## A displacement added to the camera this frame, and a roll. Written by the client.
 ##
 ## [b]The shake is added here rather than applied to the camera by whoever computed
@@ -625,6 +639,86 @@ func spawn(at: Transform3D, tick: int, protection_ticks: int = 0) -> void:
 
 
 ## Takes the player out of play without removing them.
+## Breaks this player's body apart on a death: [param rules] decides how much. Client
+## side, drawing only. [param direction] is the way the killing hit travelled; the seed
+## is the victim and the tick, so every client breaks the same body the same way.
+func break_body(
+	rules: DotPlayerBreakRules, direction: Vector3, p_seed: int, critical: bool
+) -> DotPlayerBodyBreak:
+	if body_mesh == null or rules == null:
+		return null
+
+	var before := DotPlayerBodyBreak.visible_meshes(body_mesh)
+	var made := DotPlayerBodyBreak.break_apart(
+		body_mesh, get_parent(), rules, global_position, direction, p_seed, true, critical
+	)
+
+	if made != null:
+		for mesh in before:
+			if not mesh.visible:
+				_broken.append(mesh)
+		if held != null and not body_mesh.visible:
+			held.visible = false
+
+	return made
+
+
+## Puts a broken body back together once the player is alive again.
+func _mend_body() -> void:
+	if _broken.is_empty() or not is_alive() or body_mesh == null:
+		return
+
+	for mesh in _broken:
+		if is_instance_valid(mesh):
+			mesh.visible = true
+
+	_broken.clear()
+	body_mesh.visible = true
+
+	if held != null:
+		held.visible = true
+
+
+## How far behind the eye your own body is drawn in first person, in metres: far enough
+## that looking down shows the torso and legs rather than the inside of the chest.
+const FIRST_PERSON_BACK := 0.18
+
+
+## Your own body in first person, or not: the server's `fp_body` rule. Client side, for
+## the player at this keyboard. The head is shadow-only and the body sits behind the eye
+## (see [DotPlayerFirstPersonBody]); the held weapon's world model stays hidden, because
+## the view model is already the gun in your hands.
+func present_own_body(show: bool, yaw: float) -> void:
+	if not show or not is_alive() or camera == null or not camera.current:
+		if _first_person != null:
+			_first_person.restore()
+		if body_mesh != null:
+			body_mesh.visible = false
+		return
+
+	if body_mesh == null:
+		attach_body_mesh(Color.WHITE, avatar)
+		if held != null:
+			held.visible = false
+
+	if _first_person == null:
+		_first_person = DotPlayerFirstPersonBody.new()
+		# The head-hiding is the helper's; the offset is done here, every frame, because
+		# it has to follow the yaw and the helper's is applied once.
+		_first_person.back_offset = 0.0
+		# The upper body too, not only the head: looking down from the eye, the shoulders
+		# are a slab a hand's width away (the first render was a grey wall), and the view
+		# model already draws the arms and hands. What is left is the waist, legs and feet.
+		_first_person.head_names = PackedStringArray(
+			["head", "face", "hat", "hair", "eye", "crest", "chest", "back", "torso", "arm", "hand"]
+		)
+
+	body_mesh.visible = true
+	body_mesh.rotation = Vector3(0.0, deg_to_rad(yaw), 0.0)
+	body_mesh.position = body_mesh.basis * Vector3(0.0, 0.0, FIRST_PERSON_BACK)
+	_first_person.apply(body_mesh)
+
+
 func make_dead() -> void:
 	arsenal.disabled = true
 	health.alive = false
@@ -739,6 +833,7 @@ func present(delta: float) -> void:
 		_present_held()
 
 	_present_beacon(delta, drawn.position)
+	_mend_body()
 
 
 ## Sway, bob and the recoil's camera half, for the hands under the camera. Returns the
@@ -762,6 +857,14 @@ func _present_view_model(drawn: DotFpsState) -> Vector2:
 		drawn.is_grounded(),
 		drawn.is_crouched()
 	)
+
+	# Aiming down: the hands come up, and the lens zooms by what the weapon's art says,
+	# from the player's own field of view so a zoom never compounds. Dead or watching
+	# somebody else, nobody is aiming.
+	var hands := view_model as ZeeViewModel
+	if hands != null:
+		hands.aim(aim_held and is_alive() and camera.current)
+		camera.fov = _base_fov * hands.aim_fov_scale()
 
 	if not weapons.has_method(&"view_punch"):
 		return Vector2.ZERO
@@ -914,7 +1017,8 @@ func set_field_of_view(horizontal_fov_at_4_3: float) -> void:
 	if camera == null:
 		return
 	var half := deg_to_rad(clampf(horizontal_fov_at_4_3, 40.0, 160.0) * 0.5)
-	camera.fov = rad_to_deg(2.0 * atan(tan(half) * 3.0 / 4.0))
+	_base_fov = rad_to_deg(2.0 * atan(tan(half) * 3.0 / 4.0))
+	camera.fov = _base_fov
 
 
 ## Something to see a remote player as.

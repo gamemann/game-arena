@@ -35,7 +35,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 177
+const CHECKS := 181
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1500,6 +1500,31 @@ func _test_event_wire() -> void:
 	)
 	_check(String(kill["weapon"]) == "rifle", "the weapon")
 	_check(bool(kill["headshot"]), "and the headshot flag")
+	_check(not bool(kill["critical"]), "and no critical unless one was written")
+
+	var critical := ArenaEvents.read_kill(DotNetReader.new(
+		ArenaEvents.write_kill(11, 12, "sniper", true, true)
+	))
+	_check(bool(critical["ok"]) and bool(critical["critical"]), "a lethal critical says so")
+
+	# An older server's KILL ends after the headshot. The padding to the byte is zeros, so
+	# the reader finds no critical rather than a garbage one.
+	var old := DotNetWriter.new()
+	old.write_varint(11)
+	old.write_varint(12)
+	old.write_string("rifle", ArenaEvents.WEAPON_BYTES)
+	old.write_bool(true)
+	var older := ArenaEvents.read_kill(DotNetReader.new(old.to_bytes()))
+	_check(bool(older["ok"]) and not bool(older["critical"]), "and an older server's kill reads as no critical")
+
+	var rules := ArenaEvents.read_rules(DotNetReader.new(ArenaEvents.write_rules(
+		{"slide_boost": 2.5, "fp_body": 1.0, "break_mode": 2.0}
+	)))
+	_check(
+		bool(rules["ok"]) and is_equal_approx(float(rules["rules"]["slide_boost"]), 2.5)
+			and float(rules["rules"]["fp_body"]) == 1.0 and float(rules["rules"]["break_mode"]) == 2.0,
+		"RULES round-trips movement and presentation rules alike", str(rules["rules"])
+	)
 
 	# The world kills as 0, not as a name. It is the one value with two shapes, and a
 	# string on the wire for it is a string somebody eventually puts a name in.

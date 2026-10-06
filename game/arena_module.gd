@@ -852,6 +852,12 @@ const MOVEMENT_CVARS := {
 	"arena_launch_velocity": ["launch_velocity", "Upward speed of a launch, m/s"],
 	"arena_launch_forward": ["launch_forward", "Forward speed a launch adds, m/s"],
 	"arena_launch_cooldown": ["launch_cooldown", "Seconds between launches"],
+	"arena_break": ["break_mode", "On a death the body: 0 stays whole, 1 loses limbs, 2 explodes"],
+	"arena_break_limbs": ["break_limbs", "How many limbs come off when arena_break is 1"],
+	"arena_break_criticals": ["break_criticals_only", "Only a critical (a headshot) breaks a body (1), or any kill (0)"],
+	"arena_fp_body": ["fp_body", "Players see their own body when they look down (1)"],
+	"arena_crit_scale": ["", "Extra damage multiplier on a critical hit (1 for none)"],
+	"arena_crit_chance": ["", "Chance any hit is a critical, 0 to 1 (headshots always are)"],
 }
 
 
@@ -860,7 +866,17 @@ func _add_movement_cvars() -> void:
 
 	for cvar in MOVEMENT_CVARS:
 		var key: String = MOVEMENT_CVARS[cvar][0]
-		var value: Variant = defaults.get(key)
+
+		# The two critical cvars set dot-combat's rules on the server, not a rule a client
+		# draws: a critical is judged where the damage is.
+		if key == "":
+			_add_critical_cvar(cvar, MOVEMENT_CVARS[cvar][1])
+			continue
+
+		var value: Variant = (
+			defaults.get(key) if not ArenaGame.SHOW_DEFAULTS.has(key)
+			else ArenaGame.SHOW_DEFAULTS[key]
+		)
 		var text := ("1" if value else "0") if value is bool else str(value)
 
 		add_cvar(
@@ -871,6 +887,25 @@ func _add_movement_cvars() -> void:
 				game.set_movement_rules({key: new_value.to_float()})
 				log_info("movement rule changed", {"rule": key, "value": new_value})
 		)
+
+
+func _add_critical_cvar(cvar: String, help: String) -> void:
+	var rules: DotDamageRules = game.combat.resolver.rules if game.combat != null else null
+	if rules == null:
+		return
+
+	var scale := cvar == "arena_crit_scale"
+	add_cvar(
+		cvar, str(rules.critical_scale if scale else rules.critical_chance), help,
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).with_min(0.0).changed.connect(
+		func(_old: String, new_value: String) -> void:
+			if scale:
+				rules.critical_scale = maxf(new_value.to_float(), 0.0)
+			else:
+				rules.critical_chance = clampf(new_value.to_float(), 0.0, 1.0)
+			log_info("critical rule changed", {"cvar": cvar, "value": new_value})
+	)
 
 
 func _on_player_killed(entry: DotKillFeed.Entry) -> void:

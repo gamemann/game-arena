@@ -56,6 +56,22 @@ var objective_label: Label = null
 ## hurt by in a dark room, and taking the picture away is the whole of the point.
 var blind_overlay: ColorRect = null
 
+## The scope, drawn at full aim with a scoped weapon. Under every widget, over the world.
+var scope: ZeeScopeOverlay = null
+
+## Red at the screen's edge when the followed player is badly hurt. A radial gradient, so
+## no art; strongest at no health, gone above [constant HURT_FROM].
+var hurt_overlay: TextureRect = null
+const HURT_FROM := 0.35
+
+## The launch: "E LAUNCH" when ready, the seconds left when not. The key is the client's
+## to say ([member launch_key_text]), because it is X in a mode where E is the prop tool.
+var ability_label: Label = null
+var launch_key_text: String = "E"
+
+## "C  Cancel slide" while sliding, as the prompt the genre shows.
+var slide_label: Label = null
+
 ## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and
 ## not instant, so it reads as something done to the screen rather than a frame dropped.
 const BLIND_FADE_SEC := 0.25
@@ -79,6 +95,31 @@ func build(p_game: ArenaGame) -> void:
 	blind_overlay.modulate.a = 0.0
 	blind_overlay.visible = false
 	add_child(blind_overlay)
+
+	hurt_overlay = TextureRect.new()
+	hurt_overlay.name = "Hurt"
+	var gradient := Gradient.new()
+	# Clear over the middle two thirds, so it reads as the edge of vision closing in
+	# rather than as a red filter over the screen (the first render was the second).
+	gradient.set_color(0, Color(0.75, 0.0, 0.0, 0.0))
+	gradient.set_color(1, Color(0.75, 0.0, 0.0, 0.7))
+	gradient.add_point(0.72, Color(0.75, 0.0, 0.0, 0.0))
+	var radial := GradientTexture2D.new()
+	radial.gradient = gradient
+	radial.fill = GradientTexture2D.FILL_RADIAL
+	radial.fill_from = Vector2(0.5, 0.5)
+	radial.fill_to = Vector2(1.0, 0.5)
+	hurt_overlay.texture = radial
+	hurt_overlay.stretch_mode = TextureRect.STRETCH_SCALE
+	hurt_overlay.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	hurt_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	hurt_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hurt_overlay.modulate.a = 0.0
+	add_child(hurt_overlay)
+
+	scope = ZeeScopeOverlay.new()
+	scope.name = "Scope"
+	add_child(scope)
 
 	crosshair = DotCrosshair.new()
 	crosshair.name = "Crosshair"
@@ -315,6 +356,7 @@ func _process(delta: float) -> void:
 
 	match_view()
 	present_blind(delta)
+	present_body()
 
 	if weapon_label != null:
 		weapon_label.text = weapon_line(player if _live() else null)
@@ -386,6 +428,57 @@ static func weapon_line(who: ArenaPlayer) -> String:
 		return slot.def.display_name
 
 	return "%s   %d" % [slot.def.display_name, who.arsenal.ammo().count(slot.def.ammo_type)]
+
+
+## The scope, the hurt edge, the launch's readiness and the slide prompt, from the
+## followed player. Public so a suite can drive it without a frame.
+func present_body() -> void:
+	var live := _live()
+	var hands: ZeeViewModel = (
+		player.weapons.view_model() as ZeeViewModel
+		if live and player.weapons != null else null
+	)
+	var scoped := hands != null and hands.is_scoped()
+
+	if scope != null:
+		scope.fraction = hands.aim_fraction() if scoped else 0.0
+	if crosshair != null:
+		# The scope has its own reticle; a crosshair drawn over it is two.
+		crosshair.visible = not scoped
+
+	if hurt_overlay != null:
+		var hurt := 0.0
+		if live and player.health != null and player.health.max_health > 0.0:
+			var fraction := player.health.health / player.health.max_health
+			hurt = clampf((HURT_FROM - fraction) / HURT_FROM, 0.0, 1.0)
+		hurt_overlay.modulate.a = hurt
+		if hurt > 0.0 and is_inside_tree():
+			# The whole viewport, as the blind does: the HUD sits in the safe area and the
+			# first render drew the edge as a rectangle over the top half of the screen.
+			var inverse := get_global_transform().affine_inverse()
+			hurt_overlay.position = inverse * Vector2.ZERO
+			hurt_overlay.size = inverse.basis_xform(get_viewport_rect().size)
+
+	if ability_label == null:
+		# Left of centre and above the bars, clear of the hands and the gun in them.
+		ability_label = _make_label("Ability", Control.PRESET_CENTER_BOTTOM, Vector2(0.0, -150.0))
+		ability_label.offset_left = -360.0
+		ability_label.offset_right = -200.0
+		slide_label = _make_label("Slide", Control.PRESET_CENTER, Vector2(0.0, 80.0))
+
+	var state: DotFpsState = player.controller.state if live else null
+	var tunables: DotFpsTunables = player.controller.tunables if live else null
+
+	ability_label.visible = live and tunables != null and tunables.launch_enabled
+	if ability_label.visible:
+		var left := state.launch_cooldown_left
+		ability_label.text = (
+			"%s  LAUNCH" % launch_key_text if left <= 0.0
+			else "%s  %.1f" % [launch_key_text, left]
+		)
+
+	slide_label.visible = live and state != null and state.is_sliding()
+	slide_label.text = "C  Cancel slide"
 
 
 ## Fades [member blind_overlay] toward whether the followed player is blinded.

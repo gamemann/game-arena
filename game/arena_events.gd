@@ -207,14 +207,17 @@ static func read_prop_act(reader: DotNetReader) -> Dictionary:
 ## The killer is a session id and **0 means the world** — a fall, a slay, a map hazard.
 ## Not the empty string this game uses internally for the same idea: a string on the
 ## wire for a value with exactly two shapes is a string somebody will put a name in.
+## [param critical] is last and optional on the wire, like MATCH's score limit: a reader
+## that finds the message ends before it reads a kill that was not one.
 static func write_kill(
-	killer_id: int, victim_id: int, weapon: String, headshot: bool
+	killer_id: int, victim_id: int, weapon: String, headshot: bool, critical: bool = false
 ) -> PackedByteArray:
 	var writer := _w()
 	writer.write_varint(killer_id)
 	writer.write_varint(victim_id)
 	writer.write_string(weapon, WEAPON_BYTES)
 	writer.write_bool(headshot)
+	writer.write_bool(critical)
 	return writer.to_bytes()
 
 
@@ -225,6 +228,7 @@ static func read_kill(reader: DotNetReader) -> Dictionary:
 		"weapon": reader.read_string(WEAPON_BYTES),
 		"headshot": reader.read_bool(),
 	}
+	out["critical"] = reader.read_bool() if reader.bits_remaining() >= 1 else false
 	out["ok"] = reader.ok()
 	return out
 

@@ -83,6 +83,10 @@ func _initialize() -> void:
 		_stage_admin(map, id)
 		return
 
+	if args.has("--feel"):
+		_stage_feel(map, id)
+		return
+
 	var fx_at := args.find("--fx")
 	if fx_at >= 0:
 		var eye: Variant = _vector(args[fx_at + 1]) if fx_at + 2 < args.size() else null
@@ -267,6 +271,112 @@ func _stage_admin(map: ArenaMap, id: StringName) -> void:
 			"arm": func() -> void: _local.blinded = true,
 			# The HUD fades a blind in over a quarter of a second; software rendering is
 			# slow enough that three frames can be less than that.
+			"wait": 12,
+		},
+	]
+
+
+# --- --feel -----------------------------------------------------------------
+
+## What the arena's 2026-10-06 additions look like, which no suite can say: the sniper's
+## scope, the HUD (hurt, the launch counting down, the slide prompt), a body exploding on a
+## lethal critical, and your own body when you look down.
+var _feel_tick: int = 1
+
+
+func _stage_feel(map: ArenaMap, id: StringName) -> void:
+	var victim := _cast(map, 111, "Victim", Vector3(1.0, 0.05, 12.0), 180.0)
+
+	_local = ArenaPlayer.new()
+	_local.name = "Local"
+	_local.setup(ArenaPlayer.Mode.HEADLESS, map, 112, "You")
+	root.add_child(_local)
+	_local.spawn(Transform3D(Basis(), Vector3(-1.0, 0.05, 20.0)), 0)
+	_local.attach_camera(100.0)
+	_local.camera.current = false
+	# Where the arena's vendored weapon art is; the client says so at boot, and without it
+	# the hands are drawn holding nothing.
+	ZeeModelCache.set_asset_root("res://")
+	var hands := ZeeViewModel.new()
+	hands.name = "Hands"
+	_local.camera.add_child(hands)
+	_local.arm_first_person(hands, true)
+	var _given := _local.weapons.give_everything()
+	_players.append(_local)
+
+	_hud = ArenaHud.new()
+	_hud.name = "Hud"
+	_hud.config = DotUiConfig.new()
+	_hud.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.add_child(_hud)
+	_hud.build(null)
+	_hud.follow(_local)
+	_hud.visible = false
+
+	var hold := func(slot: int) -> void:
+		# Asked for through the command, as the client does, and ticked the way the game
+		# ticks a player: the rig equips the view model on a tick and nothing else here
+		# ticks it.
+		var ask := DotWeaponCommand.new()
+		ask.slot = slot + 1
+		for tick in range(_feel_tick, _feel_tick + 80):
+			var _o := _local.simulate_tick(tick, 1.0 / 64.0, DotFpsCommand.new(), ask)
+			ask = DotWeaponCommand.new()
+		_feel_tick += 80
+
+	_shots = [
+		{
+			"name": "%s_feel_scope" % String(id),
+			"local": true,
+			"arm": func() -> void:
+				# The sniper itself: give_everything leaves the heavy slot holding the last
+				# heavy it gave, which is not the sniper.
+				var _g := _local.arsenal.give(ZeeWeaponIds.SNIPER)
+				hold.call(ZeeWeaponIds.SLOT_HEAVY)
+				_local.aim_held = true
+				_hud.visible = true,
+			"wait": 30,
+		},
+		{
+			"name": "%s_feel_hud" % String(id),
+			"local": true,
+			"arm": func() -> void:
+				_local.aim_held = false
+				hold.call(ZeeWeaponIds.SLOT_PRIMARY)
+				_local.health.health = _local.health.max_health * 0.12
+				_local.controller.state.launch_cooldown_left = 5.5
+				_local.controller.state.slide_time = 0.3,
+			"wait": 30,
+		},
+		{
+			"name": "%s_feel_break" % String(id),
+			# From the east: the west side of this floor is the stair block, which hid
+			# all but a flying head in the first two renders.
+			"from": Vector3(6.5, 2.6, 16.5),
+			"at": Vector3(1.0, 0.9, 12.0),
+			"arm": func() -> void:
+				_hud.visible = false
+				var rules := DotPlayerBreakRules.new()
+				rules.mode = DotPlayerBreakRules.Mode.EXPLODE
+				rules.criticals_only = false
+				# Slowed, so the frame is mid-burst rather than after it.
+				rules.force = 2.5
+				rules.lift = 2.0
+				victim.make_dead()
+				var _b := victim.break_body(rules, Vector3(0.0, 0.0, -1.0), 7, true),
+			"wait": 8,
+		},
+		{
+			"name": "%s_feel_body" % String(id),
+			"local": true,
+			"arm": func() -> void:
+				_local.controller.state.slide_time = -1.0
+				_local.controller.state.pitch = -62.0
+				_local.health.health = _local.health.max_health
+				# Current first: present_own_body draws nothing for a camera nobody looks through.
+				_local.camera.current = true
+				_local.present_own_body(true, _local.controller.state.yaw)
+				_hud.visible = true,
 			"wait": 12,
 		},
 	]

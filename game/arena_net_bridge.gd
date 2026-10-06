@@ -996,7 +996,8 @@ func _on_player_killed(entry: DotKillFeed.Entry) -> void:
 		killer,
 		int(entry.victim_key) if String(entry.victim_key).is_valid_int() else 0,
 		String(entry.cause),
-		entry.headshot
+		entry.headshot,
+		bool(entry.get_meta(&"critical", false))
 	))
 
 

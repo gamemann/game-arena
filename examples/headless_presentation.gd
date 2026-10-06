@@ -1,5 +1,6 @@
 extends Node
 
+const ArenaAvatars := preload("../game/arena_avatars.gd")
 const ArenaClient := preload("../game/arena_client.gd")
 const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
@@ -23,7 +24,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 112
+const CHECKS := 120
 
 var _passed := 0
 var _failed := 0
@@ -56,6 +57,7 @@ func _run() -> void:
 	_test_mouse_drives_view()
 	_test_vote_is_heard()
 	_test_blind_and_beacon()
+	_test_criticals_and_the_body()
 
 	print("")
 	_check(
@@ -1020,6 +1022,65 @@ func _test_vote_is_heard() -> void:
 ## and pings, and a screen that goes dark. Nothing here can say they LOOK right — that is
 ## `tools/screenshot.sh --admin` — but it can say they are built, that they come and go
 ## with the flag, and that the ping happens once a period rather than once a frame.
+## A lethal critical breaks a body, a respawn mends it, and the HUD shows what a body is
+## doing: badly hurt, ready to launch, sliding.
+func _test_criticals_and_the_body() -> void:
+	_section("A critical breaks a body, a respawn mends it, the HUD shows the rest")
+
+	var player := ArenaPlayer.new()
+	player.setup(ArenaPlayer.Mode.HEADLESS, ArenaMap.dm_box(), 6, "Broken")
+	add_child(player)
+	player.spawn(Transform3D(Basis(), Vector3(0.0, 0.05, 18.0)), 0)
+	player.attach_body_mesh(Color.WHITE, ArenaAvatars.stock_avatar(&"broken"))
+
+	var rules := DotPlayerBreakRules.new()
+	rules.mode = DotPlayerBreakRules.Mode.LIMBS
+	rules.limbs = 1
+	rules.criticals_only = true
+	var whole := DotPlayerBodyBreak.visible_meshes(player.body_mesh).size()
+
+	player.make_dead()
+	_check(player.break_body(rules, Vector3.FORWARD, 42, false) == null,
+		"an ordinary death leaves the body whole")
+	var broke := player.break_body(rules, Vector3.FORWARD, 42, true)
+	var left := DotPlayerBodyBreak.visible_meshes(player.body_mesh).size()
+	_check(broke != null and left < whole, "a lethal critical takes a limb off (%d of %d left)" % [left, whole])
+
+	player.health.alive = true
+	player.present(0.016)
+	_check(DotPlayerBodyBreak.visible_meshes(player.body_mesh).size() == whole,
+		"and a respawn puts the body back together")
+
+	var hud := ArenaHud.new()
+	hud.config = DotUiConfig.new()
+	add_child(hud)
+	hud.build(null)
+	hud.follow(player)
+
+	player.health.health = player.health.max_health * 0.1
+	hud.present_body()
+	_check(hud.hurt_overlay.modulate.a > 0.5, "badly hurt, the screen's edge goes red (%.2f)" % hud.hurt_overlay.modulate.a)
+	player.health.health = player.health.max_health
+	hud.present_body()
+	_check(hud.hurt_overlay.modulate.a == 0.0, "and healthy, it does not")
+
+	hud.present_body()
+	_check(hud.ability_label.visible and hud.ability_label.text.contains("LAUNCH"),
+		"the launch reads ready (%s)" % hud.ability_label.text)
+	player.controller.state.launch_cooldown_left = 5.5
+	hud.present_body()
+	_check(hud.ability_label.text.contains("5.5"), "and counts its cooldown down (%s)" % hud.ability_label.text)
+
+	player.controller.state.slide_time = 0.2
+	hud.present_body()
+	_check(hud.slide_label.visible, "sliding, it says how to stop")
+	player.controller.state.slide_time = -1.0
+
+	hud.queue_free()
+	player.queue_free()
+	_done()
+
+
 func _test_blind_and_beacon() -> void:
 	_section("An admin's beacon is drawn and heard, and a blind darkens one screen")
 

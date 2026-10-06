@@ -741,6 +741,23 @@ func _on_kill(info: Dictionary) -> void:
 
 	hud.show_kill(entry)
 
+	# The body comes apart, if the server's rules say this death breaks one. Seeded from
+	# the victim and the tick so every client breaks it the same way; pushed away from
+	# the killer, which every client knows.
+	if victim != null and victim != player:
+		var away := Vector3.ZERO
+		if killer != null:
+			away = victim.global_position - killer.global_position
+			away.y = 0.0
+		var _broke := victim.break_body(
+			game.break_rules(),
+			away,
+			# Not the tick: each client receives this at its own tick, and a seed that
+			# differs per client breaks a different arm on every screen.
+			int(info["victim_id"]) * 7919 + int(info["killer_id"]),
+			bool(info.get("critical", false))
+		)
+
 
 # --- Following the local player --------------------------------------------
 
@@ -869,6 +886,13 @@ func props_on_e() -> bool:
 	return game != null and game.props != null and game.mode != null and game.mode.player_props
 
 
+## Whether right mouse aims (the player's setting, on by default) rather than bashes.
+func right_mouse_aims() -> bool:
+	if presentation == null or presentation.settings == null:
+		return true
+	return bool(presentation.settings.get_value(&"right_mouse_aims"))
+
+
 ## The launch's key: E, or X where E is already the prop tool's.
 func launch_key() -> Key:
 	return KEY_X if props_on_e() else KEY_E
@@ -892,6 +916,9 @@ static func _add_key(action: StringName, key: Key) -> void:
 
 func _physics_process(delta: float) -> void:
 	var move := _sampler.sample(delta) if _sampler != null else DotFpsCommand.new()
+	if hud != null:
+		hud.launch_key_text = OS.get_keycode_string(launch_key())
+
 	# E is the launch: the movement command's first user bit, which the motor reads when
 	# the server's rules have the launch on. Same guard as the trigger, so typing in the
 	# chat box does not throw anybody into the air.
@@ -995,6 +1022,10 @@ func _process(delta: float) -> void:
 	# computing.
 	if extras != null:
 		extras.pump_voice(delta)
+
+	# Your own body when you look down, if the server's `fp_body` rule is on.
+	if player != null and game != null and player.controller != null:
+		player.present_own_body(game.rule("fp_body") != 0.0, player.controller.state.yaw)
 
 	if presentation != null:
 		# dot-audio culls by distance from the listener and dot-fx ages what it spawned;
@@ -1107,12 +1138,19 @@ func _read_fire(move: DotFpsCommand) -> void:
 	var firing := mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 
 	_fire.set_button(DotWeaponCommand.BUTTON_ATTACK, firing)
-	# The pack's alt-fire: a bash with every blaster. Same guard as the trigger, so a
-	# right click on a menu does not swing a rifle butt.
-	_fire.set_button(
-		DotWeaponCommand.BUTTON_ALT,
-		mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+	# Right mouse aims down the sights, by default; F is the pack's alt-fire, the bash
+	# ("quick melee"). A player who would rather bash with right mouse turns the
+	# `right_mouse_aims` setting off. Same guard as the trigger, so a right click on a menu
+	# neither zooms nor swings a rifle butt. In a mode where F is the prop tool's freeze,
+	# the bash is right mouse's whatever the setting says.
+	var right := mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+	var aims := right_mouse_aims() and not props_on_e()
+	var bash := (right and not aims) or (
+		not props_on_e() and mouse_drives_view() and Input.is_key_pressed(KEY_F)
 	)
+	_fire.set_button(DotWeaponCommand.BUTTON_ALT, bash)
+	if player != null:
+		player.aim_held = right and aims
 	_fire.set_button(DotWeaponCommand.BUTTON_RELOAD, Input.is_key_pressed(KEY_R))
 	_note_held_slot()
 	_fire.yaw = move.yaw
@@ -1297,7 +1335,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				else ArenaEvents.PropAct.GRAB
 			)
 			_holding = not _holding
-		KEY_F:
+		KEY_F when props_on_e():
 			_ask_prop(ArenaEvents.PropAct.FREEZE)
 		KEY_G:
 			_ask_prop(ArenaEvents.PropAct.PUNT)

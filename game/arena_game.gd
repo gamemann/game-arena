@@ -1013,13 +1013,35 @@ func teams() -> Array[DotTeam]:
 ## client, this is where RULES lands.
 func set_movement_rules(rules: Dictionary) -> void:
 	for key in rules:
-		if ArenaPlayer.MOVEMENT_RULES.has(String(key)):
+		if ArenaPlayer.MOVEMENT_RULES.has(String(key)) or SHOW_RULES.has(String(key)):
 			movement_rules[String(key)] = float(rules[key])
 
 	for player in players():
 		player.apply_movement_rules(movement_rules)
 
 	movement_rules_changed.emit(movement_rules)
+
+
+## Rules about what a death and a body look like, carried in the same set as the
+## movement ones (RULES) because a client draws them and the server owner sets them:
+## `break_mode` 0 none / 1 limbs / 2 explode, `break_limbs`, `break_criticals_only`, and
+## `fp_body` (your own body in first person). Defaults in [constant SHOW_DEFAULTS].
+const SHOW_RULES: PackedStringArray = ["break_mode", "break_limbs", "break_criticals_only", "fp_body"]
+const SHOW_DEFAULTS := {"break_mode": 1.0, "break_limbs": 1.0, "break_criticals_only": 1.0, "fp_body": 0.0}
+
+
+## A presentation rule's current value: the server's, or the default.
+func rule(key: String) -> float:
+	return float(movement_rules.get(key, SHOW_DEFAULTS.get(key, 0.0)))
+
+
+## How a body comes apart on death under the current rules.
+func break_rules() -> DotPlayerBreakRules:
+	var rules := DotPlayerBreakRules.new()
+	rules.mode = clampi(int(rule("break_mode")), 0, 2) as DotPlayerBreakRules.Mode
+	rules.limbs = maxi(int(rule("break_limbs")), 1)
+	rules.criticals_only = rule("break_criticals_only") != 0.0
+	return rules
 
 
 func player_for(id: int) -> ArenaPlayer:
@@ -1200,6 +1222,9 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 		_tick,
 		damage.is_headshot()
 	)
+	# dot-match's entry has no field for it; the bridge reads it to tell every client a
+	# lethal critical happened, which is what breaks a body and what a reward hangs on.
+	entry.set_meta(&"critical", damage.critical)
 
 	player_killed.emit(entry)
 
