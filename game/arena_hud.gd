@@ -24,6 +24,9 @@ var crosshair: DotCrosshair = null
 var health_bar: DotStatBar = null
 var armour_bar: DotStatBar = null
 var ammo_bar: DotStatBar = null
+
+## What is in hand and what is behind it: "Rifle  90". Over the ammunition.
+var weapon_label: Label = null
 var feed: DotFeedView = null
 var timer_label: Label = null
 
@@ -117,17 +120,30 @@ func build(p_game: ArenaGame) -> void:
 	ammo_bar.offset_right = -24.0
 	ammo_bar.offset_bottom = -62.0
 	ammo_bar.show_bar = false
+	# The magazine, or the pool for a weapon with none. The beamer feeds straight from
+	# its cells and a grenade is its own round, so a magazine count reads 0 for both
+	# while they are perfectly usable, and a player looking at a zero switches away.
 	ammo_bar.bind(func() -> Variant:
-		if not _live():
-			return 0.0
-		var slot := player.arsenal.current()
-		return float(slot.magazine) if slot != null else 0.0
+		return float(rounds_in_hand(player if _live() else null))
 	)
 	ammo_bar.max_source = func() -> Variant:
 		if not _live():
 			return 1.0
 		var slot := player.arsenal.current()
 		return float(maxi(1, slot.def.magazine)) if slot != null else 1.0
+
+	weapon_label = Label.new()
+	weapon_label.name = "Weapon"
+	weapon_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	# Over the counter and aligned with it: the bar draws its number at its left edge, and
+	# a name right-aligned above it read as two unrelated pieces of text.
+	weapon_label.offset_left = -240.0
+	weapon_label.offset_top = -126.0
+	weapon_label.offset_right = 0.0
+	weapon_label.offset_bottom = -100.0
+	weapon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	weapon_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(weapon_label)
 
 	feed = DotFeedView.new()
 	feed.name = "KillFeed"
@@ -241,6 +257,14 @@ func show_kill(entry: DotKillFeed.Entry) -> void:
 	_on_kill(entry)
 
 
+## A kill's cause as a player reads it: a weapon's display name ("Machine Pistol", not
+## `machine_pistol`), and anything that is not a weapon — a monster, `slay`, the world —
+## as it came.
+static func cause_label(cause: Variant) -> String:
+	var def := ArenaPlayer.weapon_catalogue().get_def(StringName(str(cause)))
+	return def.display_name if def != null else str(cause)
+
+
 func _on_kill(entry: DotKillFeed.Entry) -> void:
 	if feed == null:
 		return
@@ -252,7 +276,7 @@ func _on_kill(entry: DotKillFeed.Entry) -> void:
 	feed.add_kill(
 		entry.killer_name,
 		mine if entry.killer_key == me else theirs,
-		String(entry.cause),
+		cause_label(entry.cause),
 		entry.victim_name,
 		mine if entry.victim_key == me else theirs,
 		entry.headshot
@@ -292,6 +316,9 @@ func _process(delta: float) -> void:
 	match_view()
 	present_blind(delta)
 
+	if weapon_label != null:
+		weapon_label.text = weapon_line(player if _live() else null)
+
 	if game == null or timer_label == null:
 		return
 
@@ -322,6 +349,43 @@ func _process(delta: float) -> void:
 
 	if objective_label != null:
 		objective_label.text = _objective_line()
+
+
+## What the ammunition counter shows for [param who]: the magazine, or for a weapon that
+## has none, what is left in its pool. Static so a suite can ask it without a HUD.
+static func rounds_in_hand(who: ArenaPlayer) -> int:
+	if who == null or who.arsenal == null:
+		return 0
+
+	var slot := who.arsenal.current()
+
+	if slot == null:
+		return 0
+
+	if slot.def.magazine > 0:
+		return slot.magazine
+
+	if slot.def.ammo_type == &"":
+		return 0
+
+	return who.arsenal.ammo().count(slot.def.ammo_type)
+
+
+## The line over the counter: the weapon's name and, for one with a magazine, the reserve.
+## A melee weapon is its name alone.
+static func weapon_line(who: ArenaPlayer) -> String:
+	if who == null or who.arsenal == null or not who.is_alive():
+		return ""
+
+	var slot := who.arsenal.current()
+
+	if slot == null:
+		return ""
+
+	if slot.def.magazine <= 0 or slot.def.ammo_type == &"":
+		return slot.def.display_name
+
+	return "%s   %d" % [slot.def.display_name, who.arsenal.ammo().count(slot.def.ammo_type)]
 
 
 ## Fades [member blind_overlay] toward whether the followed player is blinded.

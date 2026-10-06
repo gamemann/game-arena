@@ -1,5 +1,6 @@
 extends Node
 
+const ArenaContent := preload("arena_content.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaPlayer := preload("arena_player.gd")
@@ -47,7 +48,7 @@ const LOADOUT_STANDARD := &"arena_standard"
 ## decision — a mode that swapped the rifle for a shotgun would edit this and nothing
 ## else. `DotWeaponLoadoutBridge` carries the same argument for dot-loadout.
 const LOADOUT_WEAPONS := {
-	"arena_standard": [&"pistol", &"rifle"],
+	"arena_standard": ArenaContent.DEFAULT_LOADOUT,
 }
 
 ## Somebody's class changed, after a spawn honoured a pending choice.

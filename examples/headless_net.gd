@@ -1,6 +1,7 @@
 extends Node
 
 const ArenaEvent := preload("../game/arena_event.gd")
+const ArenaContent := preload("../game/arena_content.gd")
 const ArenaEvents := preload("../game/arena_events.gd")
 const ArenaGame := preload("../game/arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
@@ -10,8 +11,11 @@ const ArenaMaps := preload("../game/arena_maps.gd")
 const ArenaNetBridge := preload("../game/arena_net_bridge.gd")
 const ArenaNetCommand := preload("../game/arena_net_command.gd")
 const ArenaNetLink := preload("../game/arena_net_link.gd")
+const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
 const ArenaPlayerNet := preload("../game/arena_player_net.gd")
+const ArenaHorde := preload("../game/arena_horde.gd")
+const ArenaNpcs := preload("../game/arena_npcs.gd")
 
 ## Two clients, one server, one process, and a lossy wire between them.
 ##
@@ -31,13 +35,13 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 149
+const CHECKS := 171
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 14
+const SECTIONS := 16
 
 var _passed := 0
 var _failed := 0
@@ -83,7 +87,9 @@ func _run() -> void:
 	_test_forced_noclip_is_predicted()
 	_test_blind_and_beacon()
 	_test_client_death_camera()
+	_test_weapons_over_the_wire()
 	_test_disconnect()
+	_test_monsters_reach_a_client()
 
 	print("")
 	print("%d passed, %d failed" % [_passed, _failed])
@@ -559,12 +565,9 @@ func _test_owner_only() -> void:
 		"and an opponent's is never received",
 		"received %d" % other.net_magazine
 	)
-	# Not asserted: that the owner's own ammunition arrives non-zero. It does travel —
-	# the declaration above is what puts it on the wire for the owner alone — but a
-	# client's arsenal is empty, because a loadout is resolved from a store on the
-	# server and nothing replicates it yet. The predicted `pull()` then overwrites the
-	# received value with the local arsenal's zero. Replicating the loadout is the
-	# next piece of work here; see this project's CLAUDE.md.
+	# That the owner's own ammunition arrives is asserted in [weapons over the wire]: it
+	# could not be while a client's arsenal was empty, because nothing sent what a
+	# player carries and the predicted `pull()` overwrote what arrived with a zero.
 	_check(other.net_health > 0, "while an opponent's health does arrive",
 		str(other.net_health))
 	_done()
@@ -935,6 +938,77 @@ func _test_disconnect() -> void:
 	_done()
 
 
+## Hands a client an event exactly as the server's link would put it on the wire.
+func _deliver_event(peer_id: int, kind: int, body: PackedByteArray) -> void:
+	var writer := DotNetWriter.new()
+	var _wrote := _server_net.messages.encode(ArenaEvent.new(kind, body), writer)
+	var _received: DotResult = _clients[peer_id]["bridge"].receive_event(writer.to_bytes())
+
+
+## The horde reaches a connected client: a monster the server spawns is drawn, follows the
+## server's, and goes when the server's does.
+##
+## [b]Monsters were never replicated.[/b] The horde ran on the server only, so a player on a
+## dedicated server was hurt by monsters they could not see; every check about the horde ran
+## on an authoritative game, where the monsters are real bodies in the same tree. Last,
+## because the disconnect section counts the registry, and a monster is an entity in it.
+func _test_monsters_reach_a_client() -> void:
+	print("")
+	_section("[monsters reach a client]")
+
+	var horde := ArenaHorde.new()
+	horde.name = "Horde"
+	horde.game = _server_game
+	horde.persist_heat = false
+	add_child(horde)
+	var built := horde.setup()
+	_check(built.ok, "a horde sets up on the server", str(built.error) if not built.ok else "")
+	_server_game.horde = horde
+	_pump(1)
+
+	var at: Vector3 = horde.nav.points[horde.nav.point_count() / 2]
+	var monster := horde.spawn_one(ArenaNpcs.GRUNT, at)
+	_check(monster != null, "a monster spawns")
+
+	if monster == null:
+		_done()
+		return
+
+	var server_net: Object = _server_bridge.get("_monster_nets").get(monster.instance_id)
+	_check(server_net != null, "and the server replicates it")
+
+	var net_id: int = server_net.get("identity").net_id
+	_deliver_event(2, ArenaEvents.Kind.NPC, ArenaEvents.write_npc(net_id, monster.def.id, monster.position()))
+	var client_bridge: ArenaNetBridge = _clients[2]["bridge"]
+	_check(client_bridge.monster_count() == 1, "the client builds it from the NPC event")
+
+	_pump(40)
+	var mirror: Node3D = client_bridge.get("_monster_mirrors")[net_id].body
+	var gap := mirror.global_position.distance_to(monster.position())
+	_check(gap < 1.0, "and draws it where the server has it", "%.2f m apart" % gap)
+	_check(absf(angle_difference(mirror.rotation.y, DotNpcNetSync.yaw_of(monster))) < 0.3,
+		"facing the way the server's faces",
+		"client %.2f, server %.2f rad; client faces %s, server faces %s" % [
+			mirror.rotation.y, DotNpcNetSync.yaw_of(monster),
+			str((-mirror.global_basis.z).snapped(Vector3(0.01, 0.01, 0.01))),
+			str(monster.facing().snapped(Vector3(0.01, 0.01, 0.01))),
+		] + " | mirror net (%.2f,%.2f,%.2f) yaw %d, server net (%.2f,%.2f,%.2f) yaw %d" % [
+			client_bridge.get("_monster_mirrors")[net_id].net_x, client_bridge.get("_monster_mirrors")[net_id].net_y,
+			client_bridge.get("_monster_mirrors")[net_id].net_z, client_bridge.get("_monster_mirrors")[net_id].net_yaw,
+			server_net.get("net_x"), server_net.get("net_y"), server_net.get("net_z"), server_net.get("net_yaw"),
+		])
+
+	horde.spawner.remove(monster.instance_id, DotNpcSpawner.REASON_ADMIN)
+	_check(not _server_bridge.get("_monster_nets").has(monster.instance_id), "the server lets it go")
+	_deliver_event(2, ArenaEvents.Kind.NPC_GONE, ArenaEvents.write_npc_gone(net_id))
+	_check(client_bridge.monster_count() == 0, "and so does the client")
+
+	_server_game.horde = null
+	horde.queue_free()
+	_pump(1)
+	_done()
+
+
 ## An administrator noclips a player on the server, and the player's own client — which
 ## has no noclip permission of its own — has to PREDICT it.
 ##
@@ -1090,6 +1164,135 @@ func _test_blind_and_beacon() -> void:
 	_check(
 		not _server_bridge.behaviour_for(11).identity.always_relevant,
 		"and puts player 11 back under the ordinary interest rules"
+	)
+	_done()
+
+
+## What a player carries reaches their own client, what they hold reaches everybody, the
+## use counter crosses, a replayed tick is silent, and a launch flies on a client.
+##
+## [b]Before this, a connected client's arsenal was EMPTY for the whole match.[/b] A
+## loadout is resolved from a store on the server and nothing sent the result, so the
+## client predicted no shot, drew no flash, its HUD read zero and its number keys selected
+## nothing, while the server fired everything correctly — and `[audience]` above wrote it
+## down as "not asserted". `net_carry` (owner-only) and `net_weapon` (everybody's) are the
+## two fields that close it.
+func _test_weapons_over_the_wire() -> void:
+	print("")
+	_section("[weapons over the wire]")
+
+	_pump(16)
+
+	var owner: ArenaNetBridge = _clients[2]["bridge"]
+	var watcher: ArenaNetBridge = _clients[3]["bridge"]
+	var served := _server_bridge.behaviour_for(11).player
+	var own := owner.behaviour_for(11)
+	var seen := watcher.behaviour_for(11)
+
+	var server_mask := ArenaContent.carry_mask(served.arsenal)
+	_check(server_mask != 0, "the server's player carries weapons", str(server_mask))
+	_check(
+		ArenaContent.carry_mask(own.player.arsenal) == server_mask,
+		"and their own client's arsenal carries exactly the same",
+		"%d against %d" % [ArenaContent.carry_mask(own.player.arsenal), server_mask]
+	)
+	_check(
+		own.player.arsenal.current_slot() == served.arsenal.current_slot(),
+		"holding the same slot", "%d against %d" % [
+			own.player.arsenal.current_slot(), served.arsenal.current_slot()
+		]
+	)
+	_check(
+		ArenaHud.rounds_in_hand(own.player) > 0,
+		"so the owner's HUD counts real ammunition, where it read zero",
+		str(ArenaHud.rounds_in_hand(own.player))
+	)
+	_check(
+		seen.net_carry == 0,
+		"while the other client never receives what player 11 carries",
+		str(seen.net_carry)
+	)
+
+	var held := served.arsenal.current_def().id if served.arsenal.current_def() != null else &""
+	_check(
+		seen.player.mirrored and seen.player.mirror_weapon == held and held != &"",
+		"but does see what is in their hand", "%s against %s" % [seen.player.mirror_weapon, held]
+	)
+
+	# The counter: everybody fires every eighth tick in this run.
+	var before := seen.player.mirror_fire_seq
+	_pump(32)
+	_check(
+		seen.player.mirror_fire_seq != before,
+		"a use moves the counter the watcher reads",
+		"%d then %d" % [before, seen.player.mirror_fire_seq]
+	)
+
+	# A replay is silent. Put the rig back to before a firing tick and run that tick
+	# again through the behaviour, the way the predictor's reconcile does.
+	var uses: Array[DotWeaponOutcome] = []
+	own.player.used.connect(func(o: DotWeaponOutcome) -> void: uses.append(o))
+
+	var idle := ArenaNetCommand.new()
+	var shoot := ArenaNetCommand.new()
+	shoot.fire.set_button(DotWeaponCommand.BUTTON_ATTACK, true)
+	shoot.fire.slot = 0
+
+	var t := int(_clients[2]["net"].clock.tick)
+	for i in range(TICK_RATE / 2):
+		t += 1
+		own._net_apply_input(idle, t)
+		own._net_simulate(t, 1.0 / float(TICK_RATE))
+
+	var rewind := own.player.weapons.snapshot()
+	t += 1
+	own._net_apply_input(shoot, t)
+	own._net_simulate(t, 1.0 / float(TICK_RATE))
+	var fresh := uses.size()
+	_check(fresh == 1, "a fresh predicted shot is drawn", str(fresh))
+
+	var _restored := own.player.weapons.restore(rewind)
+	_check(own.is_replay(t), "the same tick again is known to be a replay")
+	own._net_apply_input(shoot, t)
+	own._net_simulate(t, 1.0 / float(TICK_RATE))
+	_check(
+		uses.size() == fresh,
+		"and replaying it draws nothing — once per shot, not once per correction",
+		"%d uses after the replay" % uses.size()
+	)
+
+	# A launch the server announces flies on a client, and hurts nobody there.
+	var client_game: ArenaGame = _clients[2]["game"]
+	var gone: Array = []
+	client_game.projectiles.detonated.connect(func(at: Vector3, _s: DotWeaponSpawn) -> void:
+		gone.append(at)
+	)
+	var spawn := DotWeaponSpawn.make(
+		ZeeWeaponIds.FRAG, own.player.controller.state.position + Vector3(0.0, 1.5, 0.0),
+		Vector3(0.0, 3.0, -6.0), 12
+	)
+	spawn.gravity_scale = 1.0
+	spawn.fuse_ticks = 24
+	spawn.life_ticks = 400
+	spawn.tick = _server_game.current_tick()
+
+	var wire := ArenaEvents.write_launch(spawn, ArenaContent.weapon_index(spawn.id))
+	var read := ArenaEvents.read_launch(DotNetReader.new(wire))
+	_check(
+		bool(read["ok"]) and int(read["fuse"]) == 24 and int(read["owner"]) == 12
+		and ArenaContent.weapon_at(int(read["weapon"])) == ZeeWeaponIds.FRAG
+		and (read["velocity"] as Vector3).distance_to(spawn.velocity) < 0.01,
+		"a LAUNCH round-trips: who, which weapon, how fast, the fuse"
+	)
+
+	var health_before := own.player.health.health
+	_deliver_event(2, ArenaEvents.Kind.LAUNCH, wire)
+	_check(client_game.projectiles.live_count() == 1, "the client flies a copy of it")
+	_pump(32)
+	_check(gone.size() == 1, "which goes off on its fuse there", str(gone.size()))
+	_check(
+		own.player.health.health == health_before,
+		"and decides nothing: the client's copy hurts nobody"
 	)
 	_done()
 

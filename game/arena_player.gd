@@ -69,6 +69,22 @@ var mode: Mode = Mode.HEADLESS
 
 var controller: DotFpsController = null
 var arsenal: DotWeaponArsenal = null
+
+## zee-dot-weapons' rig over [member arsenal]: the bash, the view model, the shot effects
+## and the replication counter. See [method _build_rig].
+var weapons: ZeeWeaponRig = null
+
+## Somebody else's gun, in their hand. Client side, on every player but the local one.
+var held: ZeeWorldModel = null
+
+## What a MIRROR knows of this player's weapon: written from the snapshot by
+## `ArenaPlayerNet`, read by [method _present_held]. A simulated player — the authority's,
+## an offline bot — is read off its own rig instead, and leaves these alone.
+var mirrored: bool = false
+var mirror_weapon: StringName = &""
+var mirror_fire_seq: int = 0
+var mirror_fire_kind: int = 0
+var mirror_switching: bool = false
 var health: DotHealth = null
 var hitboxes: DotHitboxSet = null
 
@@ -125,6 +141,8 @@ var _class_base: DotFpsTunables = null
 
 var _map: ArenaMap = null
 var _combat: DotCombatManager = null
+var _hand: Node3D = null
+var _seen_fire_seq: int = 0
 var _command := DotWeaponCommand.new()
 var _tick_rate: int = 64
 
@@ -266,10 +284,12 @@ func _build_arsenal() -> void:
 	arsenal = DotWeaponArsenal.new()
 	arsenal.name = "Arsenal"
 	arsenal.tick_rate = _tick_rate
-	arsenal.max_slots = 4
+	# One per pack slot: melee, sidearm, primary, heavy, thrown. `ArenaNetCommand`
+	# bounds a slot request to the same number.
+	arsenal.max_slots = MAX_SLOTS
 	# Every player shares one catalogue: definitions are read-only and a per-player
-	# copy would be four resources per player for nothing. Behaviour instances are
-	# per-player, which is the half that actually holds state.
+	# copy would be twenty-seven resources per player for nothing. Behaviour instances
+	# are per-player, which is the half that actually holds state.
 	arsenal.catalogue = _catalogue()
 	add_child(arsenal)
 
@@ -277,7 +297,66 @@ func _build_arsenal() -> void:
 	if not res.ok:
 		push_error(res.error.message)
 
-	arsenal.used.connect(_on_used)
+	_build_rig(ZeeWeaponRig.Role.SERVER, false, null)
+
+
+## How many arsenal slots a player has: the pack's five.
+const MAX_SLOTS := ZeeWeaponIds.SLOT_THROWN
+
+
+## Puts a [ZeeWeaponRig] over [member arsenal], replacing any rig that was there.
+##
+## [b]The rig is handed THIS player's arsenal rather than building its own[/b]
+## (`arsenal_ref`), and that is what lets it be rebuilt. A rig's role decides what it
+## draws and is fixed at `setup()`; a player is built before anybody knows whether it is
+## the one at this keyboard, so the client rebuilds the rig as LOCAL when it adopts its
+## player ([method arm_first_person]) — and everything carried, every magazine and the
+## slot in hand survive, because they live in the arsenal and not in the rig. Every
+## reader of `player.arsenal` (the HUD, the netcode, the mod tools, the loadout) keeps
+## reading the same node.
+##
+## [b]SERVER on a server and for every player a client merely mirrors.[/b] A server draws
+## nothing; a mirrored player is drawn by [member held] from the snapshot, not by a rig.
+func _build_rig(role: ZeeWeaponRig.Role, authority: bool, view_model: Node3D) -> void:
+	if weapons != null:
+		remove_child(weapons)
+		# free(), not queue_free(): the old rig is connected to the arsenal's signals, and
+		# one left alive until the end of the frame would count this tick's reload twice.
+		weapons.free()
+		weapons = null
+
+	weapons = ZeeWeaponRig.new()
+	weapons.name = "Weapons"
+	weapons.role = role
+	weapons.authority = authority
+	weapons.tick_rate = _tick_rate
+	weapons.catalogue = _catalogue()
+	weapons.arsenal_ref = DotNodeRef.of_path(^"../Arsenal")
+	weapons.player_ref = DotNodeRef.of_path(^"..")
+
+	if view_model != null:
+		# In the tree by now: it hangs under this player's camera.
+		weapons.view_model_ref = DotNodeRef.of_path(view_model.get_path())
+
+	add_child(weapons)
+
+	var res := weapons.setup()
+	if not res.ok:
+		push_error(res.error.message)
+
+	# The rig's signal rather than the arsenal's: it carries the bash too, and it is
+	# silent during a reconciliation replay, so a corrected client does not hear the
+	# same shot once per replayed tick.
+	weapons.used.connect(_on_used)
+
+
+## Makes this the player at this keyboard: the hands under [param view_model] and a rig
+## that draws them, its tracers and its reports. Client side, once, on adoption.
+##
+## [param authority] is whether this machine decides — offline, yes; connected, no: the
+## server's rig is the one whose shots land and this one is the gun that moves.
+func arm_first_person(view_model: Node3D, authority: bool) -> void:
+	_build_rig(ZeeWeaponRig.Role.LOCAL, authority, view_model)
 
 
 ## The shared weapon table, built once for the whole process.
@@ -285,6 +364,11 @@ func _build_arsenal() -> void:
 ## Validated on first use rather than per player, and loudly: a catalogue with a
 ## duplicate id hands somebody the wrong weapon and nothing reports it.
 static var _shared_catalogue: DotWeaponCatalogue = null
+
+
+## The shared weapon table, for anything else in the game that reads a definition.
+static func weapon_catalogue() -> DotWeaponCatalogue:
+	return _catalogue()
 
 
 static func _catalogue() -> DotWeaponCatalogue:
@@ -402,7 +486,7 @@ func give_loadout(entries: Array[Dictionary]) -> void:
 	arsenal.clear()
 
 	var catalogue := arsenal.catalogue
-	var lowest := 0
+	var hand := 0
 
 	for entry in entries:
 		var item: DotItem = entry["item"]
@@ -434,21 +518,39 @@ func give_loadout(entries: Array[Dictionary]) -> void:
 			)
 			continue
 
-		var slot := catalogue.get_def(item.id).slot
+		hand = _better_hand(hand, catalogue.get_def(item.id).slot)
 
-		if lowest == 0 or slot > lowest:
-			lowest = slot
+	# Something under the 1 key whatever the document said. A loadout from before the
+	# melee slot names none, and a player whose last magazine runs dry should still have
+	# something to swing.
+	if not arsenal.has_slot(ZeeWeaponIds.SLOT_MELEE):
+		var _knife := arsenal.give(ZeeWeaponIds.KNIFE)
 
-	if lowest > 0:
-		arsenal.select(lowest, controller.state.tick)
+	if hand > 0:
+		arsenal.select(hand, controller.state.tick)
+
+
+## Which of two slots to spawn holding: the heaviest GUN, never the grenade.
+##
+## [b]"The highest slot" was the rule while the highest slot was a rocket launcher.[/b]
+## In the pack's layout it is the throwable, and a spawn holding a grenade with the pin
+## out is a spawn that walks into a fight unable to shoot.
+static func _better_hand(have: int, slot: int) -> int:
+	if slot >= ZeeWeaponIds.SLOT_THROWN:
+		return have if have > 0 else slot
+	if have == 0 or have >= ZeeWeaponIds.SLOT_THROWN or slot > have:
+		return slot
+	return have
 
 
 ## The default loadout, for a player who has not chosen one.
 func give_default_loadout() -> void:
 	arsenal.clear()
-	arsenal.give(&"pistol")
-	arsenal.give(&"rifle")
-	arsenal.select(2, controller.state.tick)
+
+	for id in ArenaContent.DEFAULT_LOADOUT:
+		var _given := arsenal.give(id)
+
+	arsenal.select(ArenaContent.DEFAULT_SLOT, controller.state.tick)
 
 
 # --- Lifecycle -------------------------------------------------------------
@@ -465,6 +567,10 @@ func spawn(at: Transform3D, tick: int, protection_ticks: int = 0) -> void:
 
 	arsenal.disabled = false
 	global_transform = at
+
+	# The view model back to rest, so a respawn does not inherit the last life's sway.
+	if weapons != null:
+		weapons.on_reset()
 
 	if _combat != null:
 		_combat.set_authoritative_origin(player_id, muzzle_position())
@@ -512,7 +618,6 @@ func simulate_tick(
 	# The aim comes from the movement command, not from a second sample. Sampling the
 	# mouse twice gives a shot that leaves at a different angle than the one the
 	# player was looking along.
-	var previous := _command
 	_command = combat_command.duplicate_command()
 	_command.yaw = state.yaw
 	_command.pitch = state.pitch
@@ -533,7 +638,9 @@ func simulate_tick(
 	ctx.crouched = state.is_crouched()
 	ctx.authority = arsenal.authority
 
-	return arsenal.simulate_tick(_command, ctx, previous)
+	# Through the rig, which runs the arsenal and then the bash. It keeps the previous
+	# command itself, for the same edge triggers the arsenal used to be handed it for.
+	return weapons.simulate_tick(_command, tick, ctx)
 
 
 ## Draws this player at where they are BETWEEN ticks. Called once per rendered frame.
@@ -573,16 +680,124 @@ func present(delta: float) -> void:
 				else drawn.position + Vector3(0.0, 1.6, 0.0)
 			)
 
+		var punch := _present_view_model(drawn)
+
 		camera.global_position = view.global_position + camera_offset
 		camera.global_rotation = Vector3(
-			deg_to_rad(drawn.pitch), deg_to_rad(drawn.yaw), camera_roll
+			deg_to_rad(drawn.pitch + punch.x), deg_to_rad(drawn.yaw + punch.y), camera_roll
 		)
 	elif body_mesh != null:
 		# A remote player. Its node is moved by `_net_interpolated`, so all that is
 		# left is to face it the way its yaw says.
 		body_mesh.global_rotation = Vector3(0.0, deg_to_rad(drawn.yaw), 0.0)
+		_present_held()
 
 	_present_beacon(delta, drawn.position)
+
+
+## Sway, bob and the recoil's camera half, for the hands under the camera. Returns the
+## punch in degrees (x pitch up, y yaw), which [method present] adds to the camera.
+##
+## [b]Added where the camera is written, never to the command.[/b] The shot already went
+## where the command pointed; this is the view jolting as it does. And through
+## `has_method`, because `view_punch` is newer than the client shell a pack may be running
+## on, and a call by name to a method the shell's copy lacks fails to compile the script.
+func _present_view_model(drawn: DotFpsState) -> Vector2:
+	if weapons == null or weapons.view_model() == null:
+		return Vector2.ZERO
+
+	var view_model := weapons.view_model()
+	# Nothing in the hands of somebody who is dead or watching someone else.
+	view_model.visible = is_alive() and camera.current
+
+	weapons.drive_view(
+		Vector2(drawn.yaw, drawn.pitch),
+		drawn.horizontal_speed(),
+		drawn.is_grounded(),
+		drawn.is_crouched()
+	)
+
+	if not weapons.has_method(&"view_punch"):
+		return Vector2.ZERO
+
+	var punch: Vector2 = weapons.call(&"view_punch")
+	return punch if punch.is_finite() else Vector2.ZERO
+
+
+## Somebody else's gun: the one they are holding, kicking when they use it.
+##
+## [b]Two sources, one picture.[/b] A mirrored player is read from what the snapshot said
+## ([member mirror_weapon], the counter); a player this machine simulates — an offline
+## bot, or everybody on a listen server — from its own rig. Drawing the second from a
+## counter as well is what keeps both on one code path.
+func _present_held() -> void:
+	if held == null:
+		return
+
+	var id := mirror_weapon
+	var seq := mirror_fire_seq
+	var kind := mirror_fire_kind
+	var switching := mirror_switching
+
+	if not mirrored and weapons != null and arsenal != null:
+		var def := arsenal.current_def()
+		id = def.id if def != null else &""
+		seq = weapons.fire_seq % ZeeWeaponNet.FIRE_SEQ_WRAP
+		kind = weapons.fire_kind
+		switching = arsenal.is_switching()
+
+	held.visible = is_alive()
+
+	if id != held.equipped():
+		var art: Variant = ZeeWeaponArtTable.table().get(id)
+		if art is ZeeWeaponArt:
+			var _drawn := held.equip(art as ZeeWeaponArt)
+		else:
+			held.clear()
+
+	held.on_switching(switching)
+
+	var fired := ZeeWeaponNet.uses_between(_seen_fire_seq, seq)
+	_seen_fire_seq = seq
+
+	# One kick however many uses the snapshot covered, the way `ZeeWeaponNet.apply` does:
+	# a burst's worth of recoil in one frame reads as the gun jumping.
+	if fired > 0 and is_alive():
+		held.on_fired(WATCHED_RECOIL.get(kind, Vector2(0.6, 0.1)), kind)
+
+
+## How far a watched gun kicks per kind of use. The real recoil is on an outcome that does
+## not travel, so a watcher's is approximate on purpose — the same numbers the pack gives
+## its own watchers, kept here because the pack's copy is private to it.
+const WATCHED_RECOIL := {
+	ZeeWeaponNet.KIND_SWING: Vector2(1.2, 0.0),
+	ZeeWeaponNet.KIND_SPAWN: Vector2(2.0, 0.0),
+	ZeeWeaponNet.KIND_THROW: Vector2(2.0, 0.0),
+	ZeeWeaponNet.KIND_BEAM: Vector2(0.05, 0.0),
+}
+
+
+## The node a held weapon hangs from, by the name [ZeeWorldModel] asks for.
+##
+## [b]Duck-typed, which is the whole contract.[/b] `ZeeWorldModel.attach_to` takes any
+## object answering `attachment(point)`, and the arena's avatar rig has a body, a head and
+## a crest and no hand — so the player answers for it, with a hand placed where a figure
+## this size holds a gun: chest high, right of centre, in front.
+func attachment(point: StringName) -> Node3D:
+	if point != &"right_hand" or body_mesh == null:
+		return null
+
+	if _hand == null:
+		_hand = Node3D.new()
+		_hand.name = "RightHand"
+		_hand.position = HAND_POSITION
+		body_mesh.add_child(_hand)
+
+	return _hand
+
+
+## Where [method attachment]'s hand is, in the body's frame. -Z is the way they face.
+const HAND_POSITION := Vector3(0.26, 1.12, -0.34)
 
 
 ## Draws [member beacon], and says when it pings.
@@ -677,6 +892,7 @@ func attach_body_mesh(colour: Color, avatar: DotAvatar = null) -> void:
 	body_mesh = Node3D.new()
 	body_mesh.name = "Body"
 	add_child(body_mesh)
+	_hold_weapon()
 
 	if avatar != null and _wear(avatar):
 		return
@@ -706,6 +922,19 @@ func attach_body_mesh(colour: Color, avatar: DotAvatar = null) -> void:
 	body_mesh.add_child(nose)
 
 
+## Hangs a [ZeeWorldModel] on [method attachment]'s hand. Client side, with the body.
+func _hold_weapon() -> void:
+	if held != null:
+		return
+
+	held = ZeeWorldModel.new()
+	held.name = "Held"
+
+	if not held.attach_to(self):
+		held.free()
+		held = null
+
+
 ## Draws [param next] in place of whatever this player is wearing. Client side.
 ##
 ## For a JOIN that re-describes somebody: the profile arrived after they were seated, or
@@ -722,6 +951,9 @@ func rewear(next: DotAvatar) -> void:
 	remove_child(body_mesh)
 	body_mesh.queue_free()
 	body_mesh = null
+	# The hand and the gun in it hung off the old body and went with it.
+	_hand = null
+	held = null
 	attach_body_mesh(Color.WHITE, next)
 
 
@@ -804,6 +1036,7 @@ func describe() -> Dictionary:
 		"position": controller.state.position,
 		"health": health.describe(),
 		"arsenal": arsenal.describe(),
+		"weapons": weapons.describe() if weapons != null else {},
 		"blinded": blinded,
 		"beacon": beacon,
 	}

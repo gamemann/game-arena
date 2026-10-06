@@ -16,6 +16,7 @@ const ArenaMode := preload("../game/arena_mode.gd")
 const ArenaModes := preload("../game/arena_modes.gd")
 const ArenaNpcs := preload("../game/arena_npcs.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
+const ArenaProjectiles := preload("../game/arena_projectiles.gd")
 const ArenaProps := preload("../game/arena_props.gd")
 const ArenaStats := preload("../game/arena_stats.gd")
 const ArenaVote := preload("../game/arena_vote.gd")
@@ -51,13 +52,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 396
+const CHECKS := 478
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 28
+const SECTIONS := 29
 
 var _passed := 0
 var _failed := 0
@@ -102,6 +103,7 @@ func _run() -> void:
 	await _test_box_upper()
 	_test_modes()
 	await _test_team_deathmatch()
+	await _test_zee_weapons()
 
 	await _build()
 	_build_vote()
@@ -462,6 +464,266 @@ func _hit(game: ArenaGame, attacker: int, victim: int, amount: float) -> float:
 	damage.tick = game.current_tick()
 	var out := game.combat.resolver.resolve(damage)
 	return 0.0 if out.refused else out.amount
+
+
+# --- zee-dot-weapons ---------------------------------------------------------
+
+## The weapons pack in a real game: the rig drives the player's own arsenal, a spawn holds
+## the right thing, a shot leaves the eye, the bash works, and the projectiles behave the
+## way the pack's definitions say — a frag bounces and goes off on its fuse, a sticky
+## stops where it lands, and a grenade cooked past its fuse goes off in the hand.
+func _test_zee_weapons() -> void:
+	_section("zee-dot-weapons in the arena")
+
+	var game := ArenaGame.new()
+	game.name = "ZeeGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = ArenaMode.free_for_all(50)
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_box())
+	if not _check(ready.ok, "a weapons game sets up", str(ready.error)):
+		game.queue_free()
+		remove_child(game)
+		return
+
+	game.start(0)
+	var _a := game.add_player(900, "Zee")
+	var _b := game.add_player(901, "Far")
+	_go_live(game)
+
+	for _protect in range(game.match_node.spawn_protection_ticks() + 2):
+		game.tick({})
+
+	var p := game.player_for(900)
+
+	_check(
+		p.weapons is ZeeWeaponRig and p.weapons.arsenal == p.arsenal,
+		"the rig drives the player's own arsenal, so every reader of it keeps working"
+	)
+	_check(p.arsenal.max_slots == ZeeWeaponIds.SLOT_THROWN, "with the pack's five slots")
+
+	# The default: something in every slot that matters, and the GUN in hand.
+	p.give_default_loadout()
+	var carried := PackedStringArray()
+	for id in ArenaContent.DEFAULT_LOADOUT:
+		if p.arsenal.carries(id):
+			carried.append(String(id))
+	_check(
+		carried.size() == ArenaContent.DEFAULT_LOADOUT.size(),
+		"the default loadout is carried", ", ".join(carried)
+	)
+	_settle(game, 900, TICK_RATE)
+	_check(
+		p.arsenal.current_def() != null and p.arsenal.current_def().id == ZeeWeaponIds.RIFLE,
+		"and a spawn holds the rifle, not the grenade in the highest slot",
+		str(p.arsenal.current_def().id if p.arsenal.current_def() != null else &"")
+	)
+
+	# A loadout saved before the melee slot existed still gives something under 1.
+	var old := DotLoadout.empty(&"arena")
+	old.set_item(&"primary", ZeeWeaponIds.SMG)
+	old.set_item(&"secondary", ZeeWeaponIds.REVOLVER)
+	p.give_loadout(game.loadouts.resolve(old))
+	_check(
+		p.arsenal.carries(ZeeWeaponIds.KNIFE) and p.arsenal.carries(ZeeWeaponIds.SMG),
+		"a primary-and-sidearm loadout from before the melee slot still gets a knife"
+	)
+	_check(
+		p.arsenal.current_slot() == ZeeWeaponIds.SLOT_PRIMARY,
+		"and spawns holding its primary", str(p.arsenal.current_slot())
+	)
+	_settle(game, 900, TICK_RATE)
+
+	# A shot, from the eye along the aim. The rig builds its own context when handed
+	# none, from the player bridge; this game hands it one, and this is what says the
+	# shot it gets still leaves where the player is looking.
+	var used: Array[DotWeaponOutcome] = []
+	p.used.connect(func(o: DotWeaponOutcome) -> void: used.append(o))
+
+	for i in range(TICK_RATE / 2):
+		_hold(game, 900, DotWeaponCommand.BUTTON_ATTACK, 0, -5.0)
+
+	var shots: Array[DotShot] = []
+	for o in used:
+		shots.append_array(o.shots)
+	_check(shots.size() > 3, "held fire shoots the SMG", str(shots.size()))
+
+	if not shots.is_empty():
+		var eye := p.muzzle_position()
+		_check(
+			shots[-1].origin.distance_to(eye) < 0.05,
+			"from the eye", "%.3f m away" % shots[-1].origin.distance_to(eye)
+		)
+		_check(
+			shots[-1].direction.dot(p.aim_direction()) > 0.98,
+			"along the aim", "dot %.3f" % shots[-1].direction.dot(p.aim_direction())
+		)
+
+	# The bash on the alt-fire: the pack's own second state machine, through the rig.
+	var bashes: Array[DotWeaponOutcome] = []
+	p.weapons.bashed.connect(func(o: DotWeaponOutcome) -> void: bashes.append(o))
+	_settle(game, 900, TICK_RATE / 2)
+	_hold(game, 900, DotWeaponCommand.BUTTON_ALT)
+	_settle(game, 900, 4)
+	_check(bashes.size() == 1, "the alt-fire bashes, once per press", str(bashes.size()))
+
+	# A frag: thrown, bounced, and gone off on its fuse rather than on the first wall.
+	var gone: Array = []
+	game.projectiles.detonated.connect(func(at: Vector3, s: DotWeaponSpawn) -> void:
+		gone.append([at, s, game.current_tick()])
+	)
+
+	p.arsenal.give(ZeeWeaponIds.FRAG)
+	_switch_to(game, 900, ZeeWeaponIds.SLOT_THROWN)
+	_check(
+		p.arsenal.current_def().id == ZeeWeaponIds.FRAG,
+		"the 5 key's slot holds the frag", str(p.arsenal.current_def().id)
+	)
+
+	for i in range(6):
+		_hold(game, 900, DotWeaponCommand.BUTTON_ATTACK, 0, -25.0)
+	var thrown_at := game.current_tick()
+	_settle(game, 900, 1)
+
+	var flying := game.projectiles.flying()
+	_check(flying.size() == 1, "letting go throws it", str(flying.size()))
+
+	var frag: ArenaProjectiles.Flying = flying[0] if flying.size() == 1 else null
+	var fuse := frag.spawn.fuse_ticks if frag != null else 0
+	_check(fuse > TICK_RATE, "with most of its fuse left", "%d ticks" % fuse)
+
+	var most_bounces := 0
+	for i in range(TICK_RATE * 4):
+		if frag != null:
+			most_bounces = maxi(most_bounces, frag.bounces)
+		if not gone.is_empty():
+			break
+		game.tick({})
+
+	_check(most_bounces > 0, "it bounced", str(most_bounces))
+	_check(gone.size() == 1, "and went off", str(gone.size()))
+
+	if gone.size() == 1:
+		var after := int(gone[0][2]) - thrown_at
+		_check(
+			absi(after - fuse) <= 2,
+			"on its fuse, not on the first thing it touched",
+			"%d ticks after the throw, fuse %d" % [after, fuse]
+		)
+
+	# A sticky stops on what it lands on.
+	gone.clear()
+	p.arsenal.give(ZeeWeaponIds.STICKY)
+	p.arsenal.add_ammo(ZeeWeaponIds.AMMO_GRENADE, 4)
+	_settle(game, 900, TICK_RATE)
+	# Down at the floor a few metres out: at the thrower's own feet its splash would kill
+	# them, the respawn would hand back a rifle, and the cook-off below would be a rifle.
+	for i in range(4):
+		_hold(game, 900, DotWeaponCommand.BUTTON_ATTACK, 0, -20.0)
+	_settle(game, 900, TICK_RATE / 2)
+
+	var sticky: ArenaProjectiles.Flying = (
+		game.projectiles.flying()[0] if game.projectiles.live_count() == 1 else null
+	)
+	_check(
+		sticky != null and sticky.sticks and sticky.resting and sticky.bounces == 0,
+		"a sticky stops dead where it lands",
+		str(game.projectiles.describe())
+	)
+	var stuck_at := sticky.position if sticky != null else Vector3.ZERO
+	_settle(game, 900, TICK_RATE / 4)
+	_check(
+		sticky != null and sticky.position.distance_to(stuck_at) < 0.001,
+		"and stays there"
+	)
+	for i in range(TICK_RATE * 3):
+		if not gone.is_empty():
+			break
+		game.tick({})
+	_check(gone.size() == 1, "then goes off", str(gone.size()))
+
+	# Cooked past its fuse: in the hand, at once, and it hurts.
+	_check(p.is_alive(), "the thrower survived their own sticky at range")
+	gone.clear()
+	p.arsenal.give(ZeeWeaponIds.FRAG)
+	p.arsenal.add_ammo(ZeeWeaponIds.AMMO_GRENADE, 4)
+	p.health.invulnerable = false
+	p.health.spawn_protection_ticks = 0
+	var before := p.health.health + p.health.armour
+	_settle(game, 900, TICK_RATE)
+	for i in range(TICK_RATE * 3 + 16):
+		_hold(game, 900, DotWeaponCommand.BUTTON_ATTACK)
+	var released := game.current_tick()
+	_settle(game, 900, 3)
+	_check(gone.size() == 1, "a grenade cooked past its fuse goes off", str(gone.size()))
+
+	if gone.size() == 1:
+		_check(
+			int(gone[0][2]) - released <= 2,
+			"at once, not twelve seconds later",
+			"%d ticks after letting go" % (int(gone[0][2]) - released)
+		)
+		_check(
+			(gone[0][0] as Vector3).distance_to(p.muzzle_position()) < 1.0,
+			"in the hand"
+		)
+	_check(
+		p.health.health + p.health.armour < before or not p.is_alive(),
+		"and the thrower pays for it"
+	)
+
+	# The counter on a weapon with no magazine reads its pool, not zero.
+	if not p.is_alive():
+		var _again := game.respawn_player(900)
+	p.arsenal.give(ZeeWeaponIds.BEAMER)
+	_switch_to(game, 900, ZeeWeaponIds.SLOT_HEAVY)
+	var cells := p.arsenal.ammo().count(ZeeWeaponIds.AMMO_CELL)
+	_check(
+		ArenaHud.rounds_in_hand(p) == cells and cells > 0,
+		"the HUD counts a beamer's cells, where a magazine count read 0",
+		"%d against %d" % [ArenaHud.rounds_in_hand(p), cells]
+	)
+	_check(
+		ArenaHud.weapon_line(p) == "Beamer",
+		"and names it", ArenaHud.weapon_line(p)
+	)
+	_check(
+		ArenaHud.cause_label(ZeeWeaponIds.MACHINE_PISTOL) == "Machine Pistol",
+		"the kill feed says Machine Pistol, not machine_pistol"
+	)
+
+	game.queue_free()
+	remove_child(game)
+	await get_tree().process_frame
+	_done()
+
+
+## One tick of [param id] holding [param buttons], looking along [param pitch].
+func _hold(game: ArenaGame, id: int, buttons: int, slot: int = 0, pitch: float = 0.0) -> void:
+	var move := DotFpsCommand.new()
+	move.pitch = pitch
+	move.yaw = game.player_for(id).controller.state.yaw
+	var fire := DotWeaponCommand.new()
+	fire.buttons = buttons
+	fire.slot = slot
+	fire.yaw = move.yaw
+	fire.pitch = move.pitch
+	game.tick({id: [move, fire]})
+
+
+## [param ticks] of [param id] doing nothing, so a deploy or a cooldown runs out.
+func _settle(game: ArenaGame, id: int, ticks: int) -> void:
+	for i in range(ticks):
+		_hold(game, id, 0)
+
+
+## Asks for [param slot] the way the number keys do, and waits for the switch.
+func _switch_to(game: ArenaGame, id: int, slot: int) -> void:
+	_hold(game, id, 0, slot)
+	_settle(game, id, TICK_RATE)
 
 
 # --- Spectating ------------------------------------------------------------
@@ -1020,34 +1282,68 @@ func _test_content() -> void:
 			"%s can be put in a loadout" % weapon.id
 		)
 
-	# The budget has to permit something interesting and refuse the obvious abuse.
+	# The budget has to permit something interesting and refuse the obvious abuse: a
+	# heavy with armour and a grenade on top is the combination nobody can answer.
 	var greedy := DotLoadout.empty(&"arena")
-	greedy.set_item(&"primary", &"rocket")
-	greedy.set_item(&"secondary", &"shotgun")
+	greedy.set_item(&"melee", ZeeWeaponIds.KNIFE)
+	greedy.set_item(&"primary", ZeeWeaponIds.LAUNCHER)
+	greedy.set_item(&"secondary", ZeeWeaponIds.REVOLVER)
+	greedy.set_item(&"thrown", ZeeWeaponIds.FRAG)
+	greedy.set_item(&"gear", &"armour")
 	_check(
 		not DotLoadoutValidator.validate(greedy, schema, everything).ok,
-		"the points budget refuses the two heaviest weapons together"
+		"the points budget refuses a heavy with armour and a grenade"
 	)
 
 	var sensible := DotLoadout.empty(&"arena")
-	sensible.set_item(&"primary", &"rifle")
-	sensible.set_item(&"secondary", &"pistol")
+	sensible.set_item(&"melee", ZeeWeaponIds.KNIFE)
+	sensible.set_item(&"primary", ZeeWeaponIds.RIFLE)
+	sensible.set_item(&"secondary", ZeeWeaponIds.PISTOL)
+	sensible.set_item(&"thrown", ZeeWeaponIds.FRAG)
+	sensible.set_item(&"gear", &"armour")
 	_check(
 		DotLoadoutValidator.validate(sensible, schema, everything).ok,
 		"and permits a normal one"
 	)
 
-	# The rocket launcher is the one paid item, so an unentitled player must not get
-	# it — which is dot-loadout's default and is worth checking here because this
-	# game's entitlement source is the thing that grants it.
+	# A melee weapon in the primary slot is a player who spawns with nothing to shoot.
+	# A loadout saved before the melee and throwable slots existed is conformed, not
+	# refused: what loading one does, and what puts a grenade under 5 for its owner.
+	var saved := DotLoadout.empty(&"arena")
+	saved.set_item(&"primary", ZeeWeaponIds.RIFLE)
+	saved.set_item(&"secondary", ZeeWeaponIds.PISTOL)
+	var _changes := DotLoadoutValidator.conform(saved, schema, everything)
+	_check(
+		saved.item_in(&"melee") == ZeeWeaponIds.KNIFE
+		and saved.item_in(&"thrown") == ZeeWeaponIds.FRAG
+		and saved.item_in(&"primary") == ZeeWeaponIds.RIFLE
+		and DotLoadoutValidator.validate(saved, schema, everything).ok,
+		"an old primary-and-sidearm loadout gains a knife and a frag and keeps its choices"
+	)
+	_check(
+		schema.default_loadout().item_in(&"thrown") == ZeeWeaponIds.FRAG,
+		"and the default loadout has a grenade in it, which an optional slot never put there"
+	)
+
+	var knives := DotLoadout.empty(&"arena")
+	knives.set_item(&"primary", ZeeWeaponIds.KNIFE)
+	knives.set_item(&"secondary", ZeeWeaponIds.PISTOL)
+	_check(
+		not DotLoadoutValidator.validate(knives, schema, everything).ok,
+		"and refuses a knife as a primary"
+	)
+
+	# The launcher is the one paid item, so an unentitled player must not get it —
+	# which is dot-loadout's default and is worth checking here because this game's
+	# entitlement source is the thing that grants it.
 	var unowned := DotLoadout.empty(&"arena")
-	unowned.set_item(&"primary", &"rocket")
-	unowned.set_item(&"secondary", &"pistol")
+	unowned.set_item(&"primary", ZeeWeaponIds.LAUNCHER)
+	unowned.set_item(&"secondary", ZeeWeaponIds.PISTOL)
 	_check(
 		not DotLoadoutValidator.validate(
 			unowned, schema, DotLoadoutEntitlements.none()
 		).ok,
-		"and refuses a rocket launcher to a player who has not unlocked it"
+		"and refuses the launcher to a player who has not unlocked it"
 	)
 	_done()
 
@@ -3930,7 +4226,7 @@ func _test_horde() -> void:
 	_section("monsters")
 
 	var catalogue := ArenaNpcs.catalogue()
-	_check(catalogue.size() == 3, "three monsters are catalogued")
+	_check(catalogue.size() == 4, "four monsters are catalogued: three that close and one that shoots")
 
 	var bad := PackedStringArray()
 
@@ -3995,6 +4291,8 @@ func _test_horde() -> void:
 	var horde := ArenaHorde.new()
 	horde.name = "Horde"
 	horde.game = _game
+	# Not to disk: a suite's players must not train the next run's monsters.
+	horde.persist_heat = false
 	add_child(horde)
 
 	var built := horde.setup()
@@ -4034,6 +4332,89 @@ func _test_horde() -> void:
 		brain.character != null and brain.character.seed_value == monster.instance_id,
 		"and a character seeded from its own instance"
 	)
+	_check(
+		brain.squad != null and brain.squad.squad_name == &"horde",
+		"and it joins the horde's squad, so only three go at one player at a time"
+	)
+
+	# A shot is heard. Every player's fire becomes a COMBAT sound on the horde's board,
+	# owned by the shooter, and a monster in earshot notices it on its next think.
+	var shooter: ArenaPlayer = null
+	for candidate in _game.players():
+		if candidate.is_alive():
+			shooter = candidate
+			break
+
+	if shooter != null:
+		horde.note_fire(shooter.player_id, monster.position() + Vector3(6.0, 0.0, 0.0))
+		horde.tick(1.0 / float(TICK_RATE))
+		_check(
+			brain.context.has_condition(DotNpcAiConditions.HEAR_COMBAT),
+			"and it hears a player fire"
+		)
+	else:
+		_check(false, "and it hears a player fire", "no living player to shoot")
+
+	# The gunner: same brain, its ranged branch chosen by its definition, and a shot that
+	# dot-combat resolves against a real player's hitboxes.
+	# A breath first, and a different spot: the horde's limits space spawns a quarter of a
+	# second apart, and the grunt is standing on the first one.
+	for step in range(TICK_RATE / 2):
+		horde.tick(1.0 / float(TICK_RATE))
+	var gunner := horde.spawn_one(ArenaNpcs.GUNNER, nav.points[nav.point_count() / 3])
+	var gunner_brain := gunner.brain as DotNpcAiBrain if gunner != null else null
+	_check(
+		gunner_brain != null and "\n".join(gunner_brain.tree.describe_lines()).contains("ranged"),
+		"a gunner builds the ranged branch from its definition"
+	)
+
+	# Spawn protection off the target. The match above is over and cycling, so whoever is
+	# alive was most likely respawned a moment ago, and a shot at a protected player is
+	# refused "invulnerable" whatever it hit — which made this check pass or fail on where
+	# the deathmatch happened to end. Ticking past the window does not help: a cycling
+	# match respawns everybody again. This is about the gunner, not the protection.
+	if shooter != null and _game.effects != null:
+		_game.effects.remove(ArenaEffects.PROTECTED, shooter.player_id)
+		shooter.health.invulnerable_until_tick = -1
+		# And the third record of it, dot-spawn's ledger.
+		if _game.player_stack != null and _game.player_stack.spawns != null \
+				and _game.player_stack.spawns.protection != null:
+			_game.player_stack.spawns.protection.revoke(
+				str(shooter.player_id), _game.current_tick()
+			)
+
+	if shooter != null and gunner != null:
+		# From the gunner's own muzzle, four metres from the player toward the middle of the
+		# room. A shot from anywhere else is relocated by dot-combat to where the horde says
+		# the gunner stands — the anti-cheat that stops a client shooting from somewhere it
+		# is not — and the first version of this check fired from a made-up point and hit
+		# the floor at the gunner's feet.
+		var body := shooter.controller.state.position
+		var inward := Vector3(-body.x, 0.0, -body.z)
+		inward = inward.normalized() if inward.length() > 0.1 else Vector3.RIGHT
+		# Toward the middle first, then round the player until nothing is in between:
+		# where the match left the player is wherever the bots' fight ended, and on
+		# dm_box "four metres toward the middle" is sometimes the far side of a box —
+		# which made this check pass or fail on how the deathmatch above happened to go.
+		var placed := inward
+		for turn in range(12):
+			var way := inward.rotated(Vector3.UP, TAU * float(turn) / 12.0)
+			if _game.combat.trace.line_of_sight(
+				body + way * 4.0 + Vector3(0.0, 1.4, 0.0), body + Vector3(0.0, 1.0, 0.0)
+			):
+				placed = way
+				break
+		(gunner.node as Node3D).global_position = body + placed * 4.0
+		var muzzle := gunner.position() + Vector3(0.0, 1.4, 0.0)
+		_game.combat.set_authoritative_origin(horde.entity_id_for(gunner), muzzle)
+		var shot: DotShot = horde.npc_shoot(gunner, muzzle, body + Vector3(0.0, 1.0, 0.0), 6.0)
+		_check(shot != null and shot.hit_anyone(), "and its shot hits a player through dot-combat",
+			("impact %s, player state %s, hitboxes %s, damages %s" % [
+				str(shot.impacts), str(body), str(shooter.hitboxes.global_position),
+				str(shot.damages.map(func(d: DotDamage) -> String: return d.refusal if d.refused else "landed"))
+			]) if shot != null else "no shot")
+	else:
+		_check(false, "and its shot hits a player through dot-combat", "no gunner or no player")
 
 	# --- The id space -----------------------------------------------------
 
@@ -4166,6 +4547,11 @@ func _test_horde() -> void:
 		horde.count() > 0,
 		"the director populates the arena when it is on",
 		"%d monsters, %d waves" % [horde.count(), waves.size()]
+	)
+
+	_check(
+		horde.heat.heatmap.cell_count(DotNpcAiHeatmap.TRAFFIC) > 0,
+		"and it learns where the players go while it runs"
 	)
 
 	_check(

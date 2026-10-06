@@ -44,7 +44,7 @@ const APP_URL := "arena"
 ## against a runtime error that aborts a test function part-way: the checks after the
 ## error never happen, the ones before it still print ok, and "N passed, 0 failed" cannot
 ## show the difference. See docs/testing.md.
-const CHECKS := 108
+const CHECKS := 112
 
 var _passed := 0
 var _failed := 0
@@ -271,6 +271,27 @@ func _test_module_loaded() -> void:
 	_check(
 		_server.console.find_cvar("arena_scorelimit") != null, "and its cvar"
 	)
+
+	# The NPC skill cvars, on a real console. A fake in dot-npc-ai's suite proves the
+	# binding's arithmetic; only this proves `add_cvar` hands back something it can bind to.
+	_check(
+		_server.console.find_cvar("npc_skill") != null
+			and _server.console.find_cvar("npc_reaction_scale") != null
+			and _server.console.find_cvar("npc_reaction_min") != null,
+		"and the three NPC skill cvars"
+	)
+
+	var harder := _server.console.set_cvar("npc_skill", "hard")
+	_check(
+		harder.ok and is_equal_approx(_game.npc_skill.skill, 0.5),
+		"and `npc_skill hard` at the console reaches the monsters' skill"
+	)
+	_check(
+		not _server.console.set_cvar("npc_skill", "hrad").ok
+			and is_equal_approx(_game.npc_skill.skill, 0.5),
+		"and a typo is refused rather than ignored"
+	)
+	var _reset := _server.console.set_cvar("npc_skill", "0")
 
 	# dot-map's own commands, on a real console. `map` was dot-server's and it changed the
 	# GAME; on a server running one game and several maps that is the one thing an operator
@@ -909,6 +930,10 @@ func _test_unload() -> void:
 	_check(
 		_server.console.find_cvar("arena_scorelimit") == null,
 		"and its cvar"
+	)
+	_check(
+		_server.console.find_cvar("npc_skill") == null,
+		"and the NPC skill cvars"
 	)
 	_check(not _server.modules.has_module("arena"), "and is no longer listed")
 

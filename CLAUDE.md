@@ -14,7 +14,8 @@ game-arena is the deployment shape where **twenty-six addons** are present at on
 is a game, and it is also the only test of the joins between them.
 
 ```
-the fight        dot-player-controller  dot-combat  dot-loadout  dot-match
+the fight        dot-player-controller  dot-combat  dot-weapon  dot-loadout  dot-match
+                 zee-dot-weapons (the weapons, and everything about them anybody sees)
 what you keep    dot-stats  dot-achievements  dot-leaderboard
 the world        dot-map  dot-props  dot-npc  dot-npc-ai  dot-npc-ai-director
 what plays next  dot-vote
@@ -88,7 +89,10 @@ addons refuse to know about each other:
 
 | Join | What it is |
 | --- | --- |
-| loadout → combat | `ArenaPlayer.give_loadout`, a table from item id to `DotWeapon` |
+| loadout → combat | `ArenaPlayer.give_loadout`, item ids that are the pack's weapon ids |
+| weapons → player | `ArenaPlayer._build_rig`, a `ZeeWeaponRig` handed the player's own arsenal by `arsenal_ref` |
+| weapons → wire | `ArenaPlayerNet`: `ZeeWeaponNet.all_specs()`, `net_weapon` for everybody, `net_carry` for the owner |
+| projectiles → clients | `ArenaProjectiles.launched` → `ArenaEvents.Kind.LAUNCH` → a copy flown by `client_tick` |
 | combat → match | `ArenaGame._on_entity_killed`, `entity_killed` → `report_kill` |
 | match → loadout | `ArenaGame._on_respawn_due` → `_apply_loadout_deferred` |
 | movement → combat | `arsenal.movement/airborne/crouched` pushed from `DotFpsState` |
@@ -545,7 +549,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-396 + 112 + 149 + 107 checks, `headless_stack` adds 54 over six sections, and `headless_admin` 46 over ten.
+`headless_match` 478 checks over 29 sections, `headless_net` 171 over 16, `headless_presentation` 112, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1185,15 +1189,20 @@ Three things were written and not joined, and a fourth ran twice.
 
 **Here it was not the cause, and the leak is still open.** `dedicated` exits with 23 ObjectDB instances and 6 resources, exactly as many before the change as after (2026-09-23) — too few to be the whole script graph, so a different shape from the one buses had.
 
+## The horde fights as a squad, and one of it shoots (2026-10-05)
+
+Four kinds now. Grunts, brutes and stalkers close in, but only three of the horde attack one player at a time (`"attackers"` in `ArenaNpcs`, dot-npc-ai's attack slots); the rest wait on a ring just out of reach, shared out so they stand apart, and the stalkers — the most tactical — end up behind you. The **gunner** builds a ranged branch from its definition's `range_damage`: it breaks off to cover when badly hurt, one per player takes the flank role and goes round, and the rest hold a 9-18 m band, strafing, and fire through `ArenaHorde.npc_shoot` — a `DotShot` dot-combat resolves against real hitboxes, so armour, the kill feed and lag compensation all apply. Its accuracy is set to about half, deliberately: a hard preset's 0.85 at three shots a second is a gunner nobody can cross the room against.
+
+The monsters **hear**: every player shot is a combat sound owned by the shooter, every rocket in the air is a danger with its splash as the reach (they dodge), every detonation an explosion. And they **learn the map**: `ArenaHorde.heat` samples where players walk twice a second, the monsters with the tactics for it patrol those places and wait facing the way players come, and a real server — `ArenaModule` turns it on — keeps what it learned per map in `user://npc_heat` across restarts. `ArenaGame.persist_npc_heat` is off by default because every suite builds an ArenaGame.
+
+**Monsters are still not replicated.** `ArenaNetBridge` sends nothing about them, so all of this is seen offline and on a listen server, and a remote client sees no monsters at all. That is the next piece of work for the horde mode to be playable online, and dot-npc's `DotNpcNetSync` is what it was written for.
+
 ## Things deliberately not here
 
-- **Projectiles.** The rocket launcher is declared as `Delivery.PROJECTILE` and
-  dot-combat records the launch vector without spawning anything. A projectile is a
-  replicated entity with a lifetime; the bridge now exists to give it one.
 - **Pickups in the world.** dot-loadout ships `DotPickup` and `DotPickupField`; the map
   places none. An arena with weapon and armour pickups is most of what makes map
   control matter, and it is a level-design decision rather than a wiring one.
-- **Any actual audio files, and a viewmodel.** The catalogue is written and every id still resolves to a path in `audio/` that does not exist — which is the right way round, because what this game was missing was the decision rather than the files. It is no longer silent, though: `sound_recipes()` maps each of the nine ids to a `DotAudioSynth` voice, and `DotAudioSinkGodot` falls through to that bank when a path resolves to nothing. The three weapons deliberately get three *different* voices, because a rail that is a quieter rifle is the one thing weapon audio must not be — the point of hearing somebody else's shot is knowing what they are holding before you come round the corner. Dropping nine `.ogg`s in still changes nothing else, and now it also switches the stand-ins off one id at a time. Nothing is still drawn for the weapon in your own hands.
+- **Any actual audio files.** The catalogue is written and every id still resolves to a path in `audio/` that does not exist — which is the right way round, because what this game was missing was the decision rather than the files. It is no longer silent, though: `sound_recipes()` maps each of the nine ids to a `DotAudioSynth` voice, and `DotAudioSinkGodot` falls through to that bank when a path resolves to nothing. The three weapons deliberately get three *different* voices, because a rail that is a quieter rifle is the one thing weapon audio must not be — the point of hearing somebody else's shot is knowing what they are holding before you come round the corner. Dropping nine `.ogg`s in still changes nothing else, and now it also switches the stand-ins off one id at a time. The weapons themselves are zee-dot-weapons' now and bring their own baked reports, so these stand-ins are only what a client shell too old to carry `ZeeShotFx` falls back to.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
   the trigger. It is a test fixture, not an opponent.
 - **A master server.** `DotBrowserSourceBackbone` reads a listing that nothing is yet
@@ -1207,3 +1216,24 @@ Three things were written and not joined, and a fourth ran twice.
 ## The map vote is drawn on the client shell (2026-10-04)
 
 The vote wrapper owns a `DotVoteBallotFeed` and polls it every `advance`; the module points its `ballot_fn` at `server.send_notice`, one copy per playing session with that session's voter id as `you`, under the topic `map_ballot`. dot-server-deploy's shell draws it as a dot-ui `DotBallotPanel` beside the server's own `game_ballot` — number keys, F3 and a click, or both, and every voter's avatar on their choice — and a click goes back as the same `!vote`-style command a player could type. Standalone, with no shell, nothing draws it and chat still carries the ballot. Defaults moved with dot-vote's: the map clock is forty-five minutes (`duration_sec` 2700, and the map director's fallback `map_seconds` with it) and the ballot opens 150 s before it. `round_based` is on, because dot-match's `round_ended` already reaches the director, so an operator's `time_up: finish_round` plays the round in progress out before the map changes.
+
+## zee-dot-weapons, and the half of the weapons nobody could see (2026-10-05)
+
+The four weapons this game wrote for itself (`ArenaContent.pistol()` and the rest) are gone, and all twenty-seven of zee-dot-weapons are what a player carries. `ArenaContent.weapons()` is `ZeeWeaponPack.weapons(damage_table())`. The damage table is the pack's four types plus this game's `bullet` (the horde's gunner still fires bullets), `fall` and `world`. It is built once and handed to the pack and to dot-combat, so the launcher's splash and the registered `blast` are one object rather than two that agree today. `addons/zee_weapons` is linked and in `.gitignore`. The CC0 art is vendored in `assets/` (1.9 MB, as playground and smash-copter do), and the client points `ZeeModelCache.set_asset_root` at `ArenaPaths.root()` on `_ready` and back at `res://` on `_exit_tree`.
+
+**The rig drives the player's own arsenal, and that is what let it be rebuilt.** `ArenaPlayer._build_rig` hands a `ZeeWeaponRig` the existing `Arsenal` node by `arsenal_ref` rather than letting it build its own. A rig's role, which decides what it draws, is fixed at `setup()`, and a player is built before anybody knows whether it is the one at this keyboard. So the client rebuilds the rig as LOCAL when it adopts its player (`arm_first_person`, with a `ZeeViewModel` under the camera), and everything carried survives, because it lives in the arsenal. Every reader of `player.arsenal` (the HUD, the netcode, the mod tools, the loadout) reads the same node it always did. Simulation goes through `weapons.simulate_tick`, which runs the arsenal and then the bash and keeps its own previous command. `used` is the rig's signal, so it carries the bash and is silent in a replay. Somebody else's gun is a `ZeeWorldModel` on a hand `ArenaPlayer.attachment()` answers for, because the avatar rig has a body, a head and a crest and no hand. It is driven from the snapshot on a mirror and from the rig on anything this machine simulates (an offline bot), on one code path. The camera's half of the recoil is added in `present`, the one place the camera is written, and through `has_method`: `view_punch` and `shot_fx` are newer than the client shell's zee-dot-weapons v0.1.3, and a call by name to a method the shell's copy lacks would not compile. On that shell the game still runs, with no punch and with arena's own flash and report in place of the pack's.
+
+What wiring it found, in the order it was found:
+
+- **A connected client's arsenal was empty for the whole of every match.** A loadout is resolved from a store on the server and nothing sent the result, so the client predicted no shot, drew no flash, played no report, its HUD read zero and its number keys selected nothing, while the server fired everything correctly. `headless_net`'s `[audience]` had written it down as "not asserted". `net_carry` (one bit per weapon, owner-only, for the ammunition's reason) fills the owner's arsenal through `ArenaContent.apply_carry` before the predictor replays, and `correct_ammo` follows. `net_weapon` (five bits, everybody's) says which weapon is in hand, which `net_slot` cannot once there are nine primaries in slot 3. Armed by skipping the `apply_carry`: four checks fail (`0 against 8322`).
+- **Every reconciliation re-played every shot in the window it replayed.** dot-net's predictor calls `_net_simulate` for a replayed tick exactly as for a fresh one, and nothing marked which was which, so `used` fired again per correction: the sound, the flash and the kick several times per shot at a tenth of a second's latency. `ArenaPlayerNet._predict` wraps any tick at or below the newest one simulated in `begin_replay` / `end_replay`. Armed: a replayed shot is drawn twice.
+- **Every rocket that went off more than 2.5 m from its owner exploded in the owner's face.** `ArenaProjectiles._detonate` went through `DotCombatManager.resolve_shot`, which corrects any shot whose origin is more than `max_origin_error` from where it believes the attacker is (right for a gun) and then re-traces, clearing the impacts set by hand. With `max_range` 0 the trace ends where it starts: at the owner's eye. The launcher hurt nobody but the person firing it for as long as it existed, and nothing could see it, because no check asked the shooter's health. Found by the first one that asked a thrower's. The believed origin is pinned to the blast for that one resolution and put back (`ArenaProjectiles.origin_of`). Armed: a frag thrown fifteen metres took exactly half its splash off the thrower.
+- **Projectiles knew only contact.** A pack grenade has a fuse that starts when the pin comes out, so `ArenaProjectiles` now separates a fused spawn (bounces, rolls to rest, sticks if its definition says `sticks`, goes off on the fuse) from a contact one (the launcher). A grenade cooked past its fuse (no velocity, no fuse) goes off at once, where it used to float for twelve seconds. The thrower is ignored for eight ticks rather than one, because a grenade lobbed while running is overtaken by its own thrower.
+- **Nothing drew a projectile, offline or connected, and a connected client was told nothing about one.** `ArenaEvents.Kind.LAUNCH` (kind 10, after the monsters' 8 and 9) carries who, which weapon, from where, how fast and the fuse. A client flies a copy through the same `ArenaProjectiles` against the same analytic map, from `client_tick`, and its copy decides nothing because its combat manager is not the authority. A mirroring client also swaps its combat trace on a map change now, or its copies bounced off the old map. `ArenaProjectileView` draws the list, and `ArenaPresentation.on_explosion` plays `scenes/fx/explosion.tscn` and a shake that falls off with distance.
+- **The highest slot is the grenade.** `give_loadout` spawned a player holding whatever was in the highest slot, which was the launcher when there were four weapons and is the throwable in the pack's layout. `_better_hand` takes the heaviest gun.
+- **Optional loadout slots are never in the default.** dot-loadout's `default_loadout()` fills required slots only, so with melee and the throwable optional, the store's default replaced the class loadout a frame after every spawn and the 5 key selected nothing. Found by rendering, not by a check. Both are required now. A loadout saved before they existed is filled in rather than refused, because this game conforms on load and conforming fills an empty required slot before it trims to budget (asserted in `headless_match`'s content section).
+- **Three things only a rendered frame showed** (`tools/screenshot_weapons.sh`, which plays the offline client through its own input path): the explosion began as the death burst's scene, a spray of dark red gibs that reads as somebody dying; a resting frag at fourteen metres is two brown pixels, so a grenade carries a red fuse light; and the weapon's name was right-aligned over a magazine count drawn at the left of its box.
+
+`headless_match`'s *zee-dot-weapons in the arena* (28 checks) and `headless_net`'s *[weapons over the wire]* (14) are the suites. `headless_match`'s horde gunner check now chooses a spot with line of sight and strips spawn protection from its target, because it had been passing or failing on how the deathmatch above it happened to end.
+
+**Release order.** The pack works against the shell's zee-dot-weapons v0.1.3. The view punch and the pack's own tracers and reports need zee-dot-weapons tagged past 0d7a364 and the client shell rebuilt before they reach a delivered game.

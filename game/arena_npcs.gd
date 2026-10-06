@@ -31,6 +31,7 @@ const CHANNEL := "arena.npcs"
 const GRUNT := &"arena_grunt"
 const BRUTE := &"arena_brute"
 const STALKER := &"arena_stalker"
+const GUNNER := &"arena_gunner"
 
 const FACTION := &"monster"
 
@@ -44,7 +45,7 @@ static func catalogue() -> DotNpcCatalogue:
 	var out := DotNpcCatalogue.new()
 	out.meta = {"game": "arena"}
 
-	for def in [_grunt(), _brute(), _stalker()]:
+	for def in [_grunt(), _brute(), _stalker(), _gunner()]:
 		var added := out.add(def)
 
 		if not added.ok:
@@ -84,6 +85,39 @@ static func limits() -> DotNpcLimits:
 	return out
 
 
+## The one that shoots. Holds a range band rather than closing, takes cover when hurt, and
+## — with a squadmate already pinning the player down — one of them goes round the side.
+##
+## [b]Why the arena has one.[/b] Three melee kinds teach a player one lesson: keep moving
+## and shoot what is closest. A monster that fights from range, from cover, from the side,
+## is the one that makes the room's geometry matter, and it is what dot-npc-ai's squad
+## roles are for: a gunner pinning you while another walks round you is the encounter the
+## tactical shooters built their reputations on.
+static func _gunner() -> DotNpcDef:
+	var def := DotNpcDef.make(GUNNER, ArenaPaths.rebase(ArenaPaths.rebase("res://npcs/arena_gunner.tscn")))
+	def.display_name = "Gunner"
+	def.category = &"monster"
+	def.faction = FACTION
+	def.brain_script_path = BRAIN_PATH
+	def.weight = DotNpcDef.Weight.NORMAL
+	def.cost = 3
+	def.max_health = 55.0
+	def.move_speed = 3.8
+	def.sight_range = 34.0
+	def.sight_half_angle_deg = 75.0
+	def.hearing_range = 20.0
+	def.require_line_of_sight = true
+	# `range_damage` is what makes the brain build its ranged branch. Six a shot at
+	# three shots a second is a gunner that hurts if ignored and loses a straight duel —
+	# which is the point: it is meant to be flanked, not traded with.
+	def.meta = {
+		"damage": 6.0, "reach": 1.9, "attack_interval": 1.0,
+		"range_damage": 6.0, "fire_interval": 0.35, "near": 9.0, "far": 18.0,
+		"squad": "horde", "attackers": 3,
+	}
+	return def
+
+
 static func _grunt() -> DotNpcDef:
 	var def := DotNpcDef.make(GRUNT, ArenaPaths.rebase(ArenaPaths.rebase("res://npcs/arena_grunt.tscn")))
 	def.display_name = "Grunt"
@@ -98,7 +132,7 @@ static func _grunt() -> DotNpcDef:
 	def.sight_half_angle_deg = 70.0
 	def.hearing_range = 14.0
 	def.require_line_of_sight = true
-	def.meta = {"damage": 12.0, "reach": 1.9, "attack_interval": 1.0}
+	def.meta = {"damage": 12.0, "reach": 1.9, "attack_interval": 1.0, "squad": "horde", "attackers": 3}
 	return def
 
 
@@ -119,7 +153,7 @@ static func _brute() -> DotNpcDef:
 	def.sight_half_angle_deg = 60.0
 	def.hearing_range = 18.0
 	def.require_line_of_sight = true
-	def.meta = {"damage": 34.0, "reach": 2.6, "attack_interval": 1.6}
+	def.meta = {"damage": 34.0, "reach": 2.6, "attack_interval": 1.6, "squad": "horde", "attackers": 3}
 	return def
 
 
@@ -140,7 +174,9 @@ static func _stalker() -> DotNpcDef:
 	# is a stalker that gives up at the first pillar, which is the one thing it is not
 	# supposed to do.
 	def.require_line_of_sight = false
-	def.meta = {"damage": 9.0, "reach": 1.7, "attack_interval": 0.55}
+	# One squad for the whole horde, three on a player at a time. The rest surround — and
+	# the stalker, the most tactical, is the one that ends up behind you.
+	def.meta = {"damage": 9.0, "reach": 1.7, "attack_interval": 0.55, "squad": "horde", "attackers": 3}
 	return def
 
 

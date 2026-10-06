@@ -1,0 +1,120 @@
+[gd_scene load_steps=11 format=3]
+
+[sub_resource type="Gradient" id="soft"]
+offsets = PackedFloat32Array(0, 0.35, 1)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 0.55, 1, 1, 1, 0)
+
+[sub_resource type="GradientTexture2D" id="soft_tex"]
+gradient = SubResource("soft")
+width = 64
+height = 64
+fill = 1
+fill_from = Vector2(0.5, 0.5)
+fill_to = Vector2(1, 0.5)
+
+[sub_resource type="StandardMaterial3D" id="fire_mat"]
+transparency = 1
+blend_mode = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+billboard_mode = 3
+billboard_keep_scale = true
+albedo_texture = SubResource("soft_tex")
+
+[sub_resource type="QuadMesh" id="fire_quad"]
+material = SubResource("fire_mat")
+size = Vector2(1.4, 1.4)
+
+[sub_resource type="Gradient" id="fire_ramp"]
+offsets = PackedFloat32Array(0, 0.25, 0.6, 1)
+colors = PackedColorArray(1, 0.95, 0.7, 1, 1, 0.62, 0.18, 0.9, 0.85, 0.25, 0.05, 0.5, 0.3, 0.08, 0.02, 0)
+
+[sub_resource type="StandardMaterial3D" id="smoke_mat"]
+transparency = 1
+shading_mode = 0
+vertex_color_use_as_albedo = true
+billboard_mode = 3
+billboard_keep_scale = true
+albedo_texture = SubResource("soft_tex")
+
+[sub_resource type="QuadMesh" id="smoke_quad"]
+material = SubResource("smoke_mat")
+size = Vector2(1.8, 1.8)
+
+[sub_resource type="Gradient" id="smoke_ramp"]
+offsets = PackedFloat32Array(0, 0.3, 1)
+colors = PackedColorArray(0.25, 0.22, 0.2, 0, 0.3, 0.28, 0.26, 0.6, 0.4, 0.4, 0.4, 0)
+
+[sub_resource type="StandardMaterial3D" id="spark_mat"]
+shading_mode = 0
+vertex_color_use_as_albedo = true
+
+[sub_resource type="BoxMesh" id="spark_box"]
+material = SubResource("spark_mat")
+size = Vector3(0.05, 0.05, 0.05)
+
+[sub_resource type="Gradient" id="spark_ramp"]
+offsets = PackedFloat32Array(0, 1)
+colors = PackedColorArray(1, 0.85, 0.4, 1, 1, 0.35, 0.05, 1)
+
+[node name="Explosion" type="Node3D"]
+
+[node name="Fireball" type="CPUParticles3D" parent="."]
+position = Vector3(0, 0.4, 0)
+amount = 20
+lifetime = 0.45
+one_shot = true
+explosiveness = 1.0
+mesh = SubResource("fire_quad")
+emission_shape = 1
+emission_sphere_radius = 0.4
+direction = Vector3(0, 1, 0)
+spread = 180.0
+gravity = Vector3(0, 2, 0)
+initial_velocity_min = 2.0
+initial_velocity_max = 6.0
+damping_min = 6.0
+damping_max = 10.0
+scale_amount_min = 0.8
+scale_amount_max = 2.2
+color_ramp = SubResource("fire_ramp")
+
+[node name="Smoke" type="CPUParticles3D" parent="."]
+position = Vector3(0, 0.6, 0)
+amount = 12
+lifetime = 1.4
+one_shot = true
+explosiveness = 0.85
+mesh = SubResource("smoke_quad")
+emission_shape = 1
+emission_sphere_radius = 0.8
+direction = Vector3(0, 1, 0)
+spread = 60.0
+gravity = Vector3(0, 1.2, 0)
+initial_velocity_min = 0.6
+initial_velocity_max = 2.0
+damping_min = 1.0
+damping_max = 2.0
+scale_amount_min = 1.0
+scale_amount_max = 2.0
+color_ramp = SubResource("smoke_ramp")
+
+[node name="Sparks" type="CPUParticles3D" parent="."]
+position = Vector3(0, 0.3, 0)
+amount = 28
+lifetime = 0.8
+one_shot = true
+explosiveness = 1.0
+mesh = SubResource("spark_box")
+direction = Vector3(0, 1, 0)
+spread = 85.0
+gravity = Vector3(0, -14, 0)
+initial_velocity_min = 6.0
+initial_velocity_max = 13.0
+color_ramp = SubResource("spark_ramp")
+
+[node name="Light" type="OmniLight3D" parent="."]
+position = Vector3(0, 0.8, 0)
+light_color = Color(1, 0.62, 0.25, 1)
+light_energy = 5.0
+omni_range = 9.0

@@ -59,3 +59,7 @@ Thumbs.db
 /addons/dot_player_char
 /addons/dot_player_class
 /addons/dot_team
+# zee-dot-weapons, the weapons pack: gamemann's rather than modcommunity's, resolved by
+# dot-ci and bootstrap.sh from this line like every addon above. Its art is NOT here --
+# it is vendored under assets/, because a delivered pack has to carry it.
+/addons/zee_weapons

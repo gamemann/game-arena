@@ -29,6 +29,13 @@ const SOUND_DIR := "res://audio"
 ## The ping an administrator's beacon makes. See [method sound_catalogue].
 const BEACON_SOUND := &"beacon"
 
+## A rocket or a grenade going off: one id for the sound and the effect.
+const EXPLOSION := &"explosion"
+
+## How far an explosion shakes the camera, and how hard at its centre.
+const EXPLOSION_SHAKE_RANGE := 18.0
+const EXPLOSION_SHAKE := 0.6
+
 ## Degrees of view per unit of mouse motion at a sensitivity of 1.
 ##
 ## The genre's own yaw constant, and the reason `sensitivity` defaults to 2.5 rather than
@@ -306,6 +313,25 @@ static func sound_catalogue() -> DotAudioCatalogue:
 		fire.tags = [&"weapon"]
 		c.add(fire)
 
+	# A rocket or a grenade going off. Positional and carrying far, because where an
+	# explosion was is the one thing about it a player has to act on; few at once, because
+	# three frags landing together are one big noise and not three.
+	var blast := DotAudioDef.new()
+	blast.id = EXPLOSION
+	blast.path = "%s/explosion.ogg" % SOUND_DIR
+	blast.kind = DotAudioDef.Kind.POSITIONAL_3D
+	blast.bus = &"SFX"
+	blast.unit_size = 22.0
+	blast.max_distance = 140.0
+	blast.max_concurrent = 3
+	blast.priority = 85
+	# The heavy shot's voice, an octave and a bit down: until there is a recording, the
+	# lowest thing the synthesiser makes is what reads as a blast rather than a gun.
+	blast.pitch_min = 0.42
+	blast.pitch_max = 0.5
+	blast.tags = [&"weapon"]
+	c.add(blast)
+
 	var impact := DotAudioDef.new()
 	impact.id = &"impact"
 	impact.path = "%s/impact.ogg" % SOUND_DIR
@@ -422,6 +448,7 @@ static func sound_recipes() -> Dictionary:
 		&"fire_shotgun": DotAudioSynth.Voice.SHOT_HEAVY,
 		&"fire_rail": DotAudioSynth.Voice.SHOT_TIGHT,
 		&"impact": DotAudioSynth.Voice.IMPACT,
+		EXPLOSION: DotAudioSynth.Voice.SHOT_HEAVY,
 		&"hit_marker": DotAudioSynth.Voice.BLIP,
 		&"hurt": DotAudioSynth.Voice.HURT,
 		&"died": DotAudioSynth.Voice.DIE,
@@ -520,6 +547,19 @@ static func fx_catalogue() -> DotFxCatalogue:
 	gib.max_distance = 80.0
 	gib.min_quality = 2
 	c.add(gib)
+
+	# A fireball, smoke, sparks and a light. Drawn at every quality and above everything
+	# but the hurt flash: where something went off is information, not decoration. It
+	# began as the death burst's scene, and the first render of a frag going off was a
+	# spray of dark red gibs twenty metres away — which reads as somebody dying there.
+	var boom := DotFxDef.new()
+	boom.id = EXPLOSION
+	boom.scene_path = "%s/explosion.tscn" % FX_DIR
+	boom.lifetime_ms = 1400
+	boom.cost = 10
+	boom.priority = 85
+	boom.max_distance = 140.0
+	c.add(boom)
 
 	var hurt := DotFxDef.new()
 	hurt.id = &"hurt_flash"
@@ -798,26 +838,36 @@ static func facing(at: Vector3, direction: Vector3) -> Transform3D:
 ##
 ## [b]The flash is pushed out in front of the eye.[/b] A shot starts at the view, and a
 ## flash drawn there is drawn around the camera. Half a metre along the aim and a little
-## below it is where a gun would be if this game drew one.
-func on_used(outcome: DotWeaponOutcome) -> void:
+## below it is where a gun would be, for a client whose weapon does not draw its own —
+## [param weapon_draws] says it does, and then only the holes and the hit marker are here.
+func on_used(outcome: DotWeaponOutcome, weapon_draws: bool = false) -> void:
 	if outcome == null or not outcome.used:
 		return
 
 	for shot in outcome.shots:
-		var aim := facing(shot.origin, shot.direction)
-		var muzzle := aim.translated_local(MUZZLE_OFFSET)
-		# The weapon's id rather than a slot number. A slot is where a player put
-		# something; an id is what it is, and a sound catalogue keyed on a slot would
-		# play the rifle whenever anybody put a shotgun in slot one.
-		var weapon_id: StringName = shot.weapon_id if shot.weapon_id != &"" else &"rifle"
-		on_fired(weapon_id, muzzle, true)
+		if not weapon_draws:
+			var aim := facing(shot.origin, shot.direction)
+			var muzzle := aim.translated_local(MUZZLE_OFFSET)
+			# The weapon's id rather than a slot number. A slot is where a player put
+			# something; an id is what it is, and a sound catalogue keyed on a slot would
+			# play the rifle whenever anybody put a shotgun in slot one.
+			var weapon_id: StringName = shot.weapon_id if shot.weapon_id != &"" else &"rifle"
+			on_fired(weapon_id, muzzle, true)
 
 		# Impacts are a list because a shotgun is one shot with several of them, and a
 		# single impact sound for eight pellets is a shotgun that sounds like a rifle. Each
 		# faces along the aim, not along its own pellet: close enough for a decal, and the
 		# pellet directions are not kept per impact.
+		#
+		# [b]With the weapon drawing its own shot, only the hole is this layer's.[/b]
+		# zee-dot-weapons' `ZeeShotFx` puts the flash at the real muzzle, a tracer, a spark
+		# and a report per weapon; drawing this layer's as well was two flashes, two sparks
+		# and a stand-in rifle report under the real one.
 		for at in shot.impacts:
-			on_impact(facing(at, shot.direction), false)
+			if weapon_draws:
+				fx.spawn_decal(&"bullet_hole", facing(at, shot.direction))
+			else:
+				on_impact(facing(at, shot.direction), false)
 
 		if not shot.damages.is_empty():
 			on_hit_confirmed()
@@ -830,6 +880,17 @@ func on_fired(weapon_id: StringName, muzzle: Transform3D, mine: bool) -> void:
 		# Only your own weapon kicks the camera. Somebody else's rifle going off beside
 		# you is a sound and a flash; shaking for it would make a crowded room unplayable.
 		fx.shake.add(0.08)
+
+
+## A rocket or a grenade went off at [param at]; [param eye] is where this client's
+## camera is, for how hard it shakes. Everybody's, the local player's own included.
+func on_explosion(at: Vector3, eye: Vector3) -> void:
+	audio.play_at(EXPLOSION, at)
+	fx.spawn(EXPLOSION, Transform3D(Basis.IDENTITY, at))
+
+	var near := 1.0 - clampf(eye.distance_to(at) / EXPLOSION_SHAKE_RANGE, 0.0, 1.0)
+	if near > 0.0:
+		fx.shake.add(EXPLOSION_SHAKE * near * near)
 
 
 func on_impact(at: Transform3D, on_player: bool) -> void:

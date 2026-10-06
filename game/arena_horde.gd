@@ -101,6 +101,38 @@ var spawner: DotNpcSpawner = null
 var director: DotNpcDirector = null
 var senses: DotNpcSenses = null
 
+## The monsters' squads: one per catalogue `"squad"`, so a kind shares what it sees and only
+## `"attackers"` of it go at one player while the rest surround. On the spawner as metadata.
+var squads: DotNpcAiSquads = DotNpcAiSquads.new()
+
+## What the monsters can hear: every shot a player fires, every rocket in the air, every
+## explosion. A monster you shoot from out of its sight comes to find you; one under a
+## rocket gets out from under it.
+var sounds: DotNpcAiSounds = DotNpcAiSounds.new()
+
+## How far a shot is heard, in metres, by a monster of alertness 1. Most of the arena: a
+## gunfight is not a secret.
+const GUNFIRE_RADIUS := 32.0
+
+## How far an explosion is heard.
+const EXPLOSION_RADIUS := 45.0
+
+## How far a gunner's shot travels before it is spent, in metres.
+const GUNNER_RANGE := 60.0
+
+## What the monsters have learned of where players go, kept per map in `user://npc_heat`
+## across restarts and patrolled by the monsters with the tactics for it. See
+## [DotNpcAiHeatKeeper].
+var heat: DotNpcAiHeatKeeper = DotNpcAiHeatKeeper.new("user://npc_heat", "arena")
+
+## Whether the learned traffic is read from and written to disk, as well as
+## [member ArenaGame.persist_npc_heat] — both, so a suite can be sure either way.
+var persist_heat: bool = true
+
+## A rocket is dangerous this far beyond its splash, so a monster clears it rather than
+## standing exactly on the edge of the blast.
+const DANGER_MARGIN := 1.0
+
 ## The graph the monsters walk on, rebuilt on every map change.
 var nav: DotNpcNavData = null
 
@@ -123,6 +155,9 @@ var _registered: bool = false
 
 
 func _exit_tree() -> void:
+	if spawner != null:
+		heat.save(spawner.now())
+
 	if _registered:
 		DotRegistry.unregister_instance(SERVICE, self)
 		_registered = false
@@ -162,6 +197,13 @@ func setup() -> DotResult:
 	# and read by nobody — with the spawner running on defaults that look identical
 	# until a monster refuses to give up on somebody behind a pillar.
 	spawner.senses = senses
+	# Before the first spawn, so no monster ever thinks a tick at the wrong skill, joins no
+	# squad, or misses a sound.
+	if game.npc_skill != null:
+		game.npc_skill.attach(spawner)
+	squads.attach(spawner)
+	sounds.attach(spawner)
+	heat.persist = persist_heat and game.persist_npc_heat
 	add_child(spawner)
 
 	spawner.spawned.connect(_on_spawned)
@@ -172,7 +214,10 @@ func setup() -> DotResult:
 	director.name = "Director"
 	director.spawner = spawner
 	director.rules = _rules()
-	director.population = [ArenaNpcs.GRUNT, ArenaNpcs.STALKER, ArenaNpcs.BRUTE]
+	# Weighted by repetition: grunts are the bulk, and a gunner is one in five.
+	director.population = [
+		ArenaNpcs.GRUNT, ArenaNpcs.GRUNT, ArenaNpcs.STALKER, ArenaNpcs.BRUTE, ArenaNpcs.GUNNER,
+	]
 	director.enabled = enabled
 	add_child(director)
 
@@ -290,7 +335,10 @@ func tick(delta: float) -> void:
 
 	_rebuild_candidates()
 	spawner.set_candidates(_candidates)
+	_hear_rockets(delta)
+	_learn(delta)
 	spawner.tick(delta)
+	squads.prune()
 
 	if director == null:
 		return
@@ -308,6 +356,94 @@ func tick(delta: float) -> void:
 		)
 
 	director.tick(delta)
+
+
+## A player fired. Every monster in earshot hears it, and knows who.
+##
+## Called by [ArenaGame] for every tick a living player's weapon produced a shot or a
+## rocket. Owned by the player's candidate id, so a monster that hears it remembers the
+## shooter — and goes to look, if it has nothing better to do.
+func note_fire(player_id: int, origin: Vector3) -> void:
+	if spawner == null:
+		return
+
+	sounds.emit(
+		DotNpcAiSounds.Kind.COMBAT, origin, GUNFIRE_RADIUS, spawner.now(), 0.5,
+		StringName(str(player_id))
+	)
+
+
+## Every rocket in the air is a danger with its splash as its reach, for this tick only.
+##
+## Re-emitted every tick rather than once at launch, because a rocket's danger is where it
+## IS: a monster flees from the rocket coming at it, not from the muzzle it left. And every
+## detonation is an explosion, heard across the arena.
+func _hear_rockets(delta: float) -> void:
+	var projectiles = game.projectiles
+
+	if projectiles == null:
+		return
+
+	if not projectiles.detonated.is_connected(_on_detonated):
+		projectiles.detonated.connect(_on_detonated)
+
+	for rocket in projectiles.in_flight():
+		var reach := float(rocket[1]) + DANGER_MARGIN
+		sounds.emit(
+			DotNpcAiSounds.Kind.DANGER, rocket[0], reach * 3.0, spawner.now(), delta * 1.5,
+			&"", reach
+		)
+
+
+## A gunner fired. Resolved by dot-combat like any player's shot — hitboxes, armour, the
+## kill feed — and heard by every other monster, which is what draws the rest of a horde to
+## a firefight one of them started.
+##
+## Returns the resolved shot, or null when none was taken.
+func npc_shoot(npc: DotNpcInstance, origin: Vector3, aim_at: Vector3, amount: float) -> DotShot:
+	if game == null or game.combat == null or npc == null or not npc.is_alive():
+		return null
+
+	var type := game.combat.damage_type(ArenaContent.DAMAGE_BULLET)
+	var direction := aim_at - origin
+
+	if type == null or direction.length_squared() < 0.0001:
+		return null
+
+	var shot := DotShot.make(
+		npc.def.id if npc.def != null else &"monster", entity_id_for(npc), game.current_tick(), 0
+	)
+	shot.origin = origin
+	shot.direction = direction.normalized()
+	shot.damage = amount
+	shot.damage_type = type
+	shot.max_range = GUNNER_RANGE
+	# The pellet directions. A weapon builds them; a shot made by hand has none until this,
+	# and dot-combat traces the pellets, not the direction — so without it every gunner
+	# shot was resolved, counted and hit nothing, which a suite asking "did it hit" found.
+	shot.scatter()
+	var resolved := game.combat.resolve_shot(shot)
+
+	if spawner != null:
+		sounds.emit(DotNpcAiSounds.Kind.COMBAT, origin, GUNFIRE_RADIUS, spawner.now(), 0.5)
+
+	return resolved
+
+
+## Samples where the players are into the heat map, and keeps it per map.
+func _learn(delta: float) -> void:
+	var positions: Array = []
+
+	for player in game.players():
+		if player.is_alive():
+			positions.append(player.controller.state.position)
+
+	heat.tick(delta, game.map.id if game.map != null else &"", positions, spawner.now(), spawner)
+
+
+func _on_detonated(at: Vector3, _spawn: DotWeaponSpawn) -> void:
+	if spawner != null:
+		sounds.emit(DotNpcAiSounds.Kind.COMBAT, at, EXPLOSION_RADIUS, spawner.now(), 0.5)
 
 
 func _rebuild_candidates() -> void:

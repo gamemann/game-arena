@@ -1,6 +1,7 @@
 extends DotNetInput
 
 const ArenaNetCommand := preload("arena_net_command.gd")
+const ArenaPlayer := preload("arena_player.gd")
 
 ## One tick of a player's intent, on the wire.
 ##
@@ -56,10 +57,12 @@ func _read(reader: DotNetReader) -> void:
 ## anyone else — [method DotFpsCommand.sanitise] is what clamps the length.
 func _sanitise() -> void:
 	move.sanitise()
-	# `max_slots` matches ArenaPlayer's arsenal. A slot outside it cannot select
-	# anything, but bounding it here keeps a nonsense value out of the simulation
-	# rather than relying on every downstream reader to range-check.
-	fire.sanitise(4)
+	# `max_slots` matches ArenaPlayer's arsenal: the pack's five. A slot outside it cannot
+	# select anything, but bounding it here keeps a nonsense value out of the simulation
+	# rather than relying on every downstream reader to range-check. It was 4 when the
+	# arsenal had four, and a hard 4 here would have made the throwable slot unreachable
+	# over the wire while it worked offline.
+	fire.sanitise(ArenaPlayer.MAX_SLOTS)
 	# Re-derived after both sanitise calls, so a clamped pitch cannot leave the
 	# aim pointing somewhere the movement never looked.
 	fire.yaw = move.yaw

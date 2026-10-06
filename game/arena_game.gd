@@ -174,6 +174,21 @@ var progress: ArenaProgress = null
 ## simulated them.
 var horde: ArenaHorde = null
 
+## How good the monsters are, server-wide, on top of each kind's character.
+##
+## [b]On the game rather than on the horde, because the horde does not outlive a mode
+## change[/b] and an operator who set `npc_skill hard` would otherwise get normal monsters
+## back at the next map. The module binds it to `npc_skill`, `npc_reaction_scale` and
+## `npc_reaction_min`; the horde attaches it to each spawner it builds.
+var npc_skill: DotNpcAiSkill = DotNpcAiSkill.new()
+
+## Whether the monsters' learned map traffic is kept on disk across restarts.
+##
+## [b]Off unless a server turns it on[/b] — [ArenaModule] does, which only a real server
+## loads. Every suite builds an ArenaGame, and one that saved would have each run's bots
+## train the next run's monsters: a suite whose results depend on how often it has run.
+var persist_npc_heat: bool = false
+
 ## Physics props. Null unless the mode asks for them and this instance is the authority.
 var props: ArenaProps = null
 
@@ -345,6 +360,11 @@ func _build_combat() -> DotResult:
 	# The same gravity the players fall under, so a grenade arc and a jump arc agree.
 	# ArenaPlayer sets this on its tunables; the two must not drift apart.
 	projectiles.setup(combat, 22.0)
+	# Where a grenade's `sticks` is read from. The player's catalogue, not a second one.
+	projectiles.catalogue = ArenaPlayer.weapon_catalogue()
+	projectiles.origin_of = func(entity_id: int) -> Variant:
+		var thrower := player_for(entity_id)
+		return thrower.muzzle_position() if thrower != null else null
 
 	return DotResult.success(null)
 
@@ -454,11 +474,11 @@ func _build_loadouts() -> DotResult:
 	loadouts.config = config
 	loadouts.store = DotLoadoutStoreMemory.new()
 
-	# Everything in this game is free except the rocket launcher, and there is no
-	# entitlement service to ask. A game with unlocks binds a real source here; leaving
-	# it unset means only `free` items, which is dot-loadout's loud default.
+	# Everything in this game is free except the launcher, and there is no entitlement
+	# service to ask. A game with unlocks binds a real source here; leaving it unset means
+	# only `free` items, which is dot-loadout's loud default.
 	loadouts.entitlement_source = func(_key: String) -> DotLoadoutEntitlements:
-		return DotLoadoutEntitlements.of([&"rocket"])
+		return DotLoadoutEntitlements.of([ArenaContent.PAID_WEAPON])
 
 	add_child(loadouts)
 	return DotResult.success(null)
@@ -1069,6 +1089,10 @@ func tick(commands: Dictionary = {}) -> void:
 			match_node.note_activity(str(id), _tick)
 			var outcome := player.simulate_tick(_tick, delta, move, fire)
 			shots.append_array(outcome.shots)
+
+			# Heard by the monsters. Before the horde ticks, so they hear it this tick.
+			if horde != null and (not outcome.shots.is_empty() or not outcome.spawns.is_empty()):
+				horde.note_fire(id, player.controller.state.position)
 			# A rocket is not a shot and is not resolved here; it is launched and
 			# flown. See ArenaProjectiles for why that is a new file.
 			if projectiles != null:
@@ -1263,7 +1287,7 @@ func _apply_loadout_deferred(id: int) -> void:
 		)
 
 		if from_class:
-			player.arsenal.select(2, player.controller.state.tick)
+			player.arsenal.select(ArenaContent.DEFAULT_SLOT, player.controller.state.tick)
 		else:
 			player.give_default_loadout()
 

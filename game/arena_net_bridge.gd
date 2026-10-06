@@ -1,12 +1,15 @@
 extends Node
 
 const ArenaEvent := preload("arena_event.gd")
+const ArenaContent := preload("arena_content.gd")
 const ArenaEvents := preload("arena_events.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaNetCommand := preload("arena_net_command.gd")
 const ArenaNetLink := preload("arena_net_link.gd")
 const ArenaPlayer := preload("arena_player.gd")
 const ArenaPlayerNet := preload("arena_player_net.gd")
+const ArenaNpcNet := preload("arena_npc_net.gd")
+const ArenaNpcs := preload("arena_npcs.gd")
 const ArenaRequest := preload("arena_request.gd")
 
 ## Joins [ArenaGame] to a [DotNetManager]. The netcode seam, and the only file in
@@ -400,9 +403,25 @@ func session_for_peer(peer_id: int) -> int:
 ## behaviours at all, and the match clock still has to advance — otherwise an empty
 ## server's warmup never ends and the first player to join arrives into a match that
 ## has been frozen since it booted.
+## Monsters this server replicates: instance id -> their [ArenaNpcNet]. Server side.
+var _monster_nets: Dictionary = {}
+
+## Monsters this client draws: net id -> their [ArenaNpcNet]. Client side.
+var _monster_mirrors: Dictionary = {}
+
+## The horde spawner whose signals this bridge is connected to. A mode change builds a new
+## horde, so this is checked every tick rather than connected once.
+var _watched_spawner: DotNpcSpawner = null
+
+## Where a client's monster mirrors live.
+var _monster_world: Node3D = null
+
+
 func server_tick(tick: int) -> void:
 	_tick = tick
 	_game_ticked_for = -1
+	_watch_horde()
+	_watch_projectiles()
 
 	if net != null:
 		net.server_tick(tick)
@@ -449,6 +468,11 @@ func client_tick(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> void
 	# or not at all. See `ArenaSpectate.client_tick`.
 	if game != null and game.spectate != null:
 		game.spectate.client_tick(tick)
+
+	# The copies of every rocket and grenade the server announced, flown for drawing.
+	# Here for the same reason: nothing else ticks anything on a mirroring client.
+	if game != null and game.projectiles != null:
+		game.projectiles.tick(net.clock.tick_duration())
 
 	var command := ArenaNetCommand.new()
 	command.tick = tick
@@ -697,6 +721,216 @@ func send_signon(peer_id: int) -> void:
 
 	_send_match_state(peer_id)
 
+	# Every monster already in the arena. A client joining a horde in progress would
+	# otherwise be hurt by monsters it was never told about.
+	for instance_id in _monster_nets.keys():
+		var monster: ArenaNpcNet = _monster_nets[instance_id]
+		if monster.identity != null and monster.npc != null and monster.npc.is_alive():
+			send_event(peer_id, ArenaEvents.Kind.NPC, ArenaEvents.write_npc(
+				monster.identity.net_id, monster.npc.def.id, monster.npc.position()
+			))
+
+
+# --- Projectiles -------------------------------------------------------------
+
+var _watched_projectiles: RefCounted = null
+
+
+## Follows whichever projectile layer the game has, and tells every client about each
+## launch. Server side, every tick, because a map change builds a new one.
+func _watch_projectiles() -> void:
+	if net == null or not net.is_server or game == null:
+		return
+
+	var layer: RefCounted = game.projectiles
+
+	if layer == _watched_projectiles:
+		return
+
+	_watched_projectiles = layer
+
+	if layer != null and not layer.launched.is_connected(_on_launched):
+		layer.launched.connect(_on_launched)
+
+
+func _on_launched(spawn: DotWeaponSpawn) -> void:
+	send_event(0, ArenaEvents.Kind.LAUNCH, ArenaEvents.write_launch(
+		spawn, ArenaContent.weapon_index(spawn.id)
+	))
+
+
+## A launch the server announced, flown here as a copy. Client side.
+func _mirror_launch(launch: Dictionary) -> void:
+	if game == null or game.projectiles == null:
+		return
+
+	var id := ArenaContent.weapon_at(int(launch["weapon"]))
+	game.projectiles.launch(ArenaEvents.spawn_from_launch(launch, id))
+
+
+# --- Monsters ----------------------------------------------------------------
+
+## Follows whichever horde the game has. Server side.
+##
+## [b]Every tick, not once.[/b] The horde is built by a mode that has one and torn down by a
+## mode change to one that does not — `ArenaGame._reconcile_world_layers` — so a bridge that
+## connected at attach would miss every horde after the first, and one that connected at a
+## mode change would need the game to tell it, which is a second thing to forget.
+func _watch_horde() -> void:
+	if net == null or not net.is_server or game == null:
+		return
+
+	var spawner: DotNpcSpawner = game.horde.spawner if game.horde != null else null
+
+	if spawner == _watched_spawner:
+		return
+
+	if _watched_spawner != null and is_instance_valid(_watched_spawner):
+		if _watched_spawner.spawned.is_connected(_on_monster_spawned):
+			_watched_spawner.spawned.disconnect(_on_monster_spawned)
+		if _watched_spawner.removed.is_connected(_on_monster_removed):
+			_watched_spawner.removed.disconnect(_on_monster_removed)
+
+	# A horde that went took its monsters with it; their entities go too.
+	for instance_id in _monster_nets.keys():
+		_forget_monster(int(instance_id))
+
+	_watched_spawner = spawner
+
+	if spawner == null:
+		return
+
+	spawner.spawned.connect(_on_monster_spawned)
+	spawner.removed.connect(_on_monster_removed)
+
+	for npc in spawner.all_npcs():
+		_on_monster_spawned(npc)
+
+
+func _on_monster_spawned(npc: DotNpcInstance) -> void:
+	var body := npc.node as Node3D
+
+	if body == null or net == null or _monster_nets.has(npc.instance_id):
+		return
+
+	var behaviour := ArenaNpcNet.new()
+	behaviour.name = "Net"
+	behaviour.npc = npc
+	behaviour.body = body
+	body.add_child(behaviour)
+
+	var identity := DotNetIdentity.new()
+	identity.name = "Identity"
+	identity.owner_peer_id = 0
+	identity.authority = DotNetIdentity.Authority.SERVER
+	# Relevant to everybody, whatever the interest grid's radius says. An arena is sixty
+	# metres across, a gunner fires from eighteen and a horde arrives from anywhere — and the
+	# first version, culled by distance, announced a monster twenty-five metres away and then
+	# never sent it a snapshot: the client drew it frozen where it spawned, facing north.
+	identity.always_relevant = true
+	body.add_child(identity)
+
+	var registered := net.registry.register(identity, 0, net.clock.tick, net.config)
+
+	if not registered.ok:
+		DotLog.warn(CHANNEL, "could not replicate a monster", {"error": str(registered.error)})
+		return
+
+	_monster_nets[npc.instance_id] = behaviour
+	behaviour.pull()
+	send_event(0, ArenaEvents.Kind.NPC, ArenaEvents.write_npc(
+		identity.net_id, npc.def.id, body.global_position
+	))
+
+
+func _on_monster_removed(npc: DotNpcInstance, _reason: StringName) -> void:
+	_forget_monster(npc.instance_id)
+
+
+func _forget_monster(instance_id: int) -> void:
+	var behaviour: ArenaNpcNet = _monster_nets.get(instance_id)
+	_monster_nets.erase(instance_id)
+
+	if behaviour == null or behaviour.identity == null or net == null:
+		return
+
+	var net_id := behaviour.identity.net_id
+	net.registry.unregister(net_id)
+	send_event(0, ArenaEvents.Kind.NPC_GONE, ArenaEvents.write_npc_gone(net_id))
+
+
+## Builds a client's copy of a monster: its scene, no brain — the server thinks for it —
+## moved by its net behaviour. Client side.
+func _mirror_monster(info: Dictionary) -> void:
+	var net_id := int(info["net_id"])
+
+	if _monster_mirrors.has(net_id) or net == null:
+		return
+
+	var def := ArenaNpcs.catalogue().get_npc(info["kind_id"])
+
+	if def == null:
+		DotLog.debug(CHANNEL, "a monster this build does not have", {"id": str(info["kind_id"])})
+		return
+
+	var scene: Variant = load(def.scene_path) if ResourceLoader.exists(def.scene_path) else null
+
+	if not (scene is PackedScene):
+		DotLog.warn(CHANNEL, "a monster's scene would not load", {"path": def.scene_path})
+		return
+
+	var body := (scene as PackedScene).instantiate() as Node3D
+
+	if body == null:
+		return
+
+	if _monster_world == null or not is_instance_valid(_monster_world):
+		_monster_world = Node3D.new()
+		_monster_world.name = "MonsterMirrors"
+		game.add_child(_monster_world)
+
+	_monster_world.add_child(body)
+	body.global_position = info["position"]
+
+	var behaviour := ArenaNpcNet.new()
+	behaviour.name = "Net"
+	behaviour.body = body
+	body.add_child(behaviour)
+
+	var identity := DotNetIdentity.new()
+	identity.name = "Identity"
+	identity.owner_peer_id = 0
+	identity.authority = DotNetIdentity.Authority.SERVER
+	body.add_child(identity)
+
+	var registered := net.registry.register(identity, net_id, net.clock.tick, net.config)
+
+	if not registered.ok:
+		DotLog.warn(CHANNEL, "could not mirror a monster", {"error": str(registered.error)})
+		body.queue_free()
+		return
+
+	_monster_mirrors[net_id] = behaviour
+
+
+func _drop_monster_mirror(net_id: int) -> void:
+	var behaviour: ArenaNpcNet = _monster_mirrors.get(net_id)
+	_monster_mirrors.erase(net_id)
+
+	if behaviour == null:
+		return
+
+	if net != null:
+		net.registry.unregister(net_id)
+
+	if behaviour.body != null and is_instance_valid(behaviour.body):
+		behaviour.body.queue_free()
+
+
+## How many monsters this end replicates or draws.
+func monster_count() -> int:
+	return _monster_nets.size() if net != null and net.is_server else _monster_mirrors.size()
+
 
 ## Tells every ready peer where the match is. Server side.
 func announce_match_state() -> void:
@@ -856,6 +1090,18 @@ func _on_event(message: DotNetMessage) -> void:
 			var voted := ArenaEvents.read_vote(reader)
 			if bool(voted["ok"]):
 				vote_received.emit(voted)
+		ArenaEvents.Kind.NPC:
+			var monster := ArenaEvents.read_npc(reader)
+			if bool(monster["ok"]):
+				_mirror_monster(monster)
+		ArenaEvents.Kind.NPC_GONE:
+			var gone := ArenaEvents.read_npc_gone(reader)
+			if bool(gone["ok"]):
+				_drop_monster_mirror(int(gone["net_id"]))
+		ArenaEvents.Kind.LAUNCH:
+			var launch := ArenaEvents.read_launch(reader)
+			if bool(launch["ok"]):
+				_mirror_launch(launch)
 		_:
 			pass
 

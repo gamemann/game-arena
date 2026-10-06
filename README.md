@@ -14,7 +14,7 @@ This project, along with every asset it is built on, was built initially with **
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
 ## The Reference Game
-A 3D dev-textured arena deathmatch, built entirely out of the [dot-*](https://github.com/modcommunity) family. Four weapons, one map, a match that ends on its score limit, and a HUD and menus with no art assets anywhere.
+A 3D dev-textured arena deathmatch, built entirely out of the [dot-*](https://github.com/modcommunity) family and [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons). Twenty-seven weapons you can see in your hands and in everybody else's, three maps, a match that ends on its score limit, and a HUD and menus with no art assets of their own.
 
 **This is the reference game.** It exists to prove the addons compose, to show what the bridges between them look like, and to be the thing a new game is copied from.
 
@@ -32,9 +32,11 @@ No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` regis
 | **WASD** | Move |
 | **Space** | Jump. Hold it, auto-hop is on |
 | **Ctrl** | Crouch |
-| **Mouse 1** | Fire |
+| **Mouse 1** | Fire. Hold to cook a grenade, let go to throw it |
+| **Mouse 2** | Bash with whatever gun is in hand |
 | **R** | Reload |
-| **1**..**4** / wheel | Weapon slot |
+| **1**..**5** / wheel | Weapon slot: melee, sidearm, primary, heavy, throwable |
+| **Q** | Last weapon |
 | **Tab** (hold) | Scoreboard |
 | **Esc** | Pause menu, and release the mouse |
 
@@ -61,7 +63,9 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 | --- | --- |
 | [dot-core](https://github.com/modcommunity/dot-core) | Everything shared. |
 | [dot-player-controller](https://github.com/modcommunity/dot-player-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
-| [dot-combat](https://github.com/modcommunity/dot-combat) | Health, weapons, hit registration. |
+| [dot-combat](https://github.com/modcommunity/dot-combat) | Health, hitboxes, hit registration. |
+| [dot-weapon](https://github.com/modcommunity/dot-weapon) | When a weapon fires, reloads and switches, in ticks. |
+| [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons) | The twenty-seven weapons, and everything about them a player sees and hears. |
 | [dot-loadout](https://github.com/modcommunity/dot-loadout) | What you take in, and what you may take. |
 | [dot-match](https://github.com/modcommunity/dot-match) | Rounds, scoring, spawning, respawning. |
 | [dot-ui](https://github.com/modcommunity/dot-ui) | HUD, pause menu, settings, controls, scoreboard. |
@@ -79,16 +83,19 @@ dotserve --game res://examples/dedicated.tscn --name "My arena"
 
 ## The weapons
 
-Four, because they are four genuinely different answers to "how do I close distance", and a deathmatch with fewer has one right answer.
+All twenty-seven of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons): seven melee weapons, four sidearms, nine primaries, five heavies and two grenades. Arena defines none of its own. The pack already has every weapon tuned in ticks and checked as one document, and what this game decides is what a loadout may name and what it costs.
 
-| | |
-| --- | --- |
-| **Pistol** | Never runs out, always loses a fair fight. Which is what makes picking something up worth doing. |
-| **Rifle** | Wins at range, loses in a corridor. Bloom punishes holding the trigger. |
-| **Shotgun** | Nine pellets in a *learnable* ring, so range is a skill rather than a dice roll. |
-| **Rocket Launcher** | Low direct damage, high splash. The interesting part is what it does to the floor, and to your own feet. |
+What the pack adds over a weapon that only exists in the simulation:
 
-Loadouts are two weapons on a six-point budget: a rifle and a shotgun, or a rocket launcher and a pistol, and not a rocket launcher and a shotgun. Four numbers instead of an enumeration.
+- **You see your own gun**, with arms, sway, bob, recoil that kicks the view, reloads and switches.
+- **You see everybody else's**, in their hand, kicking when they fire, gone while they switch.
+- **A shot is seen and heard**: a tracer, a muzzle flash, a spark where it lands, and a report that tells one weapon from another.
+- **Every gun bashes** on the right mouse button.
+- **Grenades are grenades.** The fuse starts when the pin comes out, so you can cook one; a frag bounces and rolls, a sticky stops dead on whatever it hits (a person included), and one held past its fuse goes off in your hand. Each has a red fuse light so you can find it on the floor.
+
+Loadouts are a melee weapon, a sidearm, a primary, a throwable and armour on a seven-point budget. A rifle, a pistol, a frag and armour fit, and so does a heavy with a sidearm and a grenade, but not a heavy *and* armour. The launcher is the one weapon a player has to have unlocked, which keeps dot-loadout's entitlement path in use. Loadouts saved before the melee and throwable slots existed are filled in when they load, not refused.
+
+To see it: `tools/screenshot_weapons.sh` plays the offline game and saves the hands, a bot holding its gun, a burst of fire, and a grenade from the hand to the explosion, into `screenshots/`.
 
 ## Configuring the map vote
 
@@ -115,13 +122,13 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match`: 311 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them.
+`headless_match`: 478 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them, and puts the weapons pack through a real game: a shot from the eye, a bash, a frag that bounces and goes off on its fuse, a sticky that stays where it lands, and a grenade cooked in the hand.
 
-`headless_net`: 136 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding, and an admin's blind reaches the blinded player's client and no other while a beacon reaches both.
+`headless_net`: 171 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding, an admin's blind reaches the blinded player's client and no other while a beacon reaches both, what a player carries reaches their own client and only what is in their hand reaches anybody else's, a replayed tick draws nothing, and a thrown grenade flies on a client and hurts nobody there.
 
-`dedicated`: 100 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+`dedicated`: 112 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
 
-`headless_admin`: 44 checks over nine sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, a player with no flags is refused, a blind lifts on its own when its seconds are up, a slay inside spawn protection still kills, and blind and beacon survive a respawn.
+`headless_admin`: 46 checks over ten sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, a player with no flags is refused, a blind lifts on its own when its seconds are up, a slay inside spawn protection still kills, and blind and beacon survive a respawn.
 
 ### The admin tools
 

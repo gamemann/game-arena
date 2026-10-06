@@ -34,6 +34,18 @@ enum Kind {
 	## Last, and it has to be: a kind is its index on the wire, and one inserted above
 	## would renumber every kind after it for a client built a day earlier.
 	VOTE,
+	## A monster now exists, or is being described to a client that just connected: its
+	## net id, its kind, where it is. Its movement comes in snapshots like a player's.
+	##
+	## After VOTE, for the reason VOTE gives: a kind is its index on the wire.
+	NPC,
+	## A monster is gone — killed, reclaimed or cleared.
+	NPC_GONE,
+	## A rocket or a grenade left somebody's hands: who, which weapon, from where, how
+	## fast, and its fuse. The client flies a copy of it to draw, and decides nothing.
+	##
+	## After NPC_GONE, for the reason VOTE gives.
+	LAUNCH,
 }
 
 enum Ask {
@@ -319,3 +331,98 @@ static func read_name(reader: DotNetReader) -> Dictionary:
 	var out := {"display_name": reader.read_string(NAME_BYTES)}
 	out["ok"] = reader.ok()
 	return out
+
+
+# --- NPC -------------------------------------------------------------------
+
+const NPC_ID_BYTES := 64
+
+## Where a monster may be when it is announced, in metres. Generous: the snapshot carries
+## the real position a tick later; this only places the body it is drawn as.
+const NPC_EXTENT := 4096.0
+
+
+static func write_npc(net_id: int, kind_id: StringName, at: Vector3) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(net_id)
+	writer.write_string(String(kind_id), NPC_ID_BYTES)
+	writer.write_vector3_range(at, -NPC_EXTENT, NPC_EXTENT, 24)
+	return writer.to_bytes()
+
+
+static func read_npc(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"net_id": reader.read_varint(),
+		"kind_id": StringName(reader.read_string(NPC_ID_BYTES)),
+		"position": reader.read_vector3_range(-NPC_EXTENT, NPC_EXTENT, 24),
+	}
+	out["ok"] = reader.ok()
+	return out
+
+
+static func write_npc_gone(net_id: int) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(net_id)
+	return writer.to_bytes()
+
+
+static func read_npc_gone(reader: DotNetReader) -> Dictionary:
+	var out := {"net_id": reader.read_varint()}
+	out["ok"] = reader.ok()
+	return out
+
+
+# --- LAUNCH ----------------------------------------------------------------
+#
+# A projectile is not a replicated entity, and that is the cheap answer rather than the
+# lazy one. Its flight is a pure function of where it started, how fast, and the map —
+# `ArenaProjectiles` integrates it per tick against the analytic geometry both ends hold
+# — so one event at the launch is the whole of it, where an entity would cost a snapshot
+# field per tick for a second of flight that the client can work out itself. What a copy
+# decides is nothing: a client's combat manager is not the authority, so its detonation
+# draws an explosion and hurts nobody.
+
+## How far from the origin a launch may be, and how fast it may go. A thrown grenade is
+## under 25 m/s and the launcher's round 44; 64 leaves room without spending bits on it.
+const LAUNCH_EXTENT := 4096.0
+const LAUNCH_SPEED := 64.0
+
+
+static func write_launch(spawn: DotWeaponSpawn, weapon_index: int) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(maxi(0, spawn.owner_entity))
+	writer.write_varint(maxi(0, weapon_index))
+	writer.write_vector3_range(spawn.origin, -LAUNCH_EXTENT, LAUNCH_EXTENT, 24)
+	writer.write_vector3_range(spawn.velocity, -LAUNCH_SPEED, LAUNCH_SPEED, 16)
+	writer.write_float_range(spawn.gravity_scale, 0.0, 4.0, 8)
+	writer.write_varint(maxi(0, spawn.fuse_ticks))
+	writer.write_varint(maxi(1, spawn.life_ticks))
+	writer.write_varint(maxi(0, spawn.tick))
+	return writer.to_bytes()
+
+
+static func read_launch(reader: DotNetReader) -> Dictionary:
+	var out := {
+		"owner": reader.read_varint(),
+		"weapon": reader.read_varint(),
+		"origin": reader.read_vector3_range(-LAUNCH_EXTENT, LAUNCH_EXTENT, 24),
+		"velocity": reader.read_vector3_range(-LAUNCH_SPEED, LAUNCH_SPEED, 16),
+		"gravity": reader.read_float_range(0.0, 4.0, 8),
+		"fuse": reader.read_varint(),
+		"life": reader.read_varint(),
+		"tick": reader.read_varint(),
+	}
+	out["ok"] = reader.ok()
+	return out
+
+
+## A spawn rebuilt from a read LAUNCH, with [param id] the weapon it came from.
+static func spawn_from_launch(launch: Dictionary, id: StringName) -> DotWeaponSpawn:
+	var spawn := DotWeaponSpawn.make(
+		id, launch["origin"], launch["velocity"], int(launch["owner"])
+	)
+	spawn.gravity_scale = float(launch["gravity"])
+	spawn.fuse_ticks = int(launch["fuse"])
+	spawn.life_ticks = int(launch["life"])
+	spawn.tick = int(launch["tick"])
+	return spawn

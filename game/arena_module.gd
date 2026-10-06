@@ -130,6 +130,24 @@ func _module_load() -> DotResult:
 
 	add_cvar("arena_scorelimit", str(game.score_limit), "Kills to win the match")
 
+	# npc_skill, npc_reaction_scale, npc_reaction_min. Registered whether or not this mode
+	# has monsters, so a config that sets them does not fail on a deathmatch map and then
+	# not apply when the rotation reaches a horde one. Through `add_cvar`, so they go when
+	# the module does; NOTIFY, because players should know the monsters just got harder.
+	game.npc_skill.bind_cvars(add_cvar, DotConVar.FLAG_NOTIFY)
+
+	# A real server keeps what its monsters learn of each map across restarts. Here and
+	# not in ArenaGame, because every suite builds an ArenaGame and only a server loads this.
+	game.persist_npc_heat = true
+
+	if game.horde != null and game.horde.spawner != null:
+		game.horde.heat.persist = game.horde.persist_heat
+		# The horde was built before this module loaded, with saving off — so it adopted
+		# the map without reading what earlier runs learned. Read it now.
+		game.horde.heat.adopt(
+			game.map.id if game.map != null else &"", game.horde.spawner.now(), game.horde.spawner
+		)
+
 	# [b]How many players before a round starts, and it has to be an operator's
 	# choice.[/b] The default is 2, which is right for a deathmatch and makes a public
 	# demonstration server look broken: one person connects, the match sits in WARMUP

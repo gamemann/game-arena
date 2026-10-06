@@ -9,6 +9,8 @@ const ArenaHud := preload("arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMenus := preload("arena_menus.gd")
 const ArenaNetBridge := preload("arena_net_bridge.gd")
+const ArenaPaths := preload("arena_paths.gd")
+const ArenaProjectileView := preload("arena_projectile_view.gd")
 const ArenaPlayer := preload("arena_player.gd")
 const ArenaPresentation := preload("arena_presentation.gd")
 
@@ -127,8 +129,28 @@ var presentation: ArenaPresentation = null
 ## locally would be corrected on every snapshot.
 var _holding: bool = false
 
+## The local player's hands, under their camera. Built on adoption.
+var view_model: ZeeViewModel = null
+
+## Every rocket and grenade in the air, drawn.
+var projectile_view: ArenaProjectileView = null
+
+## The projectile layer whose detonations are being heard, so a new one is noticed.
+var _heard_projectiles: RefCounted = null
+
+## The slot in hand and the one before it, for Q. Read off the arsenal each tick, because
+## the server decides what is in hand and a client that kept its own idea would switch
+## "back" to a weapon the server already took away.
+var _held_slot: int = 0
+var _last_slot: int = 0
+
 
 func _ready() -> void:
+	# zee-dot-weapons' art is this game's copy of it, wherever this game is mounted. A
+	# delivered pack sits under `res://dot_cloud/<id>/<version>/`, and the pack's art table
+	# names `res://assets/...` — so without this every gun loads invisible, one WARN each.
+	ZeeModelCache.set_asset_root(ArenaPaths.root())
+
 	link = DotRegistry.get_node_service(LINK_SERVICE)
 	_offline = force_offline \
 		or link == null \
@@ -186,6 +208,10 @@ func _ready() -> void:
 	add_child(_level)
 	_light()
 
+	projectile_view = ArenaProjectileView.new()
+	projectile_view.name = "Projectiles"
+	add_child(projectile_view)
+
 	_sampler = DotFpsSampler.new(ArenaPlayer.arena_tunables())
 	DotFpsSampler.register_default_actions(_sampler)
 
@@ -210,6 +236,12 @@ func _ready() -> void:
 		DotLog.result(CHANNEL, "netcode", netted)
 
 	_grab_mouse()
+
+
+func _exit_tree() -> void:
+	# A static outlives this game: the next one a shell loads must not look for its art
+	# under this game's mount.
+	ZeeModelCache.set_asset_root("res://")
 
 
 ## A sun and an ambient sky, because a dev-textured arena under no light is black.
@@ -568,6 +600,14 @@ func _on_map_changed(map: DotMapDef) -> void:
 	_classify_level()
 	add_child(_level)
 
+	# A mirroring client's combat manager is never rebuilt — `change_map` is the server's —
+	# and its trace is what the copies of every rocket and grenade bounce off. Left alone,
+	# a grenade on the new map bounces off the walls of the old one.
+	if not _offline and game.combat != null:
+		game.combat.trace = game.map.to_trace()
+	if game.projectiles != null:
+		game.projectiles.clear()
+
 	if presentation != null:
 		# Everything drawn for the old map is meaningless now -- a decal is a hole in a
 		# wall that no longer exists, and a decal ring that survives a map change is one
@@ -768,6 +808,7 @@ func _adopt(candidate: ArenaPlayer) -> void:
 	# server capping it is a legitimate competitive rule; the player's *choice* is what is
 	# saved, so leaving the server gives it back rather than editing their settings.
 	player.attach_camera(_field_of_view())
+	_arm(player)
 
 	if hud != null:
 		hud.follow(player)
@@ -791,6 +832,32 @@ func _adopt(candidate: ArenaPlayer) -> void:
 		"health": player.health.health if player.health != null else -1.0,
 		"alive": player.is_alive(),
 	})
+
+
+## The hands under the camera, and the player's rig rebuilt to draw them.
+##
+## [b]With the authority only offline.[/b] Connected, the server's rig is the one whose
+## shots land; this one predicts, animates the hands and draws the shot the moment the
+## button goes down, which is the one piece of feedback a player judges the whole game's
+## responsiveness by.
+func _arm(body: ArenaPlayer) -> void:
+	if body == null or body.camera == null or view_model != null:
+		return
+
+	view_model = ZeeViewModel.new()
+	view_model.name = "Hands"
+	body.camera.add_child(view_model)
+	body.arm_first_person(view_model, _offline)
+
+
+## Whether the local weapon draws its own shot. True on a client shell carrying a
+## zee-dot-weapons with `ZeeShotFx`; through `has_method`, because an older shell's copy
+## of the rig has no `shot_fx` and a call by name would not compile there.
+func weapon_draws_shots() -> bool:
+	if player == null or player.weapons == null or not player.weapons.has_method(&"shot_fx"):
+		return false
+
+	return player.weapons.call(&"shot_fx") != null
 
 
 # --- The loop --------------------------------------------------------------
@@ -935,7 +1002,33 @@ func _process(delta: float) -> void:
 	for body in game.players():
 		body.present(delta)
 
+	_watch_projectiles()
+
 	_drive_spectator_camera()
+
+
+## Points the drawing and the explosions at whichever projectile layer the game has now.
+##
+## Every frame and cheap, because a map change builds a new layer on the authority and a
+## layer connected once at boot would go deaf after the first `changelevel`.
+func _watch_projectiles() -> void:
+	var layer: RefCounted = game.projectiles if game != null else null
+
+	if projectile_view != null:
+		projectile_view.projectiles = layer
+
+	if layer == _heard_projectiles:
+		return
+
+	_heard_projectiles = layer
+
+	if layer != null and not layer.detonated.is_connected(_on_detonated):
+		layer.detonated.connect(_on_detonated)
+
+
+func _on_detonated(at: Vector3, _spawn: DotWeaponSpawn) -> void:
+	if presentation != null:
+		presentation.on_explosion(at, camera_position())
 
 
 ## Where a dead player looks.
@@ -980,7 +1073,14 @@ func _read_fire(move: DotFpsCommand) -> void:
 	var firing := mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 
 	_fire.set_button(DotWeaponCommand.BUTTON_ATTACK, firing)
+	# The pack's alt-fire: a bash with every blaster. Same guard as the trigger, so a
+	# right click on a menu does not swing a rifle butt.
+	_fire.set_button(
+		DotWeaponCommand.BUTTON_ALT,
+		mouse_drives_view() and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+	)
 	_fire.set_button(DotWeaponCommand.BUTTON_RELOAD, Input.is_key_pressed(KEY_R))
+	_note_held_slot()
 	_fire.yaw = move.yaw
 	_fire.pitch = move.pitch
 
@@ -991,6 +1091,34 @@ func _read_fire(move: DotFpsCommand) -> void:
 	# it would have looked like it worked while doing nothing.
 	_fire.slot = _wanted_slot
 	_wanted_slot = 0
+
+
+## Remembers the slot before the one in hand, for Q.
+func _note_held_slot() -> void:
+	if player == null or player.arsenal == null:
+		return
+
+	var now := player.arsenal.current_slot()
+
+	if now != _held_slot:
+		if _held_slot > 0:
+			_last_slot = _held_slot
+		_held_slot = now
+
+
+## The carried slot [param step] places along from the one in hand, wrapping. For the
+## wheel. 0 when there is nothing else to go to.
+func _cycled_slot(step: int) -> int:
+	if player == null or player.arsenal == null:
+		return 0
+
+	var carried := player.arsenal.slots()
+
+	if carried.size() < 2:
+		return 0
+
+	var at := carried.find(player.arsenal.current_slot())
+	return carried[posmod(at + step, carried.size())]
 
 
 # --- The mouse -------------------------------------------------------------
@@ -1098,6 +1226,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			_sampler.handle_event(event)
 		return
 
+	# The wheel walks the carried slots. A request through the command like the number
+	# keys, for their reason: a client that switched its own arsenal would be predicting a
+	# switch the server never simulated.
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed \
+			and mouse_drives_view():
+		match (event as InputEventMouseButton).button_index:
+			MOUSE_BUTTON_WHEEL_UP:
+				_wanted_slot = _cycled_slot(-1)
+			MOUSE_BUTTON_WHEEL_DOWN:
+				_wanted_slot = _cycled_slot(1)
+		return
+
 	if not (event is InputEventKey) or event.is_echo():
 		return
 
@@ -1128,11 +1268,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_G:
 			_ask_prop(ArenaEvents.PropAct.PUNT)
 			_holding = false
-		KEY_1, KEY_2, KEY_3, KEY_4:
+		KEY_1, KEY_2, KEY_3, KEY_4, KEY_5:
 			# Requested through the COMMAND, never by calling the arsenal directly.
 			# A client that switched its own weapon would be predicting a switch the
-			# server never simulated, and the next snapshot would take it back.
+			# server never simulated, and the next snapshot would take it back. Five keys
+			# for the pack's five slots: melee, sidearm, primary, heavy, throwable.
 			_wanted_slot = (event as InputEventKey).physical_keycode - KEY_1 + 1
+		KEY_Q:
+			# The last weapon, which is the switch players make most.
+			_wanted_slot = _last_slot
 		KEY_TAB:
 			menus.toggle(&"scoreboard")
 		_:
@@ -1210,7 +1354,7 @@ func _on_local_used(outcome: DotWeaponOutcome) -> void:
 	if presentation == null or outcome == null or not outcome.used:
 		return
 
-	presentation.on_used(outcome)
+	presentation.on_used(outcome, weapon_draws_shots())
 
 
 func _on_local_damaged(damage: DotDamage) -> void:

@@ -8,18 +8,21 @@ extends RefCounted
 ## that. What a *reference* game wants is the opposite: one file you can read top to
 ## bottom and see the whole content set, with the reasoning next to the numbers.
 ##
-## The weapon set is the classic four. Not for nostalgia — they are four genuinely
-## different answers to "how do I close distance", and a deathmatch with fewer than
-## that is a deathmatch with one right answer.
+## [b]The weapons are zee-dot-weapons', all twenty-seven, and none of them is defined
+## here.[/b] This file used to carry four of its own — a pistol, a rifle, a shotgun and a
+## rocket launcher — which drew nothing in anybody's hands, because dot-weapon refuses to
+## draw and this game never filled that half in. The pack is that half, already tuned in
+## ticks and validated as one document; what is left for the game is which of them a
+## loadout may name and what each costs, which is below.
 
+## A bullet: what the horde's gunner fires. Not a player weapon's type any more — the
+## pack's darts are — but monsters still shoot bullets, so it stays registered.
 const DAMAGE_BULLET := &"bullet"
-const DAMAGE_BLAST := &"blast"
+## The pack's explosion type. One id with the pack, so a rocket and a grenade and a
+## monster's death blast all answer to the same rule.
+const DAMAGE_BLAST := ZeeWeaponIds.DAMAGE_BLAST
 const DAMAGE_FALL := &"fall"
 const DAMAGE_WORLD := &"world"
-
-const AMMO_RIFLE := &"rifle_ammo"
-const AMMO_SHELL := &"shells"
-const AMMO_ROCKET := &"rockets"
 
 
 # --- Damage types ----------------------------------------------------------
@@ -34,20 +37,6 @@ static func bullet() -> DotDamageType:
 	type.falloff_end = 60.0
 	type.falloff_floor = 0.55
 	type.self_scale = 0.0
-	return type
-
-
-static func blast() -> DotDamageType:
-	var type := DotDamageType.make(DAMAGE_BLAST, "Explosion")
-	type.armour_share = 0.75
-	type.armour_wear = 1.5
-	# Hit groups off: a rocket at someone's feet must not do head damage because the
-	# splash sphere happened to touch a head hitbox first.
-	type.uses_hit_groups = false
-	# Rocket jumping. Half damage to yourself is the number every game that has this
-	# arrived at independently.
-	type.self_scale = 0.5
-	type.knockback_per_point = 0.35
 	return type
 
 
@@ -67,184 +56,56 @@ static func world() -> DotDamageType:
 	return type
 
 
+## Every damage type the game registers: its own three, and the pack's four.
+##
+## [b]Built once and shared[/b], and the reason is identity rather than speed. dot-combat
+## registers the objects it is handed, and [method weapon_catalogue] hands the SAME objects
+## to the pack, so a launcher's splash and the registered "blast" are one rule. Two copies
+## built independently would agree today and drift the first time somebody tuned one.
+static var _damage: Dictionary = {}
+
+
+static func damage_table() -> Dictionary:
+	if _damage.is_empty():
+		_damage = ZeeWeaponDamage.table()
+		_damage[DAMAGE_BULLET] = bullet()
+		_damage[DAMAGE_FALL] = fall()
+		_damage[DAMAGE_WORLD] = world()
+	return _damage
+
+
 static func damage_types() -> Array[DotDamageType]:
-	return [bullet(), blast(), fall(), world()]
+	var out: Array[DotDamageType] = []
+	for type: DotDamageType in damage_table().values():
+		out.append(type)
+	return out
 
 
 # --- Weapons ---------------------------------------------------------------
 #
-# A weapon is a DotWeaponDef naming a behaviour script by path, plus a
-# DotWeaponBallistics carrying the numbers that behaviour reads. Until dot-weapon
-# existed these were one fat DotWeapon resource with every gun field on it; the split
-# is what lets this game add a bow, a grappling hook or a mine layer later without
-# either editing an addon or pretending the new thing is a gun.
-#
 # Every duration is in ticks. Seconds would make the pistol fire at two different
-# rates on a 64 Hz server and a 128 Hz one, which is two different games.
+# rates on a 64 Hz server and a 128 Hz one, which is two different games — the pack
+# says the same and is tuned at this rate.
 
 const TICK_RATE := 64
 
-const HITSCAN := "res://addons/dot_weapon/behaviour/dot_weapon_hitscan.gd"
-const PROJECTILE := "res://addons/dot_weapon/behaviour/dot_weapon_projectile.gd"
-
-
-## Ticks between shots for a weapon quoted in rounds per minute.
+## What a player spawns with when nothing else says: a knife in the melee slot, so the
+## number keys always have something under 1, a pistol and a rifle, and one frag.
 ##
-## Rounds per minute is what a designer tunes in and ticks are what the simulation
-## runs on, so the conversion lives here once rather than in four hand-computed
-## numbers that drift the first time somebody changes the tick rate.
-static func rpm_ticks(rpm: float) -> int:
-	return maxi(1, int(round(60.0 / rpm * float(TICK_RATE))))
+## [b]A list of ids, not a second table of weapons.[/b] The pack is the only place a
+## weapon is defined, and everything this game decides about one is which ids it hands
+## out — so a mode that wants shotguns for everybody edits this and nothing else.
+const DEFAULT_LOADOUT: Array[StringName] = [
+	ZeeWeaponIds.KNIFE, ZeeWeaponIds.PISTOL, ZeeWeaponIds.RIFLE, ZeeWeaponIds.FRAG,
+]
+
+## The slot a fresh spawn is holding: the primary.
+const DEFAULT_SLOT := ZeeWeaponIds.SLOT_PRIMARY
 
 
-static func sec_ticks(seconds: float) -> int:
-	return maxi(0, int(round(seconds * float(TICK_RATE))))
-
-
-## The starting weapon. Always available, never runs out, and always loses a fair
-## fight — which is what makes picking something up worth doing.
-static func pistol() -> DotWeaponDef:
-	var def := DotWeaponDef.new()
-	def.id = &"pistol"
-	def.display_name = "Pistol"
-	def.behaviour_path = HITSCAN
-	def.slot = 1
-	def.fire_mode = DotWeaponDef.Fire.SEMI
-	def.use_interval_ticks = rpm_ticks(380.0)
-	def.magazine = 0
-	def.infinite_reserve = true
-	def.cost_per_use = 0
-	def.deploy_ticks = sec_ticks(0.2)
-	def.holster_ticks = sec_ticks(0.15)
-
-	var b := DotWeaponBallistics.new()
-	b.damage = 18.0
-	b.damage_type = bullet()
-	b.spread = 0.4
-	b.spread_moving = 1.6
-	b.bloom = 0.35
-	b.bloom_max = 3.0
-	b.recoil_pitch = 0.5
-	b.max_range = 120.0
-	def.tuning = b
-	return def
-
-
-## The all-rounder. Wins at range, loses in a corridor.
-static func rifle() -> DotWeaponDef:
-	var def := DotWeaponDef.new()
-	def.id = &"rifle"
-	def.display_name = "Rifle"
-	def.behaviour_path = HITSCAN
-	def.slot = 2
-	def.fire_mode = DotWeaponDef.Fire.AUTO
-	def.use_interval_ticks = rpm_ticks(620.0)
-	def.magazine = 30
-	def.reserve = 90
-	def.reserve_max = 180
-	def.ammo_type = AMMO_RIFLE
-	def.reload_ticks = sec_ticks(2.1)
-	def.deploy_ticks = sec_ticks(0.3)
-	def.holster_ticks = sec_ticks(0.2)
-
-	var b := DotWeaponBallistics.new()
-	b.damage = 22.0
-	b.damage_type = bullet()
-	b.spread = 0.5
-	b.spread_moving = 2.2
-	b.spread_airborne = 4.5
-	b.spread_crouched = 0.55
-	b.bloom = 0.28
-	b.bloom_max = 4.5
-	b.bloom_recovery = 9.0 / float(TICK_RATE)
-	b.recoil_pitch = 0.35
-	b.recoil_yaw = 0.14
-	b.max_range = 200.0
-	def.tuning = b
-	return def
-
-
-## The corridor answer. Nine pellets in a learnable ring, so range is a skill rather
-## than a dice roll.
-static func shotgun() -> DotWeaponDef:
-	var def := DotWeaponDef.new()
-	def.id = &"shotgun"
-	def.display_name = "Shotgun"
-	def.behaviour_path = HITSCAN
-	def.slot = 3
-	def.fire_mode = DotWeaponDef.Fire.SEMI
-	def.use_interval_ticks = rpm_ticks(75.0)
-	def.magazine = 6
-	def.reserve = 24
-	def.reserve_max = 48
-	def.ammo_type = AMMO_SHELL
-	def.reload_per_round = true
-	def.reload_ticks = sec_ticks(0.45)
-	def.reload_start_ticks = sec_ticks(0.3)
-	def.deploy_ticks = sec_ticks(0.35)
-	def.holster_ticks = sec_ticks(0.25)
-
-	var b := DotWeaponBallistics.new()
-	b.damage = 11.0
-	b.damage_type = bullet()
-	b.pellets = 9
-	b.fixed_pattern = true
-	b.spread = 4.5
-	b.spread_moving = 0.5
-	b.recoil_pitch = 2.2
-	# Well short of the map's diagonal, so a shotgun across the arena does nothing
-	# rather than doing a little — which is a clearer rule to play against.
-	b.max_range = 24.0
-	def.tuning = b
-	return def
-
-
-## Area denial, mobility, and the reason the raised middle is worth holding.
-##
-## Direct damage is deliberately low and the splash is deliberately high: a rocket that
-## kills on a direct hit is a hitscan weapon with travel time, and the interesting part
-## of a rocket launcher is what it does to the floor.
-static func rocket_launcher() -> DotWeaponDef:
-	var def := DotWeaponDef.new()
-	def.id = &"rocket"
-	def.display_name = "Rocket Launcher"
-	def.behaviour_path = PROJECTILE
-	def.slot = 4
-	def.fire_mode = DotWeaponDef.Fire.SEMI
-	def.use_interval_ticks = rpm_ticks(70.0)
-	def.magazine = 4
-	def.reserve = 12
-	def.reserve_max = 20
-	def.ammo_type = AMMO_ROCKET
-	def.reload_ticks = sec_ticks(2.6)
-	def.deploy_ticks = sec_ticks(0.45)
-	def.holster_ticks = sec_ticks(0.3)
-
-	var b := DotWeaponBallistics.new()
-	b.damage = 30.0
-	b.damage_type = blast()
-	b.splash_type = blast()
-	b.speed = 42.0
-	# Not a charged weapon, so the minimum and the maximum are the same number: a
-	# rocket launcher that fired slower rockets when tapped would be a different gun.
-	b.min_speed = 42.0
-	b.min_charge_damage = 1.0
-	b.radius = 0.2
-	b.life_ticks = sec_ticks(5.0)
-	b.splash_radius = 4.5
-	b.splash_damage = 85.0
-	b.splash_hurts_owner = true
-	b.spread = 0.0
-	b.spread_moving = 0.0
-	b.spread_airborne = 0.0
-	b.recoil_pitch = 3.0
-	b.max_range = 220.0
-	def.tuning = b
-	return def
-
-
+## The pack's weapons, against this game's damage types.
 static func weapons() -> Array[DotWeaponDef]:
-	return [pistol(), rifle(), shotgun(), rocket_launcher()]
+	return ZeeWeaponPack.weapons(damage_table())
 
 
 ## The whole weapon table, validated as one document.
@@ -252,21 +113,127 @@ static func weapons() -> Array[DotWeaponDef]:
 ## A server checks this at boot, headless, before anybody joins — which is the only
 ## moment anybody is watching.
 static func weapon_catalogue() -> DotWeaponCatalogue:
-	var catalogue := DotWeaponCatalogue.new()
-	for def in weapons():
-		catalogue.add(def)
-	return catalogue
+	return ZeeWeaponPack.catalogue(damage_table())
 
 
 ## Weapons by id, for a module that has an item id and needs the weapon.
 static func weapon_table() -> Dictionary:
-	var table := {}
-	for def in weapons():
-		table[def.id] = def
-	return table
+	return ZeeWeaponPack.table(damage_table())
+
+
+# --- On the wire -------------------------------------------------------------
+#
+# A weapon travels as its place in `ZeeWeaponIds.all()`, plus one, so nothing is 0. The
+# same addon is compiled into both ends — the server and the client shell — so the list is
+# the same list on both, and a number is five bits where a StringName would be a string.
+
+## Bits a weapon index takes: room for the pack's twenty-seven and four more.
+const WEAPON_INDEX_BITS := 5
+
+
+## [param id]'s wire number, or 0 for nothing and for anything the pack does not define.
+static func weapon_index(id: StringName) -> int:
+	if id == &"":
+		return 0
+	return ZeeWeaponIds.all().find(id) + 1
+
+
+## The weapon [param index] names, or `&""`.
+static func weapon_at(index: int) -> StringName:
+	var ids := ZeeWeaponIds.all()
+	return ids[index - 1] if index >= 1 and index <= ids.size() else &""
+
+
+## Bits the carried set takes: one per weapon in the pack.
+static func carry_bits() -> int:
+	return mini(ZeeWeaponIds.all().size(), 62)
+
+
+## Everything [param arsenal] carries, one bit per weapon.
+static func carry_mask(arsenal: DotWeaponArsenal) -> int:
+	if arsenal == null:
+		return 0
+
+	var mask := 0
+	var ids := ZeeWeaponIds.all()
+
+	for i in range(mini(ids.size(), 62)):
+		if arsenal.carries(ids[i]):
+			mask |= 1 << i
+
+	return mask
+
+
+## Makes [param arsenal] carry exactly what [param mask] says. Returns how many weapons
+## it gave or took.
+##
+## [b]What a client's arsenal is filled from, and it was filled from nothing.[/b] A
+## loadout is resolved from a store on the server, and nothing sent its result, so a
+## connected client's own arsenal was empty for the whole of every match: it predicted no
+## shot, drew no flash, played no report, its HUD read zero and its number keys selected
+## nothing — while the server, which had the weapons, fired them correctly. Takes before
+## gives, because a give replaces a slot and a take of the replaced weapon afterwards
+## would empty it.
+##
+## [b]Full magazines on a give[/b]: the ammunition is corrected from the snapshot right
+## after, and a weapon given empty would read as a reload the player did not ask for.
+static func apply_carry(arsenal: DotWeaponArsenal, mask: int) -> int:
+	if arsenal == null or not arsenal.is_ready():
+		return 0
+
+	var ids := ZeeWeaponIds.all()
+	var changed := 0
+
+	for i in range(mini(ids.size(), 62)):
+		var def := arsenal.catalogue.get_def(ids[i]) if arsenal.catalogue != null else null
+		if def == null:
+			continue
+
+		var held := arsenal.slot_at(def.slot)
+		if (mask & (1 << i)) == 0 and held != null and held.id() == ids[i]:
+			var _taken := arsenal.take(def.slot)
+			changed += 1
+
+	for i in range(mini(ids.size(), 62)):
+		if (mask & (1 << i)) != 0 and not arsenal.carries(ids[i]):
+			if arsenal.give(ids[i]).ok:
+				changed += 1
+
+	return changed
 
 
 # --- Loadout ---------------------------------------------------------------
+
+## Which loadout slot each of the pack's arsenal slots goes in.
+##
+## [b]`primary` and `secondary` keep the names they had[/b], because a stored loadout is a
+## document keyed on slot ids and a player's saved choice should survive this game
+## changing its weapons. The heavies go in `primary` with the rifles: a launcher is
+## something you carry INSTEAD of a rifle, and the budget is what makes that a choice.
+const LOADOUT_SLOT_FOR := {
+	ZeeWeaponIds.SLOT_MELEE: &"melee",
+	ZeeWeaponIds.SLOT_SIDEARM: &"secondary",
+	ZeeWeaponIds.SLOT_PRIMARY: &"primary",
+	ZeeWeaponIds.SLOT_HEAVY: &"primary",
+	ZeeWeaponIds.SLOT_THROWN: &"thrown",
+}
+
+## Points per arsenal slot. Melee is free because everybody always has one.
+const COST_FOR_SLOT := {
+	ZeeWeaponIds.SLOT_MELEE: 0,
+	ZeeWeaponIds.SLOT_SIDEARM: 1,
+	ZeeWeaponIds.SLOT_PRIMARY: 2,
+	ZeeWeaponIds.SLOT_HEAVY: 4,
+	ZeeWeaponIds.SLOT_THROWN: 1,
+}
+
+## The one item a player has to have unlocked. Everything else is free.
+##
+## Kept rather than made free with the rest, because it is the only thing exercising
+## dot-loadout's entitlement path in this game, and a path nothing exercises is one
+## nobody knows still works. The game's entitlement source grants it to everybody.
+const PAID_WEAPON := ZeeWeaponIds.LAUNCHER
+
 
 ## The items a loadout can name. One per weapon, plus armour.
 ##
@@ -277,13 +244,13 @@ static func catalogue() -> DotItemCatalogue:
 	var items: Array[DotItem] = []
 
 	for weapon in weapons():
-		var item := DotItem.make(weapon.id, DotItem.KIND_WEAPON, weapon.id != &"rocket")
+		var item := DotItem.make(weapon.id, DotItem.KIND_WEAPON, weapon.id != PAID_WEAPON)
 		item.display_name = weapon.display_name
-		# No slot restriction on the item: the schema's `kinds` decides that a weapon
-		# slot takes weapons, and the points budget decides which combination is
-		# legal. Locking each weapon to one slot instead would mean four slots, and a
-		# player carrying a shotgun could never also carry a rifle.
-		item.cost = weapon.slot
+		# One loadout slot per weapon, from the pack's arsenal slot. A knife in the
+		# primary slot would be a player who spawns with nothing to shoot.
+		item.slots = [LOADOUT_SLOT_FOR.get(weapon.slot, &"primary")]
+		item.tags = weapon.tags.duplicate()
+		item.cost = int(COST_FOR_SLOT.get(weapon.slot, 2))
 		items.append(item)
 
 	var armour := DotItem.make(&"armour", DotItem.KIND_EQUIPMENT, true)
@@ -295,23 +262,44 @@ static func catalogue() -> DotItemCatalogue:
 	return DotItemCatalogue.of(items)
 
 
-## The loadout schema: two weapon slots and a gear slot, on a small points budget.
+## The loadout schema: a melee, a sidearm, a primary, a throwable and a gear slot, on a
+## small points budget.
 ##
-## Points rather than an explicit list of legal combinations, because "a rifle and a
-## shotgun, or a rocket launcher and a pistol" is four numbers rather than an
-## enumeration that grows as the square of the weapon count.
+## Points rather than an explicit list of legal combinations, because "a launcher, or a
+## rifle and armour" is a handful of numbers rather than an enumeration that grows as
+## the square of the weapon count — and there are twenty-seven weapons now.
 static func loadout_schema() -> DotLoadoutSchema:
-	var primary := DotLoadoutSlot.make(&"primary", true, &"rifle")
+	# [b]Required, like the throwable below, and that is what puts them in anybody's
+	# hands.[/b] dot-loadout's default loadout fills REQUIRED slots only, so as optional
+	# slots a player who never chose a loadout spawned with a rifle and a pistol and
+	# pressed 5 to nothing — rendered, not reasoned: the grenade was in the class's
+	# loadout and the store's default replaced it a frame later. A loadout saved before
+	# these slots existed is not refused for lacking them: this game conforms on load
+	# (`DotLoadoutConfig.conform_on_load`), and conforming fills an empty required slot
+	# with its default before it trims to the budget.
+	var melee := DotLoadoutSlot.make(&"melee", true, ZeeWeaponIds.KNIFE)
+	melee.display_name = "Melee"
+	melee.kinds = [DotItem.KIND_WEAPON]
+	melee.arsenal_slot = ZeeWeaponIds.SLOT_MELEE
+	melee.order = 5
+
+	var primary := DotLoadoutSlot.make(&"primary", true, ZeeWeaponIds.RIFLE)
 	primary.display_name = "Primary"
 	primary.kinds = [DotItem.KIND_WEAPON]
-	primary.arsenal_slot = 2
+	primary.arsenal_slot = ZeeWeaponIds.SLOT_PRIMARY
 	primary.order = 10
 
-	var secondary := DotLoadoutSlot.make(&"secondary", true, &"pistol")
+	var secondary := DotLoadoutSlot.make(&"secondary", true, ZeeWeaponIds.PISTOL)
 	secondary.display_name = "Sidearm"
 	secondary.kinds = [DotItem.KIND_WEAPON]
-	secondary.arsenal_slot = 1
+	secondary.arsenal_slot = ZeeWeaponIds.SLOT_SIDEARM
 	secondary.order = 20
+
+	var thrown := DotLoadoutSlot.make(&"thrown", true, ZeeWeaponIds.FRAG)
+	thrown.display_name = "Throwable"
+	thrown.kinds = [DotItem.KIND_WEAPON]
+	thrown.arsenal_slot = ZeeWeaponIds.SLOT_THROWN
+	thrown.order = 25
 
 	var gear := DotLoadoutSlot.make(&"gear")
 	gear.display_name = "Gear"
@@ -319,11 +307,11 @@ static func loadout_schema() -> DotLoadoutSchema:
 	gear.order = 30
 
 	var schema := DotLoadoutSchema.of(
-		&"arena", [primary, secondary, gear], catalogue()
+		&"arena", [melee, primary, secondary, thrown, gear], catalogue()
 	)
-	# Costs are 1/2/3/4 for pistol/rifle/shotgun/rocket. Six buys a rifle and a
-	# shotgun, or a rocket launcher and a pistol, and not a rocket launcher and a
-	# shotgun -- four numbers instead of an enumeration that grows as the square of
-	# the weapon count.
-	schema.point_budget = 6
+	# Melee 0, sidearm 1, primary 2, heavy 4, a grenade 1, armour 2. Seven buys a rifle,
+	# a pistol, a frag and armour with one to spare, or a heavy with a sidearm and a
+	# grenade and no armour — and not a heavy WITH armour, which is the combination
+	# nobody can answer.
+	schema.point_budget = 7
 	return schema
