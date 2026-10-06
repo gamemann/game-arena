@@ -575,13 +575,19 @@ func present_body() -> void:
 	var state: DotFpsState = player.controller.state if live else null
 	var tunables: DotFpsTunables = player.controller.tunables if live else null
 
-	ability_label.visible = live and tunables != null and tunables.launch_enabled
+	ability_label.visible = live and tunables != null and (tunables.launch_enabled or tunables.dash_enabled)
 	if ability_label.visible:
-		var left := state.launch_cooldown_left
-		ability_label.text = (
-			"%s  LAUNCH" % launch_key_text if left <= 0.0
-			else "%s  %.1f" % [launch_key_text, left]
-		)
+		var lines := PackedStringArray()
+		if tunables.launch_enabled:
+			var left := state.launch_cooldown_left
+			lines.append(
+				"%s  LAUNCH" % launch_key_text if left <= 0.0
+				else "%s  %.1f" % [launch_key_text, left]
+			)
+		if tunables.dash_enabled:
+			var dash_left := state.dash_cooldown_left
+			lines.append("SHIFT  DASH" if dash_left <= 0.0 else "SHIFT  %.1f" % dash_left)
+		ability_label.text = "\n".join(lines)
 
 	slide_label.visible = live and state != null and state.is_sliding()
 	slide_label.text = "C  Cancel slide"

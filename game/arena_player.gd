@@ -301,6 +301,13 @@ static func arena_tunables() -> DotFpsTunables:
 	tunables.launch_button = DotFpsCommand.BUTTON_USER_0
 	tunables.launch_velocity = 12.0
 	tunables.launch_cooldown = 8.0
+	# Shift dashes: the sprint bit, which this game leaves free because it has no sprint
+	# (sprint_speed_scale is 1). A press throws you along the way you steer.
+	tunables.dash_enabled = true
+	tunables.dash_button = DotFpsCommand.BUTTON_SPRINT
+	tunables.dash_speed = 15.0
+	tunables.dash_lift = 2.5
+	tunables.dash_cooldown = 3.0
 	return tunables
 
 
@@ -310,6 +317,7 @@ const MOVEMENT_RULES: PackedStringArray = [
 	"slide_enabled", "slide_min_speed", "slide_boost", "slide_max_speed",
 	"slide_friction", "slide_duration", "slide_cooldown",
 	"launch_enabled", "launch_velocity", "launch_forward", "launch_cooldown",
+	"dash_enabled", "dash_speed", "dash_lift", "dash_cooldown",
 ]
 
 
