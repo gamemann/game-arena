@@ -115,6 +115,10 @@ const ArenaMode := preload("arena_mode.gd")
 ## which is what [DotMatch] alone has always been enough for.
 @export var objective_layout: StringName = &""
 
+## How this mode picks a respawn site: "avoid", "weighted", "furthest" or "random"
+## (`ArenaPlayerStack.spawn_settings`). Empty takes the server's `arena_spawn_mode`.
+@export var spawn_mode: String = ""
+
 @export_group("Map")
 
 ## The map this mode is played on if nothing else says. Empty means "whatever is loaded".

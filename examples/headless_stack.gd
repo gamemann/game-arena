@@ -24,7 +24,7 @@ const TICK_RATE := 64
 const BOTS := 4
 
 const SECTIONS := 6
-const CHECKS := 54
+const CHECKS := 58
 
 var _passed := 0
 var _failed := 0
@@ -329,6 +329,47 @@ func _test_classes_and_spawns() -> void:
 		"without having to compromise, which would mean the map's conditions and the "
 		+ "mode's rules disagree"
 	)
+
+	# Spawns keep away from enemies (2026-10-06): an enemy on a spawn point, and the site the
+	# director picks for player 1 is the furthest it can find from them, up to the floor.
+	var stack := _stack()
+	var mine := stack.teams.team_of("1")
+	var enemy: Node = null
+	var friend: Node = null
+
+	for p in _game.players():
+		if p.player_id != 1 and p.is_alive():
+			if stack.teams.team_of(str(p.player_id)) != mine and enemy == null:
+				enemy = p
+			elif stack.teams.team_of(str(p.player_id)) == mine and friend == null:
+				friend = p
+
+	var points: Array = spawns.sites()
+	var camped: Vector3 = (points[0] as DotSpawnSite).position
+	enemy.controller.state.position = camped
+	var furthest := 0.0
+
+	for site: DotSpawnSite in points:
+		furthest = maxf(furthest, site.position.distance_to(camped))
+
+	var picked := (stack.choose_spawn(1).value as DotSpawnChoice).site.position
+	var floor_m := minf(float(stack.spawn_settings["min_enemy"]), furthest)
+	_check(picked.distance_to(camped) >= floor_m - 0.01, "an enemy on a spawn point pushes the spawn away from them (%.1f m, floor %.1f)" % [picked.distance_to(camped), floor_m])
+	var listed: Array = stack._enemy_positions(mine, "1")
+	var others := 0
+
+	for p in _game.players():
+		if p.player_id != 1 and p.is_alive() and stack.teams.team_of(str(p.player_id)) != mine:
+			others += 1
+
+	# By count, not by position: the enemy was put on the point player 1 is standing on.
+	_check(listed.size() == others, "neither the spawning player nor their side counts as an enemy (%d of %d)" % [listed.size(), others])
+	_check(listed.has(camped), "and the other side does")
+	stack.spawn_settings["mode"] = "random"
+	stack.refresh_spawn_rules()
+	_check(stack.spawns.rules.mode == DotSpawnRules.Mode.RANDOM, "and a server can put it back to random")
+	stack.spawn_settings["mode"] = "avoid"
+	stack.refresh_spawn_rules()
 
 	_check(
 		_stack().describe_lines().size() > 10,

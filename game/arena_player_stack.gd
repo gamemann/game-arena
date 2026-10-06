@@ -327,6 +327,22 @@ func _build_classes() -> void:
 		DotLog.error(CHANNEL, "class manager", {"why": res.error.message})
 
 
+## How a respawn picks its site, as the server owner set it (`arena_spawn_*` cvars):
+##
+## - `mode`: "avoid" (the default: safest-first, and never closer to an enemy than `min_enemy`
+##   metres when anywhere else will do), "weighted" (safest-first, no hard floor), "furthest"
+##   (as far from every enemy as the map allows), or "random" (what the arena did until
+##   2026-10-06: any of the side's points).
+## - `min_enemy`: the hard floor for "avoid", in metres.
+## - `sight_penalty`: what an enemy being able to see a site costs it.
+## - `enemy_weight`: what each metre from the nearest enemy is worth.
+##
+## A mode may name its own (`ArenaMode.spawn_mode`); empty takes this one.
+var spawn_settings := {"mode": "avoid", "min_enemy": 10.0, "sight_penalty": 500.0, "enemy_weight": 1.5}
+
+const SPAWN_MODES := ["avoid", "weighted", "furthest", "random"]
+
+
 func _build_spawns() -> void:
 	spawns = DotSpawnDirector.new()
 	spawns.name = "Spawns"
@@ -336,6 +352,7 @@ func _build_spawns() -> void:
 	spawns.rules.seed_value = 0x4A5E4
 	spawns.enemies_fn = _enemy_positions
 	spawns.friends_fn = _friend_positions
+	spawns.can_see_fn = _can_see_site
 	add_child(spawns)
 
 	refresh_spawn_rules()
@@ -358,6 +375,28 @@ func refresh_spawn_rules() -> void:
 		return
 
 	spawns.rules.protection_sec = game.match_node.rules.spawn_protection_sec
+
+	var mode := str(spawn_settings.get("mode", "avoid"))
+
+	if game.mode != null and game.mode.spawn_mode != "":
+		mode = game.mode.spawn_mode
+
+	match mode:
+		"random":
+			spawns.rules.mode = DotSpawnRules.Mode.RANDOM
+			spawns.rules.minimum_enemy_distance = 0.0
+		"furthest":
+			spawns.rules.mode = DotSpawnRules.Mode.FURTHEST
+			spawns.rules.minimum_enemy_distance = 0.0
+		"weighted":
+			spawns.rules.mode = DotSpawnRules.Mode.SAFEST
+			spawns.rules.minimum_enemy_distance = 0.0
+		_:
+			spawns.rules.mode = DotSpawnRules.Mode.SAFEST
+			spawns.rules.minimum_enemy_distance = maxf(float(spawn_settings.get("min_enemy", 10.0)), 0.0)
+
+	spawns.rules.visible_penalty = maxf(float(spawn_settings.get("sight_penalty", 500.0)), 0.0)
+	spawns.rules.enemy_distance_weight = float(spawn_settings.get("enemy_weight", 1.5))
 
 	# [b]Off, and not because breaking on attack is wrong.[/b] It is the behaviour a
 	# deathmatch wants — firing out of your own spawn should end the window. But only
@@ -796,17 +835,49 @@ func _pose_of_key(key: String) -> Transform3D:
 	return player.controller.eye_transform()
 
 
-func _enemy_positions(_team: StringName) -> Array:
-	# Free-for-all: everybody alive is an enemy, which is the honest answer here and is
-	# why the spawn selector is asked for distance at all.
+## Everybody alive who is an enemy of the spawning player: in a free-for-all everybody but
+## them, in a team mode the other sides. The spawning player is never their own enemy: a player
+## respawned while alive (a map change, an admin) was standing on the site being scored and
+## scored it as the most dangerous place on the map.
+func _enemy_positions(team: StringName, key: String = "") -> Array:
 	var out: Array = []
+	# The MODE says whether there are sides, not dot-match's team manager: that exists in a
+	# free-for-all too, and the roster keeps whatever side a team mode left everybody on (the
+	# first version filtered by it and told a free-for-all respawner its old team-mates were
+	# friends; headless_match's free-for-all scenarios caught it).
+	var sided := game.mode != null and game.mode.is_team_mode() and team != &""
 
 	for player in game.players():
-		if player.is_alive() and player.controller != null:
+		if not player.is_alive() or player.controller == null or str(player.player_id) == key:
+			continue
+
+		if sided and teams != null and teams.team_of(str(player.player_id)) == team:
+			continue
+
+		out.append(player.controller.state.position)
+
+	return out
+
+
+## The spawning player's side, alive, in a team mode; nobody in a free-for-all.
+func _friend_positions(team: StringName, key: String = "") -> Array:
+	var out: Array = []
+
+	if game.mode == null or not game.mode.is_team_mode() or team == &"" or teams == null:
+		return out
+
+	for player in game.players():
+		if player.is_alive() and player.controller != null and str(player.player_id) != key \
+				and teams.team_of(str(player.player_id)) == team:
 			out.append(player.controller.state.position)
 
 	return out
 
 
-func _friend_positions(_team: StringName) -> Array:
-	return []
+## Whether an enemy standing at [param from] can see a site: eye height to head height, walls
+## and props in the way.
+func _can_see_site(from: Vector3, to: Vector3) -> bool:
+	if physics == null or not is_inside_tree():
+		return false
+
+	return physics.query().line_of_sight_3d(get_viewport().find_world_3d(), from + Vector3(0, 1.6, 0), to + Vector3(0, 1.6, 0))

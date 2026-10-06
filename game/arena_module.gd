@@ -132,6 +132,7 @@ func _module_load() -> DotResult:
 
 	_add_movement_cvars()
 	_add_drop_cvars()
+	_add_spawn_cvars()
 
 	add_cvar(
 		"arena_streak_rewards", "3:heal,5:haste,7:empowered",
@@ -920,6 +921,38 @@ const DROP_CVARS := {
 	"arena_drop_any_kill": ["any_kill", "Every kill drops (1), or only a critical one (0)"],
 	"arena_drop_life": ["life", "Seconds a drop lies there before it goes"],
 }
+
+
+## cvar -> the key in `ArenaPlayerStack.spawn_settings` it sets, and what it means.
+const SPAWN_CVARS := {
+	"arena_spawn_mode": ["mode", "How a respawn picks its site: avoid, weighted, furthest or random"],
+	"arena_spawn_min_enemy": ["min_enemy", "In avoid mode, the nearest an enemy may be to a site, in metres"],
+	"arena_spawn_sight_penalty": ["sight_penalty", "What an enemy being able to see a site costs it"],
+	"arena_spawn_enemy_weight": ["enemy_weight", "What each metre from the nearest enemy is worth"],
+}
+
+
+func _add_spawn_cvars() -> void:
+	var stack: Object = game.get("player_stack")
+
+	if stack == null:
+		return
+
+	for cvar in SPAWN_CVARS:
+		var key: String = SPAWN_CVARS[cvar][0]
+		add_cvar(cvar, str(stack.spawn_settings[key]), SPAWN_CVARS[cvar][1], DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY).changed.connect(
+			func(_old: String, new_value: String) -> void:
+				if key == "mode":
+					if not stack.SPAWN_MODES.has(new_value):
+						log_info("unknown spawn mode, kept the old one", {"asked": new_value, "modes": stack.SPAWN_MODES})
+						return
+
+					stack.spawn_settings[key] = new_value
+				else:
+					stack.spawn_settings[key] = maxf(new_value.to_float(), 0.0)
+
+				stack.refresh_spawn_rules()
+				log_info("spawn rule changed", {"rule": key, "value": new_value}))
 
 
 func _add_drop_cvars() -> void:
