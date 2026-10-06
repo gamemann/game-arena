@@ -148,6 +148,51 @@ var notice_label: Label = null
 var _notice_age: float = 0.0
 const NOTICE_SEC := 4.0
 
+## Seconds a "+N" popup rises and fades over.
+const POPUP_SEC := 1.3
+
+## Rising "+1" / "+3 COINS" lines beside the crosshair: [Label, age].
+var _popups: Array = []
+
+## The coin count last frame, so a rise can be told as a popup.
+var _coins_seen: int = -1
+
+
+## A "+N" beside the crosshair that rises and fades: the genre's way of saying a kill or a
+## pickup counted. Several stack upward rather than overwriting each other.
+func popup(text: String, colour: Color = Color(1.0, 0.95, 0.6)) -> void:
+	var label := Label.new()
+	label.text = text
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_size_override(&"font_size", 22)
+	label.add_theme_color_override(&"font_color", colour)
+	label.add_theme_color_override(&"font_outline_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override(&"outline_size", 5)
+	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	label.offset_left = 40.0
+	label.offset_right = 340.0
+	label.offset_top = -10.0 - 26.0 * float(_popups.size())
+	label.offset_bottom = label.offset_top + 30.0
+	add_child(label)
+	_popups.append([label, 0.0])
+
+
+func _advance_popups(delta: float) -> void:
+	for i in range(_popups.size() - 1, -1, -1):
+		var entry: Array = _popups[i]
+		var label: Label = entry[0]
+		entry[1] = float(entry[1]) + delta
+		var t := float(entry[1]) / POPUP_SEC
+
+		if t >= 1.0 or not is_instance_valid(label):
+			if is_instance_valid(label):
+				label.queue_free()
+			_popups.remove_at(i)
+			continue
+
+		label.position.y -= delta * 40.0
+		label.modulate.a = clampf((1.0 - t) / 0.35, 0.0, 1.0)
+
 
 ## A kill, as every client hears it. Keeps the streaks, the nemesis count and the marks.
 func note_kill(info: Dictionary, own_id: int, killer_name: String) -> void:
@@ -158,6 +203,12 @@ func note_kill(info: Dictionary, own_id: int, killer_name: String) -> void:
 		streaks[killer] = int(streaks.get(killer, 0)) + 1
 
 	if killer == own_id and killer != victim:
+		var tags := PackedStringArray()
+		if bool(info.get("headshot", false)):
+			tags.append("HEADSHOT")
+		if bool(info.get("critical", false)):
+			tags.append("CRITICAL")
+		popup("+1  %s" % " ".join(tags) if not tags.is_empty() else "+1", Color(1.0, 0.4, 0.3) if not tags.is_empty() else Color(1.0, 0.95, 0.6))
 		if kill_mark != null:
 			kill_mark.alpha = 1.0
 			kill_mark.colour = Color(1.0, 0.25, 0.2) if bool(info.get("headshot", false)) else Color.WHITE
@@ -633,6 +684,12 @@ func present_body() -> void:
 		count = int(game.drops.coins.get(player.player_id, 0))
 	coins_label.visible = count > 0
 	coins_label.text = "%d  COINS" % count
+
+	if _coins_seen >= 0 and count > _coins_seen:
+		popup("+%d  COINS" % (count - _coins_seen), Color(1.0, 0.82, 0.25))
+	_coins_seen = count
+
+	_advance_popups(get_process_delta_time())
 
 
 ## Fades [member blind_overlay] toward whether the followed player is blinded.

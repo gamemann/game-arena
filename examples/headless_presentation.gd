@@ -25,7 +25,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 128
+const CHECKS := 130
 
 var _passed := 0
 var _failed := 0
@@ -1095,6 +1095,11 @@ func _test_criticals_and_the_body() -> void:
 	hud.present_body()
 	_check(hud.streak_meter.count == 3 and hud.kill_mark.alpha > 0.5,
 		"three kills fill the streak meter to three and flash the kill mark")
+	var popped: Array = hud._popups.map(func(e: Array) -> String: return (e[0] as Label).text)
+	_check(popped.size() == 3 and popped.has("+1  HEADSHOT"), "each one rises as a +1 beside the crosshair, a headshot named (%s)" % [popped])
+	for _i in range(4):
+		hud._advance_popups(0.5)
+	_check(hud._popups.is_empty(), "and they are gone in a second and a half")
 
 	for i in range(3):
 		hud.note_kill({"killer_id": 7, "victim_id": 6, "weapon": "sniper"}, 6, "Sniper")
