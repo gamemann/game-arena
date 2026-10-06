@@ -555,11 +555,19 @@ func _adopt_match_sides() -> void:
 	if not game.is_authority or teams == null:
 		return
 
+	var sided := game.mode != null and game.mode.is_team_mode()
+
 	for id in game.player_ids():
-		var side := _side_of_id(game.team_of(id))
+		var key := str(id)
+		var side := _side_of_id(game.team_of(id)) if sided else &""
 
 		if side != &"":
-			var _forced := teams.force_team(str(id), side, &"match")
+			var _forced := teams.force_team(key, side, &"match")
+		elif teams.teams.is_playing(teams.team_of(key)):
+			# No sides now, so nobody keeps the last mode's. A free-for-all whose roster still
+			# said blue and red was one where dot-team's `are_allies` called old team-mates
+			# friends, to dot-spectate and anything else that asks it.
+			var _cleared := teams.force_team(key, DotTeamSet.UNASSIGNED, &"match")
 
 
 ## Drops a player from every record. Call from `ArenaGame.remove_player`.

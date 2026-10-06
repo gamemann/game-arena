@@ -24,7 +24,7 @@ const TICK_RATE := 64
 const BOTS := 4
 
 const SECTIONS := 6
-const CHECKS := 58
+const CHECKS := 60
 
 var _passed := 0
 var _failed := 0
@@ -412,6 +412,15 @@ func _test_leaving() -> void:
 		+ "somebody tries to rejoin is a window that never expires"
 	)
 	_check(roster.count() == BOTS - 1, "leaving the roster the right size")
+
+	# Into a free-for-all on the same map: the roster gives up the last mode's sides.
+	var ids := _game.player_ids()
+	var on_side_before := ids.filter(func(id: int) -> bool: return teams.teams.is_playing(teams.team_of(str(id)))).size()
+	var changed := _game.change_map(_game.map, ArenaGame.ArenaModes.by_id_or_default(&"ffa"))
+	var on_side_after := ids.filter(func(id: int) -> bool: return teams.teams.is_playing(teams.team_of(str(id)))).size()
+	_check(changed.ok and on_side_before > 0 and on_side_after == 0,
+		"a free-for-all after a team mode puts nobody on the old sides (%d before, %d after)" % [on_side_before, on_side_after])
+	_check(ids.size() >= 2 and not teams.are_allies(str(ids[0]), str(ids[1])), "so nobody is anybody's ally")
 
 	_game.queue_free()
 
