@@ -1254,7 +1254,7 @@ What wiring it found, in the order it was found:
 
 **The HUD**, all render-checked (`tools/screenshot.sh dm_box --feel`): a red edge when health is under a third (a radial gradient sized to the whole viewport like the blind — the first render was a red rectangle over the HUD's safe area, and too strong in the middle), the launch's key and readiness or cooldown left of centre above the bars, and "C  Cancel slide" while sliding. `headless_presentation`'s *A critical breaks a body, a respawn mends it, the HUD shows the rest* (8 checks).
 
-**`--feel` cannot yet draw a weapon in the hands**: its local rig equips nothing (the label changes, the model never comes), so its scope frame shows empty hands. The scope itself is render-checked in zee-dot-weapons' range (`EXTRA="--aim" tools/screenshot.sh sniper`). Its break frame shows a piece in the air but the stair block hides the rest of the body from both sides tried. Both are queued.
+**`--feel` draws the weapon in the hands since it arms them on the first frame**: armed in the script's `_init`, before anything was in the tree, the rig's `get_path()` of the hands failed and every frame showed empty hands. With a weapon, the scope frame found the scope sized to the HUD's safe area, leaving strips of world at the top and left; it is sized to the viewport now, like the blind. Its break frame shows pieces in the air but the stair block hides most of the body.
 
 ## Coins out of a body (2026-10-06)
 

@@ -298,12 +298,19 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 	# Where the arena's vendored weapon art is; the client says so at boot, and without it
 	# the hands are drawn holding nothing.
 	ZeeModelCache.set_asset_root("res://")
-	var hands := ZeeViewModel.new()
-	hands.name = "Hands"
-	_local.camera.add_child(hands)
-	_local.arm_first_person(hands, true)
-	var _given := _local.weapons.give_everything()
 	_players.append(_local)
+
+	# The hands are armed on the first frame, not here: this runs in the script's _init,
+	# before anything is in the tree, so the rig's `get_path()` of the hands failed ("Cannot
+	# get path of node") and every frame showed empty hands.
+	var arm_hands := func() -> void:
+		if _local.get_node_or_null(^"Camera/Hands") != null or _local.weapons == null:
+			pass
+		var hands := ZeeViewModel.new()
+		hands.name = "Hands"
+		_local.camera.add_child(hands)
+		_local.arm_first_person(hands, true)
+		var _given := _local.weapons.give_everything()
 
 	_hud = ArenaHud.new()
 	_hud.name = "Hud"
@@ -319,7 +326,7 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 		# ticks a player: the rig equips the view model on a tick and nothing else here
 		# ticks it.
 		var ask := DotWeaponCommand.new()
-		ask.slot = slot + 1
+		ask.slot = slot
 		for tick in range(_feel_tick, _feel_tick + 80):
 			var _o := _local.simulate_tick(tick, 1.0 / 64.0, DotFpsCommand.new(), ask)
 			ask = DotWeaponCommand.new()
@@ -330,6 +337,7 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 			"name": "%s_feel_scope" % String(id),
 			"local": true,
 			"arm": func() -> void:
+				arm_hands.call()
 				# The sniper itself: give_everything leaves the heavy slot holding the last
 				# heavy it gave, which is not the sniper.
 				var _g := _local.arsenal.give(ZeeWeaponIds.SNIPER)

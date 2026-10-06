@@ -542,6 +542,12 @@ func present_body() -> void:
 
 	if scope != null:
 		scope.fraction = hands.aim_fraction() if scoped else 0.0
+		if scoped and is_inside_tree():
+			# The whole viewport, like the blind: sized to the HUD it left the safe area's
+			# strip of world showing round the top and left of the scope (rendered).
+			var inverse := get_global_transform().affine_inverse()
+			scope.position = inverse * Vector2.ZERO
+			scope.size = inverse.basis_xform(get_viewport_rect().size)
 	if crosshair != null:
 		# The scope has its own reticle; a crosshair drawn over it is two.
 		crosshair.visible = not scoped
