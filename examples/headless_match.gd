@@ -52,13 +52,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 487
+const CHECKS := 497
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 30
+const SECTIONS := 31
 
 var _passed := 0
 var _failed := 0
@@ -124,6 +124,7 @@ func _run() -> void:
 	await _test_king_of_the_hill()
 	await _test_capture_the_flag()
 	await _test_drops()
+	await _test_weapon_modes()
 
 	# Last, and it has to be. It replaces the combat manager, the match node and the
 	# map, so everything above that reads any of them — the kill feed a HUD catches
@@ -819,6 +820,84 @@ func _test_drops() -> void:
 
 	remove_child(game)
 	game.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+# --- Weapon modes ------------------------------------------------------------
+
+func _weapon_mode_game(mode: ArenaMode, ids: Array) -> ArenaGame:
+	var game := ArenaGame.new()
+	game.name = "WeaponModeGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	game.mode = mode
+	add_child(game)
+	var ready := game.setup(ArenaMap.dm_box())
+	if not ready.ok:
+		return null
+	game.start(0)
+	for id in ids:
+		var _added := game.add_player(id, "Armed %d" % id)
+	game.match_node.rules.respawn_delay_sec = 0.2
+	_go_live(game)
+	return game
+
+
+func _carried(game: ArenaGame, id: int) -> Array[StringName]:
+	var out: Array[StringName] = []
+	for slot in game.player_for(id).arsenal.slots():
+		var def: DotWeaponDef = game.player_for(id).arsenal.slot_at(slot).def
+		out.append(def.id)
+	return out
+
+
+## Gun game and a weapon pool: the mode decides what a player carries.
+func _test_weapon_modes() -> void:
+	_section("gun game and a weapon pool")
+
+	_check(ArenaModes.ids().has(&"gungame") and ArenaModes.ids().has(&"snipers"),
+		"gun game and only snipers are modes a server or a vote can name")
+
+	var broken := ArenaMode.gun_game_mode()
+	broken.rules.score_limit = 3
+	_check(not broken.validate().ok, "a gun game whose score limit is not its list's length is refused")
+
+	var gun := ArenaMode.gun_game_mode()
+	var game := _weapon_mode_game(gun, [920, 921])
+	if not _check(game != null, "a gun game sets up"):
+		return
+	for _i in range(6):
+		await get_tree().process_frame
+	var first := StringName(gun.gun_game[0])
+	var held := game.player_for(920).arsenal.current_def()
+	_check(held != null and held.id == first, "a gun game player spawns holding the first gun (%s)" % (held.id if held else &"none"))
+	_check(_carried(game, 920).size() <= 2, "and nothing else but the knife (%s)" % ", ".join(_carried(game, 920)))
+
+	_kill_through_combat(game, 920, 921)
+	held = game.player_for(920).arsenal.current_def()
+	_check(held != null and held.id == StringName(gun.gun_game[1]),
+		"a kill moves the killer to the next gun (%s)" % (held.id if held else &"none"))
+	remove_child(game)
+	game.queue_free()
+
+	var snipers := ArenaMode.only_snipers()
+	var sniping := _weapon_mode_game(snipers, [930, 931])
+	if not _check(sniping != null, "an only-snipers game sets up"):
+		return
+	for _i in range(6):
+		await get_tree().process_frame
+	var allowed := snipers.pool_ids(sniping.player_for(930).arsenal.catalogue)
+	var carried := _carried(sniping, 930)
+	var stray: Array[StringName] = []
+	for id in carried:
+		if not allowed.has(id) and id != ZeeWeaponIds.KNIFE:
+			stray.append(id)
+	_check(stray.is_empty() and carried.size() >= 1,
+		"only snipers carries scoped guns and the knife (%s)" % ", ".join(carried))
+	remove_child(sniping)
+	sniping.queue_free()
 	await get_tree().process_frame
 	_done()
 

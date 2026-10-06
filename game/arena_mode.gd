@@ -81,6 +81,29 @@ const ArenaMode := preload("arena_mode.gd")
 ## How many props the map scatters as cover, owned by nobody.
 @export_range(0, 64, 1) var scatter_props: int = 0
 
+@export_group("Weapons")
+
+## What a player may carry in this mode: weapon ids, or `tag:<tag>` for every weapon with
+## that tag (`tag:scoped` is every scoped gun). Empty is the usual loadouts.
+##
+## [b]Data, so an owner's "pistols only" is a copy of a file, not a request for code.[/b]
+## Only Snipers is `["tag:scoped"]` with [member pool_random]; a revolvers-only server is
+## `["revolver"]`.
+@export var weapon_pool: PackedStringArray = PackedStringArray()
+
+## One weapon from the pool at random on every spawn, rather than all of them.
+@export var pool_random: bool = false
+
+## Keep the knife (slot 1) whatever the pool says, so a player whose last magazine runs
+## dry still has something to swing.
+@export var pool_keeps_melee: bool = true
+
+## Gun game: the weapons in order. Non-empty, a player holds the one at their score and
+## is re-armed on every kill, and the score limit is the list's length — so finishing
+## the list is winning, and "advance on a kill" is the scoreboard rather than a second
+## counter that could disagree with it.
+@export var gun_game: PackedStringArray = PackedStringArray()
+
 @export_group("Objectives")
 
 ## Which objective layout this mode plays, or empty for none.
@@ -99,6 +122,54 @@ const ArenaMode := preload("arena_mode.gd")
 ## A team mode wants a map with tagged spawns, or both sides start in each other's
 ## laps — see [member ArenaMap.spawn_tags].
 @export var preferred_map: StringName = &""
+
+
+## Gun game: every kill gives you the next gun; the first through the list wins.
+static func gun_game_mode() -> ArenaMode:
+	var mode := free_for_all(0)
+	mode.id = &"gungame"
+	mode.display_name = "Gun Game"
+	mode.description = "Every kill gives you a different gun. First through the list wins."
+	mode.gun_game = PackedStringArray([
+		"minigun", "rifle", "battle_rifle", "burst_rifle", "smg", "carbine", "shotgun",
+		"drum_shotgun", "marksman", "sniper", "machine_pistol", "revolver", "pistol",
+		"derringer", "knife",
+	])
+	mode.rules.score_limit = mode.gun_game.size()
+	mode.rules.display_name = "Gun Game"
+	return mode
+
+
+## Only snipers: a random scoped rifle on every spawn, and the knife.
+static func only_snipers(limit: int = 25) -> ArenaMode:
+	var mode := free_for_all(limit)
+	mode.id = &"snipers"
+	mode.display_name = "Only Snipers"
+	mode.description = "A random sniper on every spawn. First to %d." % limit
+	mode.weapon_pool = PackedStringArray(["tag:scoped"])
+	mode.pool_random = true
+	mode.rules.display_name = "Only Snipers"
+	return mode
+
+
+## Whether this mode decides what a player carries, rather than their loadout.
+func arms_players() -> bool:
+	return not gun_game.is_empty() or not weapon_pool.is_empty()
+
+
+## The weapon ids [member weapon_pool] names, against [param catalogue]: ids it has, and
+## every id carrying a `tag:` named. In catalogue order, so a random pick is the same on
+## every machine given the same seed.
+func pool_ids(catalogue: DotWeaponCatalogue) -> Array[StringName]:
+	var out: Array[StringName] = []
+	for entry in weapon_pool:
+		if entry.begins_with("tag:"):
+			for id in catalogue.ids_with_tag(StringName(entry.substr(4))):
+				if not out.has(id):
+					out.append(id)
+		elif catalogue.has(StringName(entry)) and not out.has(StringName(entry)):
+			out.append(StringName(entry))
+	return out
 
 
 ## Free-for-all: everybody against everybody, first to the score limit.
@@ -319,6 +390,14 @@ func validate() -> DotResult:
 				"Mode '%s' has team_count %d but rules.team_based is %s."
 				% [id, team_count, str(rules.team_based)]
 			)
+		)
+
+	if not gun_game.is_empty() and rules.score_limit != gun_game.size():
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"Mode '%s' is gun game over %d weapons but its score limit is %d." % [
+				id, gun_game.size(), rules.score_limit
+			]
 		)
 
 	return rules.validate().wrap("Mode '%s' has unusable rules." % id)

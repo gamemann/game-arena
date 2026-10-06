@@ -1119,9 +1119,45 @@ func apply_loadout(id: int) -> void:
 			"player": id, "error": str(res.error)
 		})
 		player.give_default_loadout()
+		arm_for_mode(player)
 		return
 
 	player.give_loadout(loadouts.resolve(res.value))
+	arm_for_mode(player)
+
+
+## What the mode says a player carries, over whatever their loadout gave them: gun game's
+## weapon at their score, or the mode's pool. Authority side; the arsenal replicates.
+func arm_for_mode(player: ArenaPlayer) -> void:
+	if player == null or mode == null or not mode.arms_players() or not player.is_alive():
+		return
+
+	var catalogue := player.arsenal.catalogue
+	var give: Array[StringName] = []
+
+	if not mode.gun_game.is_empty():
+		var record := match_node.scoreboard.find(str(player.player_id)) if match_node != null else null
+		var level := clampi(record.score if record != null else 0, 0, mode.gun_game.size() - 1)
+		give.append(StringName(mode.gun_game[level]))
+	else:
+		var pool := mode.pool_ids(catalogue)
+		if mode.pool_random and not pool.is_empty():
+			var rng := RandomNumberGenerator.new()
+			rng.seed = player.player_id * 7919 + _tick
+			give.append(pool[rng.randi_range(0, pool.size() - 1)])
+		else:
+			give = pool
+
+	player.arsenal.clear()
+	var hand := 0
+	for id in give:
+		if catalogue.has(id) and player.arsenal.give(id).ok:
+			# The heaviest gun, never the grenade: the loadout's own rule.
+			hand = ArenaPlayer._better_hand(hand, catalogue.get_def(id).slot)
+	if mode.pool_keeps_melee and not player.arsenal.has_slot(ZeeWeaponIds.SLOT_MELEE):
+		var _knife := player.arsenal.give(ZeeWeaponIds.KNIFE)
+	if hand > 0:
+		player.arsenal.select(hand, player.controller.state.tick)
 
 
 ## A storage key that is usable as a filename.
@@ -1278,6 +1314,12 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 	# dot-match's entry has no field for it; the bridge reads it to tell every client a
 	# lethal critical happened, which is what breaks a body and what a reward hangs on.
 	entry.set_meta(&"critical", damage.critical)
+
+	# Gun game: the killer's score just went up, so their weapon moves along the list.
+	if is_authority and mode != null and not mode.gun_game.is_empty() and damage.attacker != 0:
+		var killer_player := player_for(damage.attacker)
+		if killer_player != null and killer_player != victim:
+			arm_for_mode(killer_player)
 
 	# Coins out of the body, if the rules say this kill drops any.
 	if drops != null and is_authority:

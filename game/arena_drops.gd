@@ -164,8 +164,12 @@ func _forget(id: int, taker: int) -> void:
 	_live.erase(id)
 	var pickup: DotPickup = entry["pickup"]
 	if is_instance_valid(pickup):
+		# Out of the field NOW, not at the end of the frame: a server runs several ticks
+		# in one frame, and a pickup still in the field's list after queue_free is swept
+		# again as a freed object (four errors in headless_match before this).
+		field.remove_child(pickup)
 		pickup.queue_free()
-	field.refresh.call_deferred()
+	field.refresh()
 	taken.emit(id, taker)
 	mirror_taken(id, taker)
 

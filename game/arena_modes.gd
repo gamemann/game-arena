@@ -24,6 +24,8 @@ static func all() -> Array[ArenaMode]:
 		ArenaMode.siege(),
 		ArenaMode.king_of_the_hill(),
 		ArenaMode.capture_the_flag(),
+		ArenaMode.gun_game_mode(),
+		ArenaMode.only_snipers(),
 	]
 
 
