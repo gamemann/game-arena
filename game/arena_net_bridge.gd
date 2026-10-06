@@ -423,6 +423,7 @@ func server_tick(tick: int) -> void:
 	_game_ticked_for = -1
 	_watch_horde()
 	_watch_projectiles()
+	_watch_drops()
 
 	if net != null:
 		net.server_tick(tick)
@@ -757,9 +758,38 @@ func send_signon(peer_id: int) -> void:
 
 var _watched_projectiles: RefCounted = null
 
+## The drops layer this bridge last connected to. See [method _watch_drops].
+var _watched_drops: Node = null
+
 
 ## Follows whichever projectile layer the game has, and tells every client about each
 ## launch. Server side, every tick, because a map change builds a new one.
+## Follows whichever drops layer the game has and tells every client about each drop and
+## each take. Server side, every tick, because a map change builds a new one.
+func _watch_drops() -> void:
+	if net == null or not net.is_server or game == null:
+		return
+
+	var layer: Node = game.drops
+
+	if layer == _watched_drops:
+		return
+
+	_watched_drops = layer
+
+	if layer != null:
+		layer.dropped.connect(_on_dropped)
+		layer.taken.connect(_on_taken)
+
+
+func _on_dropped(id: int, kind: int, at: Vector3, from: Vector3, value: int) -> void:
+	send_event(0, ArenaEvents.Kind.DROP, ArenaEvents.write_drop(id, kind, value, from, at))
+
+
+func _on_taken(id: int, taker: int) -> void:
+	send_event(0, ArenaEvents.Kind.TAKEN, ArenaEvents.write_taken(id, taker))
+
+
 func _watch_projectiles() -> void:
 	if net == null or not net.is_server or game == null:
 		return
@@ -1125,6 +1155,16 @@ func _on_event(message: DotNetMessage) -> void:
 			var launch := ArenaEvents.read_launch(reader)
 			if bool(launch["ok"]):
 				_mirror_launch(launch)
+		ArenaEvents.Kind.DROP:
+			var drop := ArenaEvents.read_drop(reader)
+			if bool(drop["ok"]) and game.drops != null:
+				game.drops.mirror_drop(
+					int(drop["id"]), int(drop["kind"]), drop["at"], drop["from"], int(drop["value"])
+				)
+		ArenaEvents.Kind.TAKEN:
+			var took := ArenaEvents.read_taken(reader)
+			if bool(took["ok"]) and game.drops != null:
+				game.drops.mirror_taken(int(took["id"]), int(took["taker"]))
 		ArenaEvents.Kind.RULES:
 			var rules := ArenaEvents.read_rules(reader)
 			if bool(rules["ok"]) and game != null:

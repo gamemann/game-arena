@@ -12,6 +12,7 @@ const ArenaPlayer := preload("arena_player.gd")
 const ArenaPlayerStack := preload("arena_player_stack.gd")
 const ArenaProgress := preload("arena_progress.gd")
 const ArenaProjectiles := preload("arena_projectiles.gd")
+const ArenaDrops := preload("arena_drops.gd")
 const ArenaProps := preload("arena_props.gd")
 const ArenaSpectate := preload("arena_spectate.gd")
 
@@ -164,6 +165,16 @@ var loadouts: DotLoadoutManager = null
 ## Rockets in flight. Built alongside the combat manager, because it traces against
 ## the same world and resolves through the same rules.
 var projectiles: ArenaProjectiles = null
+
+## What a critical kill drops: coins and a health pack. Rebuilt with the combat layer on a
+## map change, like the projectiles; its rules live here in [member drop_rules] so a map
+## change keeps what the server owner set.
+var drops: ArenaDrops = null
+
+## The server owner's drop rules (`arena_drop_*`), applied to every drops layer built.
+var drop_rules := {
+	"coins": 5, "coin_value": 1, "health": 25.0, "any_kill": false, "life": 10.0,
+}
 
 ## Statistics, achievements and boards. Null when [member track_progress] is off or
 ## this instance is not the authority.
@@ -377,7 +388,30 @@ func _build_combat() -> DotResult:
 		var thrower := player_for(entity_id)
 		return thrower.muzzle_position() if thrower != null else null
 
+	drops = ArenaDrops.new()
+	drops.name = "Drops"
+	drops.is_authority = is_authority
+	drops.draws = not headless
+	add_child(drops)
+	drops.setup(tick_rate)
+	drops.position_of = func(entity_id: int) -> Variant:
+		var who := player_for(entity_id)
+		return who.global_position if who != null else null
+	apply_drop_rules()
+
 	return DotResult.success(null)
+
+
+## Puts [member drop_rules] on the drops layer. Called when it is built and when a rule
+## changes.
+func apply_drop_rules() -> void:
+	if drops == null:
+		return
+	drops.coins_per_kill = int(drop_rules["coins"])
+	drops.coin_value = int(drop_rules["coin_value"])
+	drops.health_amount = float(drop_rules["health"])
+	drops.any_kill = bool(drop_rules["any_kill"])
+	drops.life_sec = float(drop_rules["life"])
 
 
 func _build_match() -> DotResult:
@@ -894,6 +928,11 @@ func _teardown_world() -> void:
 	combat = null
 	projectiles = null
 
+	if drops != null:
+		remove_child(drops)
+		drops.queue_free()
+		drops = null
+
 	for point in _spawn_points:
 		if is_instance_valid(point):
 			remove_child(point)
@@ -1190,6 +1229,20 @@ func tick(commands: Dictionary = {}) -> void:
 	if player_stack != null:
 		player_stack.tick(_tick)
 
+	# After everybody has moved and before the match: a coin is taken where its taker
+	# ended the tick, and a heal from a pack lands before a shot next tick can be fatal.
+	if drops != null and is_authority:
+		var sweepers := {}
+		for id in player_ids():
+			var p: ArenaPlayer = _players[id]
+			if p.is_alive():
+				sweepers[id] = {
+					"position": p.controller.state.position,
+					"hurt": p.health.health < p.health.max_health,
+					"heal": func(amount: float) -> void: var _h := p.health.heal(amount),
+				}
+		drops.tick(_tick, sweepers)
+
 	match_node.tick(_tick)
 
 
@@ -1225,6 +1278,12 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 	# dot-match's entry has no field for it; the bridge reads it to tell every client a
 	# lethal critical happened, which is what breaks a body and what a reward hangs on.
 	entry.set_meta(&"critical", damage.critical)
+
+	# Coins out of the body, if the rules say this kill drops any.
+	if drops != null and is_authority:
+		var _n := drops.on_kill(
+			victim.controller.state.position, damage.critical, _tick, entity_id * 7919 + _tick
+		)
 
 	player_killed.emit(entry)
 

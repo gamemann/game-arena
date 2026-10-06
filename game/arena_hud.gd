@@ -72,6 +72,9 @@ var launch_key_text: String = "E"
 ## "C  Cancel slide" while sliding, as the prompt the genre shows.
 var slide_label: Label = null
 
+## The coins this player has collected this match, from the drops layer.
+var coins_label: Label = null
+
 ## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and
 ## not instant, so it reads as something done to the screen rather than a frame dropped.
 const BLIND_FADE_SEC := 0.25
@@ -479,6 +482,17 @@ func present_body() -> void:
 
 	slide_label.visible = live and state != null and state.is_sliding()
 	slide_label.text = "C  Cancel slide"
+
+	if coins_label == null:
+		coins_label = _make_label("Coins", Control.PRESET_CENTER_BOTTOM, Vector2(0.0, -150.0))
+		coins_label.offset_left = 200.0
+		coins_label.offset_right = 360.0
+		coins_label.add_theme_color_override(&"font_color", Color(1.0, 0.82, 0.25))
+	var count := 0
+	if live and game != null and game.drops != null:
+		count = int(game.drops.coins.get(player.player_id, 0))
+	coins_label.visible = count > 0
+	coins_label.text = "%d  COINS" % count
 
 
 ## Fades [member blind_overlay] toward whether the followed player is blinded.

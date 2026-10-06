@@ -52,6 +52,11 @@ enum Kind {
 	##
 	## After LAUNCH, for the reason VOTE gives.
 	RULES,
+	## Something dropped out of a body: its id, kind, value, where the body was and where it
+	## lands. A client draws it; only the server decides who takes it.
+	DROP,
+	## A drop is gone: taken by a player, or by nobody (0) when it expired.
+	TAKEN,
 }
 
 enum Ask {
@@ -420,6 +425,39 @@ static func read_rules(reader: DotNetReader) -> Dictionary:
 		var key := reader.read_string(RULE_KEY_BYTES)
 		rules[key] = reader.read_float32()
 	return {"rules": rules, "ok": reader.ok()}
+
+
+static func write_drop(id: int, kind: int, value: int, from: Vector3, at: Vector3) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(id)
+	writer.write_uint(kind, 4)
+	writer.write_uint(clampi(value, 0, 65535), 16)
+	for v in [from, at]:
+		writer.write_float32((v as Vector3).x)
+		writer.write_float32((v as Vector3).y)
+		writer.write_float32((v as Vector3).z)
+	return writer.to_bytes()
+
+
+static func read_drop(reader: DotNetReader) -> Dictionary:
+	var out := {"id": reader.read_varint(), "kind": reader.read_uint(4), "value": reader.read_uint(16)}
+	out["from"] = Vector3(reader.read_float32(), reader.read_float32(), reader.read_float32())
+	out["at"] = Vector3(reader.read_float32(), reader.read_float32(), reader.read_float32())
+	out["ok"] = reader.ok()
+	return out
+
+
+static func write_taken(id: int, taker: int) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(id)
+	writer.write_varint(taker)
+	return writer.to_bytes()
+
+
+static func read_taken(reader: DotNetReader) -> Dictionary:
+	var out := {"id": reader.read_varint(), "taker": reader.read_varint()}
+	out["ok"] = reader.ok()
+	return out
 
 
 static func write_launch(spawn: DotWeaponSpawn, weapon_index: int) -> PackedByteArray:

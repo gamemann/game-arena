@@ -52,13 +52,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 478
+const CHECKS := 487
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 29
+const SECTIONS := 30
 
 var _passed := 0
 var _failed := 0
@@ -123,6 +123,7 @@ func _run() -> void:
 	await _test_ffa_spawn_sides()
 	await _test_king_of_the_hill()
 	await _test_capture_the_flag()
+	await _test_drops()
 
 	# Last, and it has to be. It replaces the combat manager, the match node and the
 	# map, so everything above that reads any of them — the kill feed a HUD catches
@@ -724,6 +725,102 @@ func _settle(game: ArenaGame, id: int, ticks: int) -> void:
 func _switch_to(game: ArenaGame, id: int, slot: int) -> void:
 	_hold(game, id, 0, slot)
 	_settle(game, id, TICK_RATE)
+
+
+# --- Drops -------------------------------------------------------------------
+
+## Coins and a health pack out of a critical kill, taken by walking through them.
+func _test_drops() -> void:
+	_section("a critical kill drops coins and a health pack")
+
+	var game := ArenaGame.new()
+	game.name = "DropsGame"
+	game.tick_rate = TICK_RATE
+	game.headless = true
+	game.register_service = false
+	add_child(game)
+
+	var ready := game.setup(ArenaMap.dm_box())
+	if not _check(ready.ok, "a drops game sets up", str(ready.error)):
+		remove_child(game)
+		game.queue_free()
+		return
+
+	game.start(0)
+	for id in [900, 901, 902]:
+		var _added := game.add_player(id, "Dropper %d" % id)
+	game.match_node.rules.respawn_delay_sec = 120.0
+	_go_live(game)
+
+	var kill := func(killer: int, victim: int, critical: bool) -> void:
+		var health := game.combat.health_of(victim)
+		health.invulnerable_until_tick = -1
+		var damage := DotDamage.make(killer, victim, 500.0, game.combat.damage_type(&"bullet"))
+		damage.tick = game.current_tick()
+		damage.critical = critical
+		var applied := health.apply(damage)
+		if applied != null and applied.lethal:
+			applied.critical = critical
+			game.combat.entity_killed.emit(victim, applied)
+
+	kill.call(900, 902, false)
+	_check(game.drops.live_count() == 0, "an ordinary kill drops nothing by default")
+
+	_stand(game, 901, Vector3(0.0, 0.05, 18.0))
+	kill.call(900, 901, true)
+	var dropped := game.drops.live_count()
+	_check(dropped == int(game.drop_rules["coins"]) + 1,
+		"a lethal critical drops %d coins and a pack (%d)" % [game.drop_rules["coins"], dropped])
+
+	# Walk the killer over every coin, and the pack, at full health.
+	var killer := game.player_for(900)
+	var coins_at: Array[Vector3] = []
+	var pack_at := Vector3.ZERO
+	for pickup in game.drops.field.pickups():
+		if pickup.item_id == &"coin":
+			coins_at.append(pickup.global_position)
+		else:
+			pack_at = pickup.global_position
+	for at in coins_at:
+		_stand(game, 900, at)
+		game.tick({})
+	_check(int(game.drops.coins.get(900, 0)) == coins_at.size(),
+		"walking through the coins collects every one (%d)" % int(game.drops.coins.get(900, 0)))
+
+	_stand(game, 900, pack_at)
+	game.tick({})
+	_check(game.drops.live_count() == 1, "the pack is left for somebody who needs it at full health")
+
+	killer.health.health = 40.0
+	game.tick({})
+	_check(game.drops.live_count() == 0 and killer.health.health > 60.0,
+		"and taken by a hurt player, who is healed (%.0f)" % killer.health.health)
+
+	# Drops that nobody takes go after their life.
+	game.drop_rules["any_kill"] = true
+	game.apply_drop_rules()
+	game.player_for(902).health.alive = true
+	game.player_for(902).hitboxes.enabled = true
+	_stand(game, 902, Vector3(10.0, 0.05, -18.0))
+	game.combat.health_of(902).health = 100.0
+	kill.call(901 if game.player_for(901).is_alive() else 900, 902, false)
+	_check(game.drops.live_count() > 0, "with any_kill on, an ordinary kill drops too")
+	for _i in range(int(float(game.drop_rules["life"]) * TICK_RATE) + 2):
+		game.tick({})
+	_check(game.drops.live_count() == 0, "and what nobody takes is gone after its life")
+
+	# The wire: a drop and a take round-trip.
+	var wire := ArenaEvents.read_drop(DotNetReader.new(
+		ArenaEvents.write_drop(7, 1, 25, Vector3(1, 2, 3), Vector3(4, 0, 6))
+	))
+	_check(bool(wire["ok"]) and int(wire["id"]) == 7 and int(wire["kind"]) == 1
+		and int(wire["value"]) == 25 and (wire["at"] as Vector3).is_equal_approx(Vector3(4, 0, 6)),
+		"DROP round-trips")
+
+	remove_child(game)
+	game.queue_free()
+	await get_tree().process_frame
+	_done()
 
 
 # --- Spectating ------------------------------------------------------------

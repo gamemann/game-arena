@@ -131,6 +131,7 @@ func _module_load() -> DotResult:
 	add_cvar("arena_scorelimit", str(game.score_limit), "Kills to win the match")
 
 	_add_movement_cvars()
+	_add_drop_cvars()
 
 	# npc_skill, npc_reaction_scale, npc_reaction_min. Registered whether or not this mode
 	# has monsters, so a config that sets them does not fail on a deathmatch map and then
@@ -886,6 +887,35 @@ func _add_movement_cvars() -> void:
 			func(_old: String, new_value: String) -> void:
 				game.set_movement_rules({key: new_value.to_float()})
 				log_info("movement rule changed", {"rule": key, "value": new_value})
+		)
+
+
+## cvar -> the key in `ArenaGame.drop_rules` it sets, and what it means.
+const DROP_CVARS := {
+	"arena_drop_coins": ["coins", "Coins a critical kill drops (0 for none)"],
+	"arena_drop_coin_value": ["coin_value", "What one coin adds to its taker's count"],
+	"arena_drop_health": ["health", "Health in the pack a critical kill drops (0 for none)"],
+	"arena_drop_any_kill": ["any_kill", "Every kill drops (1), or only a critical one (0)"],
+	"arena_drop_life": ["life", "Seconds a drop lies there before it goes"],
+}
+
+
+func _add_drop_cvars() -> void:
+	for cvar in DROP_CVARS:
+		var key: String = DROP_CVARS[cvar][0]
+		var value: Variant = game.drop_rules[key]
+		var text := ("1" if value else "0") if value is bool else str(value)
+		add_cvar(
+			cvar, text, DROP_CVARS[cvar][1], DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+		).with_min(0.0).changed.connect(
+			func(_old: String, new_value: String) -> void:
+				var was: Variant = game.drop_rules[key]
+				game.drop_rules[key] = (
+					new_value.to_float() != 0.0 if was is bool
+					else (new_value.to_int() if was is int else new_value.to_float())
+				)
+				game.apply_drop_rules()
+				log_info("drop rule changed", {"rule": key, "value": new_value})
 		)
 
 

@@ -2,6 +2,7 @@ extends SceneTree
 
 const ArenaAvatars := preload("../game/arena_avatars.gd")
 const ArenaGame := preload("../game/arena_game.gd")
+const ArenaDrops := preload("../game/arena_drops.gd")
 const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaPlayer := preload("../game/arena_player.gd")
@@ -365,6 +366,22 @@ func _stage_feel(map: ArenaMap, id: StringName) -> void:
 				victim.make_dead()
 				var _b := victim.break_body(rules, Vector3(0.0, 0.0, -1.0), 7, true),
 			"wait": 8,
+		},
+		{
+			"name": "%s_feel_drops" % String(id),
+			"from": Vector3(3.5, 2.4, 19.0),
+			"at": Vector3(0.0, 0.3, 14.5),
+			"arm": func() -> void:
+				var drops := ArenaDrops.new()
+				drops.is_authority = false
+				drops.draws = true
+				root.add_child(drops)
+				var from := Vector3(0.0, 0.05, 14.5)
+				for i in range(5):
+					var a := TAU * float(i) / 5.0
+					drops.mirror_drop(i + 1, ArenaDrops.Kind.COIN, from + Vector3(cos(a) * 1.6, 0.0, sin(a) * 1.6), from, 1)
+				drops.mirror_drop(9, ArenaDrops.Kind.HEALTH, from + Vector3(0.0, 0.0, 0.3), from, 25),
+			"wait": 40,
 		},
 		{
 			"name": "%s_feel_body" % String(id),

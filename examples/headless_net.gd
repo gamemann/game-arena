@@ -35,7 +35,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 181
+const CHECKS := 182
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -1520,6 +1520,23 @@ func _test_event_wire() -> void:
 	var rules := ArenaEvents.read_rules(DotNetReader.new(ArenaEvents.write_rules(
 		{"slide_boost": 2.5, "fp_body": 1.0, "break_mode": 2.0}
 	)))
+	# A drop and its take, through a client's real event handler: the coin a server says
+	# player 11 took is on that client's tally, which is what its HUD reads.
+	var client_game: ArenaGame = _clients[2]["game"]
+	var client_bridge: ArenaNetBridge = _clients[2]["bridge"]
+	if client_game.drops != null:
+		var before := int(client_game.drops.coins.get(11, 0))
+		var _d := client_bridge.receive_event(_server_bridge.encode_event(
+			ArenaEvents.Kind.DROP, ArenaEvents.write_drop(9001, 0, 3, Vector3.ZERO, Vector3(1, 0, 1))
+		))
+		var _t := client_bridge.receive_event(_server_bridge.encode_event(
+			ArenaEvents.Kind.TAKEN, ArenaEvents.write_taken(9001, 11)
+		))
+		_check(int(client_game.drops.coins.get(11, 0)) == before + 3,
+			"a coin taken on the server is on the client's tally (+3)")
+	else:
+		_check(false, "the client has a drops layer")
+
 	_check(
 		bool(rules["ok"]) and is_equal_approx(float(rules["rules"]["slide_boost"]), 2.5)
 			and float(rules["rules"]["fp_body"]) == 1.0 and float(rules["rules"]["break_mode"]) == 2.0,

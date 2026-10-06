@@ -549,7 +549,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match` 478 checks over 29 sections, `headless_net` 181 over 17, `headless_presentation` 120, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
+`headless_match` 487 checks over 30 sections, `headless_net` 182 over 17, `headless_presentation` 120, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1200,7 +1200,7 @@ The monsters **hear**: every player shot is a combat sound owned by the shooter,
 ## Things deliberately not here
 
 - **Pickups in the world.** dot-loadout ships `DotPickup` and `DotPickupField`; the map
-  places none. An arena with weapon and armour pickups is most of what makes map
+  places none (the only pickups are what a critical kill drops; see "Coins out of a body"). An arena with weapon and armour pickups is most of what makes map
   control matter, and it is a level-design decision rather than a wiring one.
 - **Any actual audio files.** The catalogue is written and every id still resolves to a path in `audio/` that does not exist — which is the right way round, because what this game was missing was the decision rather than the files. It is no longer silent, though: `sound_recipes()` maps each of the nine ids to a `DotAudioSynth` voice, and `DotAudioSinkGodot` falls through to that bank when a path resolves to nothing. The three weapons deliberately get three *different* voices, because a rail that is a quieter rifle is the one thing weapon audio must not be — the point of hearing somebody else's shot is knowing what they are holding before you come round the corner. Dropping nine `.ogg`s in still changes nothing else, and now it also switches the stand-ins off one id at a time. The weapons themselves are zee-dot-weapons' now and bring their own baked reports, so these stand-ins are only what a client shell too old to carry `ZeeShotFx` falls back to.
 - **Bots worth the name.** `_commands_for_tick` aims at the nearest opponent and holds
@@ -1255,3 +1255,9 @@ What wiring it found, in the order it was found:
 **The HUD**, all render-checked (`tools/screenshot.sh dm_box --feel`): a red edge when health is under a third (a radial gradient sized to the whole viewport like the blind — the first render was a red rectangle over the HUD's safe area, and too strong in the middle), the launch's key and readiness or cooldown left of centre above the bars, and "C  Cancel slide" while sliding. `headless_presentation`'s *A critical breaks a body, a respawn mends it, the HUD shows the rest* (8 checks).
 
 **`--feel` cannot yet draw a weapon in the hands**: its local rig equips nothing (the label changes, the model never comes), so its scope frame shows empty hands. The scope itself is render-checked in zee-dot-weapons' range (`EXTRA="--aim" tools/screenshot.sh sniper`). Its break frame shows a piece in the air but the stair block hides the rest of the body from both sides tried. Both are queued.
+
+## Coins out of a body (2026-10-06)
+
+A lethal critical drops coins and a health pack: the genre's reward for a headshot, which the reference videos show as coins bursting out of the body and flying to whoever walks through them. `ArenaDrops` is one `Node3D` on both ends. On the authority it holds real one-shot `DotPickup`s in a `DotPickupField`, swept each tick (after the player stack, before the match) against every live player's simulated position: a coin adds to `coins[player]`, a pack heals, and only a hurt player takes a pack (`wants_fn`), so it is left for somebody who needs it. On a client it holds drawn copies (a gold disc, a green cross, no art): DROP (appended after RULES) bursts one out of the body to where it lands, TAKEN flies it to its taker or removes it when it expired (taker 0). An authority that also draws (offline, a listen server) draws its own. `_known` keeps every drop a client was told about whether or not it draws, because the coin tally the HUD shows (`ArenaHud.coins_label`) is counted from TAKEN.
+
+It is rebuilt with the combat layer on a map change, and the owner's rules live on `ArenaGame.drop_rules` so a change keeps them: `arena_drop_coins` (5), `arena_drop_coin_value` (1), `arena_drop_health` (25, 0 for no pack), `arena_drop_any_kill` (0: criticals only) and `arena_drop_life` (10 s). The scatter is seeded from the victim and the tick. **Not done**: coins do not feed the match score or a power-up meter yet (dot-match has no per-player award; a meter is a game rule to design), and they are not a dot-stats stat. `headless_match`'s *a critical kill drops coins and a health pack* (9 checks); `headless_net` asserts a TAKEN lands on the client's tally; `tools/screenshot.sh dm_box --feel` draws them (`dm_box_feel_drops`).
