@@ -2,6 +2,7 @@ extends Node
 
 const ArenaAvatars := preload("../game/arena_avatars.gd")
 const ArenaClient := preload("../game/arena_client.gd")
+const ArenaGame := preload("../game/arena_game.gd")
 const ArenaHud := preload("../game/arena_hud.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaParty := preload("../game/arena_party.gd")
@@ -24,7 +25,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 125
+const CHECKS := 126
 
 var _passed := 0
 var _failed := 0
@@ -1097,6 +1098,24 @@ func _test_criticals_and_the_body() -> void:
 		"killing them back says so")
 	hud.notice("hello")
 	_check(hud.notice_label.text == "hello", "and notice() exists, which the client had called for a month")
+
+	# The end of the match names the MVP, through the client's own MATCH handler.
+	var summary_game := ArenaGame.new()
+	summary_game.headless = true
+	summary_game.register_service = false
+	add_child(summary_game)
+	var _set := summary_game.setup(ArenaMap.dm_box())
+	var best := summary_game.match_node.scoreboard.join("6", "Broken")
+	best.kills = 3
+	best.score = 3
+	var client := ArenaClient.new()
+	client.game = summary_game
+	client.hud = hud
+	client._on_match({"state": DotMatch.State.MATCH_END, "round": 1, "remaining_ticks": 0})
+	_check(hud.notice_label.text.begins_with("MVP: Broken") and hud.notice_label.text.contains("3 kills"),
+		"the end of the match names the MVP (%s)" % hud.notice_label.text)
+	client.free()
+	summary_game.queue_free()
 
 	hud.queue_free()
 	player.queue_free()

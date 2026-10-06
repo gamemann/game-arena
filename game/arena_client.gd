@@ -689,8 +689,14 @@ func _on_match(info: Dictionary) -> void:
 	if game == null or game.match_node == null:
 		return
 
+	var was := game.match_node.state
 	game.match_node.state = int(info["state"]) as DotMatch.State
 	game.match_node.round_number = int(info["round"])
+
+	# The end of the match: the scoreboard comes up by itself, and the notice line names
+	# the most valuable player, which is the summary the genre shows between matches.
+	if game.match_node.state == DotMatch.State.MATCH_END and was != DotMatch.State.MATCH_END:
+		_show_match_summary()
 
 	# What the HUD's "24 / 35" divides by. This match's rules are its own copy
 	# (`ArenaGame` duplicates the mode's), so writing them touches nothing shared.
@@ -785,6 +791,18 @@ func _on_kill(info: Dictionary) -> void:
 			int(info["victim_id"]) * 7919 + int(info["killer_id"]),
 			bool(info.get("critical", false))
 		)
+
+
+## The scoreboard up, and the MVP named: best score, then kills. Client side.
+func _show_match_summary() -> void:
+	var ranked := game.match_node.scoreboard.ranked() if game.match_node.scoreboard != null else []
+	if hud != null and not ranked.is_empty():
+		var best: DotPlayerScore = ranked[0]
+		hud.notice("MVP: %s  -  %d kills, %d deaths, %d assists" % [
+			best.display_name, best.kills, best.deaths, best.assists
+		])
+	if menus != null and menus.top_id() != &"scoreboard":
+		var _shown := menus.push(&"scoreboard")
 
 
 # --- Following the local player --------------------------------------------
