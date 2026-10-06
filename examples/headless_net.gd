@@ -35,13 +35,13 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 171
+const CHECKS := 177
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 16
+const SECTIONS := 17
 
 var _passed := 0
 var _failed := 0
@@ -88,6 +88,9 @@ func _run() -> void:
 	_test_blind_and_beacon()
 	_test_client_death_camera()
 	_test_weapons_over_the_wire()
+	# After the weapons: everybody in this harness fires every eighth tick, and this
+	# section's windows spent the magazine the weapons section's fresh shot needs.
+	_test_movement_rules_reach_clients()
 	_test_disconnect()
 	_test_monsters_reach_a_client()
 
@@ -1096,6 +1099,108 @@ func _test_forced_noclip_is_predicted() -> void:
 	_done()
 
 
+## A server owner's movement rules (`arena_slide*`, `arena_launch*`) reach every client.
+##
+## [b]A client predicting with different numbers mispredicts every slide and every launch[/b],
+## and the symptom is rubber-banding that looks like lag. So: the rule lands on the client's
+## game and its copy of the player, the two ends' fingerprints match, a launch is predicted
+## to within a hand's width — and, the negative control, a launch changed on the server
+## alone is not.
+func _test_movement_rules_reach_clients() -> void:
+	print("")
+	_section("[movement rules reach every client]")
+
+	var entry: Dictionary = _clients[2]
+	var session := int(entry["session"])
+	var server_player: ArenaPlayer = _server_bridge.behaviour_for(session).player
+	var client_game: ArenaGame = entry["game"]
+	var client_player: ArenaPlayer = (entry["bridge"] as ArenaNetBridge).behaviour_for(session).player
+
+	_check(
+		client_player.controller.tunables.slide_enabled and client_player.controller.tunables.launch_enabled,
+		"the arena slides and launches by default, on the client as on the server"
+	)
+
+	# This harness has no event link, so RULES is handed to each client as the link would
+	# carry it: encoded by the server's bridge, read by the client's.
+	var relay := func(rules: Dictionary) -> void:
+		var bytes := _server_bridge.encode_event(ArenaEvents.Kind.RULES, ArenaEvents.write_rules(rules))
+		for peer_id in _clients:
+			var _r: DotResult = _clients[peer_id]["bridge"].receive_event(bytes)
+	_server_game.movement_rules_changed.connect(relay)
+
+	_server_game.set_movement_rules({"launch_velocity": 14.0, "slide_boost": 2.0})
+	var _carry := _flight_window(0, 8, 0)
+
+	_check(
+		is_equal_approx(float(client_game.movement_rules.get("launch_velocity", 0.0)), 14.0),
+		"a rule the server changes reaches the client's game",
+		str(client_game.movement_rules)
+	)
+	_check(
+		client_player.controller.tunables.fingerprint() == server_player.controller.tunables.fingerprint(),
+		"and its copy of the player moves by the same numbers as the server's",
+		"%s vs %s" % [client_player.controller.tunables.fingerprint(), server_player.controller.tunables.fingerprint()]
+	)
+
+	# Somewhere with nothing overhead: the noclip section's spot is under the south
+	# arcade, whose roof stopped the first launch measured here at 1.19 m.
+	var open_sky := _open_sky(_server_game.map)
+	server_player.controller.teleport(open_sky)
+	server_player.controller.state.velocity = Vector3.ZERO
+	var _settle := _flight_window(0, 32, 0)
+	var start_y: float = server_player.controller.state.position.y
+	var peak := [start_y]
+	server_player.controller.simulated.connect(
+		func(_t: int, s: DotFpsState) -> void: peak[0] = maxf(peak[0], s.position.y)
+	)
+	var launch := _flight_window(2, 64, DotFpsCommand.BUTTON_USER_0)
+	print("  measured: launch peak %.2f m, worst gap %.2f m (%s)" % [float(peak[0]) - start_y, float(launch["worst_gap"]), launch["worst_at"]])
+	_check(float(peak[0]) - start_y > 3.0, "E throws the server's player into the air (from %s)" % open_sky,
+		"%.2f m" % (float(peak[0]) - start_y))
+	_check(float(launch["worst_gap"]) < 0.75, "and the client predicts it to within a hand's width",
+		"worst %.2f m" % float(launch["worst_gap"]))
+
+	# The negative control: the same change made on the server's player alone. In this
+	# lockstep harness a wrong impulse is corrected within a snapshot or two, so the gap
+	# above cannot tell a shared rule from a server-only one (0.38 m against 0.42 m when it
+	# was tried); what can is the fingerprint the two ends compare at connect.
+	server_player.controller.tunables.launch_velocity = 24.0
+	_check(
+		client_player.controller.tunables.fingerprint() != server_player.controller.tunables.fingerprint(),
+		"a launch changed on the server alone leaves the two ends' movement apart",
+		"if this passes quietly, the fingerprint check above proves nothing"
+	)
+
+	_server_game.set_movement_rules({"launch_velocity": 12.0, "slide_boost": 3.5})
+	_server_game.movement_rules_changed.disconnect(relay)
+	# Back where the sections after this one expect the player: the noclip section's spot.
+	server_player.controller.teleport(Vector3(0.0, 0.1, 18.0))
+	server_player.controller.state.velocity = Vector3.ZERO
+	var _back := _flight_window(0, 32, 0)
+	_done()
+
+
+## A spawn point with no map box over it, for a launch to go straight up from. Spawns
+## because they are open floor by design — a point picked by geometry alone landed inside
+## the middle structure and under the south arcade's roof.
+static func _open_sky(map: ArenaMap) -> Vector3:
+	for spawn: Transform3D in map.spawns:
+		var at := spawn.origin + Vector3(0.0, 0.1, 0.0)
+		var clear := true
+		for box: AABB in map.boxes:
+			if (
+				at.x > box.position.x - 1.0 and at.x < box.end.x + 1.0
+				and at.z > box.position.z - 1.0 and at.z < box.end.z + 1.0
+				and box.end.y > at.y + 0.2 and box.position.y < at.y + 8.0
+			):
+				clear = false
+				break
+		if clear:
+			return at
+	return map.spawns[0].origin + Vector3(0.0, 0.1, 0.0)
+
+
 ## An administrator's blind and beacon, through the real handlers, over the lossy link.
 ##
 ## [b]The audience is the whole point of both.[/b] Client 2 owns player 11. A blind is
@@ -1304,6 +1409,7 @@ func _test_weapons_over_the_wire() -> void:
 func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 	var first := _server_game.current_tick() + 1
 	var worst := 0.0
+	var worst_at := ""
 	var grounded := 0
 
 	# Measured only once a snapshot from inside the window has arrived. Until then the
@@ -1353,13 +1459,16 @@ func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 		var session := int(_clients[peer]["session"])
 		var predicted: ArenaPlayer = (_clients[peer]["bridge"] as ArenaNetBridge).behaviour_for(session).player
 		var actual: ArenaPlayer = _server_bridge.behaviour_for(session).player
-		worst = maxf(worst, predicted.controller.state.position.distance_to(
-			actual.controller.state.position
-		))
+		var gap := predicted.controller.state.position.distance_to(actual.controller.state.position)
+		if gap > worst:
+			worst_at = "tick %d client %s server %s" % [
+				tick, predicted.controller.state.position, actual.controller.state.position
+			]
+		worst = maxf(worst, gap)
 		if predicted.controller.state.mode != DotFpsState.Mode.NOCLIP:
 			grounded += 1
 
-	return {"worst_gap": worst, "grounded_ticks": grounded}
+	return {"worst_gap": worst, "grounded_ticks": grounded, "worst_at": worst_at}
 
 func _test_event_wire() -> void:
 	print("")

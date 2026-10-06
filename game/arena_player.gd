@@ -263,7 +263,53 @@ static func arena_tunables() -> DotFpsTunables:
 	tunables.jump_buffer_time = 0.12
 	tunables.sprint_speed_scale = 1.0
 	tunables.crouch_speed_scale = 0.45
+	# Crouch at a run slides: a burst and a long, low-friction carry, then a crouch. The
+	# minimum is under the 9 m/s run so any real run slides and a crouch-walk never does.
+	tunables.slide_enabled = true
+	tunables.slide_min_speed = 6.5
+	tunables.slide_boost = 3.5
+	tunables.slide_max_speed = 14.0
+	tunables.slide_friction = 0.9
+	tunables.slide_duration = 0.9
+	tunables.slide_cooldown = 0.6
+	# E throws you upward to dodge or escape, on a cooldown. The command's first user bit,
+	# which the arena's movement command leaves free: its weapon buttons ride in their own.
+	tunables.launch_enabled = true
+	tunables.launch_button = DotFpsCommand.BUTTON_USER_0
+	tunables.launch_velocity = 12.0
+	tunables.launch_cooldown = 8.0
 	return tunables
+
+
+## The movement keys a server owner may change on a running server (`arena_slide*`,
+## `arena_launch*`), and that RULES carries to every client so prediction agrees.
+const MOVEMENT_RULES: PackedStringArray = [
+	"slide_enabled", "slide_min_speed", "slide_boost", "slide_max_speed",
+	"slide_friction", "slide_duration", "slide_cooldown",
+	"launch_enabled", "launch_velocity", "launch_forward", "launch_cooldown",
+]
+
+
+## Writes [param rules] (key -> number, from [constant MOVEMENT_RULES]) into this player's
+## movement, and into the class base it is re-derived from, or the next class change would
+## put the old value back. A key not in the list is ignored: RULES came over the wire.
+func apply_movement_rules(rules: Dictionary) -> void:
+	if controller == null or controller.tunables == null:
+		return
+
+	for key in rules:
+		if not MOVEMENT_RULES.has(String(key)):
+			continue
+		_set_rule(controller.tunables, String(key), rules[key])
+		if _class_base != null:
+			_set_rule(_class_base, String(key), rules[key])
+
+
+static func _set_rule(tunables: DotFpsTunables, key: String, value: Variant) -> void:
+	if key.ends_with("_enabled"):
+		tunables.set(key, float(value) != 0.0)
+	else:
+		tunables.set(key, float(value))
 
 
 func _build_health() -> void:

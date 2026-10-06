@@ -46,6 +46,12 @@ enum Kind {
 	##
 	## After NPC_GONE, for the reason VOTE gives.
 	LAUNCH,
+	## The server's movement rules that differ from the game's defaults: slide and launch
+	## numbers, as key -> number. Sent after HELLO and again whenever one changes, because
+	## a client predicting with different numbers mispredicts every slide.
+	##
+	## After LAUNCH, for the reason VOTE gives.
+	RULES,
 }
 
 enum Ask {
@@ -386,6 +392,30 @@ static func read_npc_gone(reader: DotNetReader) -> Dictionary:
 ## under 25 m/s and the launcher's round 44; 64 leaves room without spending bits on it.
 const LAUNCH_EXTENT := 4096.0
 const LAUNCH_SPEED := 64.0
+
+
+## RULES: a count, then (key, number) pairs. Keys are short and from a fixed list; a
+## reader that meets one it does not know keeps going, so a newer server's extra rule
+## costs an older client nothing but that rule.
+const RULE_KEY_BYTES := 32
+
+
+static func write_rules(rules: Dictionary) -> PackedByteArray:
+	var writer := _w()
+	writer.write_varint(rules.size())
+	for key in rules:
+		writer.write_string(String(key), RULE_KEY_BYTES)
+		writer.write_float32(float(rules[key]))
+	return writer.to_bytes()
+
+
+static func read_rules(reader: DotNetReader) -> Dictionary:
+	var rules := {}
+	var count := mini(reader.read_varint(), 64)
+	for _i in range(count):
+		var key := reader.read_string(RULE_KEY_BYTES)
+		rules[key] = reader.read_float32()
+	return {"rules": rules, "ok": reader.ok()}
 
 
 static func write_launch(spawn: DotWeaponSpawn, weapon_index: int) -> PackedByteArray:

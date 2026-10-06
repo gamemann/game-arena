@@ -190,6 +190,7 @@ func attach(p_game: ArenaGame, p_net: DotNetManager) -> DotResult:
 	if net.is_server:
 		game.player_killed.connect(_on_player_killed)
 		game.match_state_changed.connect(_on_match_state_changed)
+		game.movement_rules_changed.connect(_on_movement_rules_changed)
 
 	return DotResult.success(self)
 
@@ -651,21 +652,22 @@ func apply_join(payload: PackedByteArray) -> DotResult:
 ## has a socket and has not yet built its scene; an RPC to it lands on a node that does
 ## not exist and is lost with one "Node not found" per call. The gate is [enum
 ## ArenaEvents.Ask].READY.
+## The server changed a movement rule: every client gets the whole set. Server side; a
+## client's own set_movement_rules emits this too and must not echo it back.
+func _on_movement_rules_changed(rules: Dictionary) -> void:
+	if net == null or not net.is_server:
+		return
+	send_event(0, ArenaEvents.Kind.RULES, ArenaEvents.write_rules(rules))
+
+
 func send_event(peer_id: int, kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or link == null:
 		return
 
-	var message := ArenaEvent.new(kind, body)
-	var writer := DotNetWriter.new()
-	var wrote := net.messages.encode(message, writer)
+	var payload := encode_event(kind, body)
 
-	if not wrote.ok:
-		DotLog.warn(CHANNEL, "could not encode an event", {
-			"kind": ArenaEvents.kind_name(kind), "error": str(wrote.error)
-		})
+	if payload.is_empty():
 		return
-
-	var payload := writer.to_bytes()
 
 	if peer_id != 0:
 		if _ready_peers.has(peer_id):
@@ -674,6 +676,21 @@ func send_event(peer_id: int, kind: int, body: PackedByteArray) -> void:
 
 	for ready_peer in _ready_peers:
 		link.send_event(int(ready_peer), payload)
+
+
+## An event as the bytes [method receive_event] reads, or empty if it would not encode.
+## Public so a harness without a link delivers exactly what the link would carry.
+func encode_event(kind: int, body: PackedByteArray) -> PackedByteArray:
+	var writer := DotNetWriter.new()
+	var wrote := net.messages.encode(ArenaEvent.new(kind, body), writer)
+
+	if not wrote.ok:
+		DotLog.warn(CHANNEL, "could not encode an event", {
+			"kind": ArenaEvents.kind_name(kind), "error": str(wrote.error)
+		})
+		return PackedByteArray()
+
+	return writer.to_bytes()
 
 
 ## Sends a request to the server. Client side.
@@ -710,6 +727,11 @@ func send_signon(peer_id: int) -> void:
 		game.score_limit,
 		game.time_limit_sec
 	))
+
+	# Straight after HELLO and before any JOIN: the players about to be described are
+	# predicted with these numbers, so they have to be in place before the first of them.
+	if game != null and not game.movement_rules.is_empty():
+		send_event(peer_id, ArenaEvents.Kind.RULES, ArenaEvents.write_rules(game.movement_rules))
 
 	# Every player already here, this peer's own included. A client that was only told
 	# about players who joined AFTER it would see an empty arena on a busy server, and
@@ -1102,6 +1124,10 @@ func _on_event(message: DotNetMessage) -> void:
 			var launch := ArenaEvents.read_launch(reader)
 			if bool(launch["ok"]):
 				_mirror_launch(launch)
+		ArenaEvents.Kind.RULES:
+			var rules := ArenaEvents.read_rules(reader)
+			if bool(rules["ok"]) and game != null:
+				game.set_movement_rules(rules["rules"])
 		_:
 			pass
 

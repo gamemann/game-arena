@@ -214,6 +214,9 @@ func _ready() -> void:
 
 	_sampler = DotFpsSampler.new(ArenaPlayer.arena_tunables())
 	DotFpsSampler.register_default_actions(_sampler)
+	# C slides as well as crouches (a slide IS a crouch at a run), beside Ctrl. Added to
+	# the action rather than replacing it, so a player's own binding still works.
+	_add_key(_sampler.actions.get("crouch", &""), KEY_C)
 
 	# Before the interface, because the field of view and the crosshair come out of the
 	# settings document and a screen built first would have laid itself out from the
@@ -860,10 +863,41 @@ func weapon_draws_shots() -> bool:
 	return player.weapons.call(&"shot_fx") != null
 
 
+## Whether E is the prop tool's key here: only in a mode where players use props. Anywhere
+## else E is the launch, which is what most of the arena's modes want it for.
+func props_on_e() -> bool:
+	return game != null and game.props != null and game.mode != null and game.mode.player_props
+
+
+## The launch's key: E, or X where E is already the prop tool's.
+func launch_key() -> Key:
+	return KEY_X if props_on_e() else KEY_E
+
+
+## Adds [param key] to [param action] if neither is missing and it is not bound already.
+static func _add_key(action: StringName, key: Key) -> void:
+	if action == &"" or not InputMap.has_action(action):
+		return
+
+	for existing in InputMap.action_get_events(action):
+		if existing is InputEventKey and (existing as InputEventKey).physical_keycode == key:
+			return
+
+	var event := InputEventKey.new()
+	event.physical_keycode = key
+	InputMap.action_add_event(action, event)
+
+
 # --- The loop --------------------------------------------------------------
 
 func _physics_process(delta: float) -> void:
 	var move := _sampler.sample(delta) if _sampler != null else DotFpsCommand.new()
+	# E is the launch: the movement command's first user bit, which the motor reads when
+	# the server's rules have the launch on. Same guard as the trigger, so typing in the
+	# chat box does not throw anybody into the air.
+	move.set_button(
+		DotFpsCommand.BUTTON_USER_0, mouse_drives_view() and Input.is_key_pressed(launch_key())
+	)
 	_read_fire(move)
 
 	if _offline:
@@ -1254,7 +1288,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	match (event as InputEventKey).physical_keycode:
-		KEY_E:
+		KEY_E when props_on_e():
 			# Grab, or let go of what is already held. One key for both, because a
 			# player who has to remember which of two keys they pressed last is a
 			# player holding a crate they cannot put down.

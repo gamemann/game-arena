@@ -130,6 +130,8 @@ func _module_load() -> DotResult:
 
 	add_cvar("arena_scorelimit", str(game.score_limit), "Kills to win the match")
 
+	_add_movement_cvars()
+
 	# npc_skill, npc_reaction_scale, npc_reaction_min. Registered whether or not this mode
 	# has monsters, so a config that sets them does not fail on a deathmatch map and then
 	# not apply when the rotation reaches a horde one. Through `add_cvar`, so they go when
@@ -833,6 +835,42 @@ func _on_client_disconnected(session: DotClientSession, _reason: String) -> void
 		# decides whether the tally shrinks with them, and it cannot do its job if
 		# nothing tells it they went.
 		vote.forget_voter(StringName(str(session.userid)))
+
+
+## cvar -> the movement tunable it sets, with what it means. Each defaults to what
+## `ArenaPlayer.arena_tunables()` already says, so a server that sets none of them plays
+## exactly as before; a change reaches every player now and later and, through RULES,
+## every client, so a client never predicts a slide the server does not make.
+const MOVEMENT_CVARS := {
+	"arena_slide": ["slide_enabled", "Crouch at a run slides (1) or only crouches (0)"],
+	"arena_slide_boost": ["slide_boost", "Speed a slide adds when it starts, m/s (0 for none)"],
+	"arena_slide_min_speed": ["slide_min_speed", "Speed needed to slide, m/s"],
+	"arena_slide_duration": ["slide_duration", "Longest a slide lasts, seconds"],
+	"arena_slide_friction": ["slide_friction", "Friction while sliding (lower carries further)"],
+	"arena_slide_cooldown": ["slide_cooldown", "Seconds between slides"],
+	"arena_launch": ["launch_enabled", "E throws the player into the air (1) or does nothing (0)"],
+	"arena_launch_velocity": ["launch_velocity", "Upward speed of a launch, m/s"],
+	"arena_launch_forward": ["launch_forward", "Forward speed a launch adds, m/s"],
+	"arena_launch_cooldown": ["launch_cooldown", "Seconds between launches"],
+}
+
+
+func _add_movement_cvars() -> void:
+	var defaults := ArenaPlayer.arena_tunables()
+
+	for cvar in MOVEMENT_CVARS:
+		var key: String = MOVEMENT_CVARS[cvar][0]
+		var value: Variant = defaults.get(key)
+		var text := ("1" if value else "0") if value is bool else str(value)
+
+		add_cvar(
+			cvar, text, MOVEMENT_CVARS[cvar][1],
+			DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY | DotConVar.FLAG_REPLICATED
+		).with_min(0.0).changed.connect(
+			func(_old: String, new_value: String) -> void:
+				game.set_movement_rules({key: new_value.to_float()})
+				log_info("movement rule changed", {"rule": key, "value": new_value})
+		)
 
 
 func _on_player_killed(entry: DotKillFeed.Entry) -> void:

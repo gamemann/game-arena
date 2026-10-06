@@ -90,6 +90,10 @@ signal non_player_killed(entity_id: int, damage: DotDamage)
 ## map and the nodes they came from are gone by the time this fires.
 signal map_changed(map: ArenaMap)
 
+## The server owner changed how the arena moves (`arena_slide*`, `arena_launch*`). The
+## bridge sends it to every client; see [member movement_rules].
+signal movement_rules_changed(rules: Dictionary)
+
 @export_group("Simulation")
 
 @export_range(1, 240, 1) var tick_rate: int = 64
@@ -216,6 +220,13 @@ var player_stack: ArenaPlayerStack = null
 
 ## player id -> [ArenaPlayer].
 var _players: Dictionary = {}
+
+## Movement keys changed from [method ArenaPlayer.arena_tunables]' defaults, key -> number.
+##
+## [b]Kept, and applied to every player who arrives later[/b], because a rule that only
+## reached the players present when it was set is a rule the next joiner does not have —
+## and a client and server that disagree about a slide mispredict every slide.
+var movement_rules: Dictionary = {}
 
 ## The spawn points built from the map, so a map change can take them away again.
 ##
@@ -916,6 +927,7 @@ func add_player(
 		player.use_collision_mask(player_stack.player_collision_mask())
 
 	player.join_combat(combat)
+	player.apply_movement_rules(movement_rules)
 	_players[id] = player
 
 	var added := match_node.add_player(str(id), display_name, _tick, wanted_team)
@@ -994,6 +1006,20 @@ func teams() -> Array[DotTeam]:
 		return []
 
 	return match_node.teams.teams
+
+
+## Sets movement rules (key -> number, see [constant ArenaPlayer.MOVEMENT_RULES]) for
+## every player now and later. On a server, the bridge forwards them to clients; on a
+## client, this is where RULES lands.
+func set_movement_rules(rules: Dictionary) -> void:
+	for key in rules:
+		if ArenaPlayer.MOVEMENT_RULES.has(String(key)):
+			movement_rules[String(key)] = float(rules[key])
+
+	for player in players():
+		player.apply_movement_rules(movement_rules)
+
+	movement_rules_changed.emit(movement_rules)
 
 
 func player_for(id: int) -> ArenaPlayer:

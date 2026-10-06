@@ -549,7 +549,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match` 478 checks over 29 sections, `headless_net` 171 over 16, `headless_presentation` 112, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
+`headless_match` 478 checks over 29 sections, `headless_net` 177 over 17, `headless_presentation` 112, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1237,3 +1237,9 @@ What wiring it found, in the order it was found:
 `headless_match`'s *zee-dot-weapons in the arena* (28 checks) and `headless_net`'s *[weapons over the wire]* (14) are the suites. `headless_match`'s horde gunner check now chooses a spot with line of sight and strips spawn protection from its target, because it had been passing or failing on how the deathmatch above it happened to end.
 
 **Release order.** The pack works against the shell's zee-dot-weapons v0.1.3. The view punch and the pack's own tracers and reports need zee-dot-weapons tagged past 0d7a364 and the client shell rebuilt before they reach a delivered game.
+
+## Sliding and the launch, and the rules that keep both ends agreeing (2026-10-06)
+
+`ArenaPlayer.arena_tunables()` turns on dot-player-controller's slide (C, or Ctrl: crouch at a run) and launch (E, the movement command's first user bit, which the arena leaves free because its weapon buttons ride in their own command). **E is the prop tool's in a mode where players use props** (`ArenaClient.props_on_e`), and the launch moves to X there. A server owner changes them with `arena_slide`, `arena_slide_boost`, `arena_slide_min_speed`, `arena_slide_duration`, `arena_slide_friction`, `arena_slide_cooldown`, `arena_launch`, `arena_launch_velocity`, `arena_launch_forward` and `arena_launch_cooldown` (`ArenaModule.MOVEMENT_CVARS`); each defaults to what the tunables already say.
+
+**A rule set on the server alone is a client that mispredicts every slide**, so `ArenaGame.set_movement_rules` keeps the changed keys (`movement_rules`), applies them to every player now and on `add_player`, and emits `movement_rules_changed`; the bridge sends `ArenaEvents.Kind.RULES` (appended after LAUNCH) to everybody, and to a joiner straight after HELLO and before any JOIN. `ArenaPlayer.apply_movement_rules` writes the class base too, or the next class change would put the old number back. `headless_net`'s *movement rules reach every client* (6 checks): a rule reaches the client's game, the fingerprints match, E throws the server's player 4.35 m up from a spawn and the client predicts it within a hand's width (0.42 m), and the negative control is the fingerprint left apart by a server-only change — **the gap cannot be one in this lockstep harness**, because a snapshot corrects a wrong impulse within a tick or two (0.38 m against 0.42 m). Building it found dot-player-controller's rewind keeping the client's own launch cooldown and buttons (3.2 m apart); the timers and `previous_buttons` travel in `net_flags` now. Run after the weapons section: this harness fires every eighth tick, and its windows spent the magazine the weapons section's fresh shot needs.
