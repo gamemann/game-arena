@@ -24,7 +24,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 120
+const CHECKS := 125
 
 var _passed := 0
 var _failed := 0
@@ -1075,6 +1075,28 @@ func _test_criticals_and_the_body() -> void:
 	hud.present_body()
 	_check(hud.slide_label.visible, "sliding, it says how to stop")
 	player.controller.state.slide_time = -1.0
+
+	# The streak meter and the kill mark count from KILL events, as a client hears them.
+	for v in [7, 8, 9]:
+		hud.note_kill({"killer_id": 6, "victim_id": v, "headshot": v == 9, "weapon": "rifle"}, 6, "Broken")
+	hud.present_body()
+	_check(hud.streak_meter.count == 3 and hud.kill_mark.alpha > 0.5,
+		"three kills fill the streak meter to three and flash the kill mark")
+
+	for i in range(3):
+		hud.note_kill({"killer_id": 7, "victim_id": 6, "weapon": "sniper"}, 6, "Sniper")
+	_check(hud.streaks.get(6, -1) == 0 and hud._death_text.contains("NEMESIS"),
+		"dying ends the streak, and a third death to one player names a nemesis")
+	player.make_dead()
+	hud.present_body()
+	_check(hud.death_label.visible and hud.death_label.text.contains("Killed by Sniper"),
+		"dead, it says who did it and with what")
+
+	hud.note_kill({"killer_id": 6, "victim_id": 7, "weapon": "rifle"}, 6, "Broken")
+	_check(hud.notice_label != null and hud.notice_label.text == "REVENGE!",
+		"killing them back says so")
+	hud.notice("hello")
+	_check(hud.notice_label.text == "hello", "and notice() exists, which the client had called for a month")
 
 	hud.queue_free()
 	player.queue_free()

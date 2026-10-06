@@ -549,7 +549,7 @@ godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 ```
 
-`headless_match` 497 checks over 31 sections, `headless_net` 182 over 17, `headless_presentation` 120, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
+`headless_match` 502 checks over 32 sections, `headless_net` 182 over 17, `headless_presentation` 125, `dedicated` 112, `headless_stack` 54 over six sections, and `headless_admin` 46 over ten.
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1267,3 +1267,9 @@ It is rebuilt with the combat layer on a map change, and the owner's rules live 
 `ArenaMode` grew a Weapons group: `weapon_pool` (zee ids, or `tag:<tag>` for every weapon carrying it), `pool_random` (one at random per spawn), `pool_keeps_melee` (the knife stays), and `gun_game` (the weapons in order). `ArenaGame.arm_for_mode` runs after a loadout is applied (both of `apply_loadout`'s branches, since it awaits a store) and replaces what the loadout gave; a gun game kill re-arms the killer straight after `report_kill`. **Gun game's level is the player's match score and its score limit is the list's length**, so "advance on a kill" and "win by finishing the list" are the scoreboard rather than a second counter that could disagree with it, and `validate()` refuses a gun game whose two numbers differ. Two shipped modes: `gungame` (fifteen weapons, heaviest to the knife) and `snipers` (`tag:scoped`, random per spawn). A "revolvers only" or "shotguns only" server is a copy of `only_snipers` with a different pool. **Not done**: a knife kill demoting its victim, and the spawn banner naming the mode's rule (queued with the HUD work). `headless_match`'s *gun game and a weapon pool* (8 checks).
 
 **`ArenaDrops` takes a pickup out of the field as it goes, not at the end of the frame**: a server runs several ticks a frame, and a pickup still in the field's list after `queue_free` was swept as a freed object (four script errors in `headless_match`, every check still passing — read the stderr).
+
+## Kill streaks, kill feedback and the death panel (2026-10-06)
+
+**Streaks are counted on the server for rewards and on each client for the meter**, both from the same kills: `ArenaGame.streaks` (authority) and `ArenaHud.streaks` (from the KILL events every client gets), so the meter needs nothing new on the wire. A reward lands on the kill that reaches it: `arena_streak_rewards` is `streak:reward` pairs (`heal`, `armour`, `haste`, `empowered`, the last two being `ArenaEffects`), default `3:heal,5:haste,7:empowered`, empty for none; the module announces it to everybody (`ArenaServices.announce`). On the HUD: a drawn streak meter on the left with "Killstreak xN", a cross at the crosshair on a kill you made (red for a headshot), a "HEADSHOT!" `Label3D` rising off the victim, the death panel ("Killed by NAME (weapon)", and "NAME is your NEMESIS" after three deaths to them), and "REVENGE!" when you kill the last player who killed you. Rendered (`dm_box_feel_hud`).
+
+**`ArenaHud.notice` did not exist.** The client had called it for chat lines and both map-change notices since the client was written; it is a centre line held four seconds now. Found because the parser refused the same call inside the HUD's own file. **Not done**: challenges (a dot-achievements progress bar), the end-of-match summary, the mode banner at spawn.

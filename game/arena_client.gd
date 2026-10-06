@@ -740,6 +740,27 @@ func _on_kill(info: Dictionary) -> void:
 	entry.victim_name = victim.display_name if victim != null else "?"
 
 	hud.show_kill(entry)
+	hud.note_kill(info, player.player_id if player != null else 0, entry.killer_name)
+
+	# A headshot you made says so over the body, briefly, rising: the bullseye the genre
+	# draws. A Label3D, because it belongs where the victim is, not on the HUD.
+	if (
+		player != null and victim != null and int(info["killer_id"]) == player.player_id
+		and bool(info["headshot"])
+	):
+		var tag := Label3D.new()
+		tag.text = "HEADSHOT!"
+		tag.modulate = Color(1.0, 0.25, 0.2)
+		tag.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
+		tag.font_size = 48
+		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		tag.no_depth_test = true
+		victim.get_parent().add_child(tag)
+		tag.global_position = victim.global_position + Vector3(0.0, 2.3, 0.0)
+		var rise := tag.create_tween()
+		rise.tween_property(tag, "global_position:y", tag.global_position.y + 0.8, 1.2)
+		rise.parallel().tween_property(tag, "modulate:a", 0.0, 1.2)
+		rise.tween_callback(tag.queue_free)
 
 	# The body comes apart, if the server's rules say this death breaks one. Seeded from
 	# the victim and the tick so every client breaks it the same way; pushed away from

@@ -75,6 +75,103 @@ var slide_label: Label = null
 ## The coins this player has collected this match, from the drops layer.
 var coins_label: Label = null
 
+## Kills since each player last died, counted from the KILL events every client gets, so
+## the meter needs nothing new on the wire. See [method note_kill].
+var streaks: Dictionary = {}
+
+## How many times each player has killed the one this HUD follows. Three is a nemesis.
+var deaths_to: Dictionary = {}
+const NEMESIS_AT := 3
+
+## Who last killed the followed player, for "Revenge!" when they are killed back.
+var last_killer: int = 0
+
+## The streak meter on the left: a bar that fills toward [constant STREAK_FULL] and a count.
+var streak_meter: StreakMeter = null
+const STREAK_FULL := 10
+
+## The cross the crosshair flashes on a kill you made, fading over [constant MARK_SEC].
+var kill_mark: KillMark = null
+const MARK_SEC := 0.6
+
+## "Killed by NAME (weapon)", and the nemesis line, while the followed player is dead.
+var death_label: Label = null
+var _death_text: String = ""
+
+
+## A vertical meter, drawn: no art.
+class StreakMeter extends Control:
+	var fraction: float = 0.0
+	var count: int = 0
+
+	func _draw() -> void:
+		var bar := Rect2(0.0, 0.0, 10.0, size.y)
+		draw_rect(bar, Color(0.0, 0.0, 0.0, 0.45))
+		var fill := bar.size.y * clampf(fraction, 0.0, 1.0)
+		draw_rect(Rect2(0.0, bar.size.y - fill, 10.0, fill), Color(1.0, 0.72, 0.15, 0.95))
+		if count > 0:
+			draw_string(
+				ThemeDB.fallback_font, Vector2(-6.0, size.y + 18.0), "Killstreak x%d" % count,
+				HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, Color(1.0, 0.82, 0.3)
+			)
+
+
+## A cross at the screen's centre, red for a headshot.
+class KillMark extends Control:
+	var alpha: float = 0.0
+	var colour: Color = Color.WHITE
+
+	func _draw() -> void:
+		if alpha <= 0.0:
+			return
+		var c := size * 0.5
+		var tint := Color(colour, alpha)
+		for d in [Vector2(1, 1), Vector2(1, -1)]:
+			draw_line(c + d * 6.0, c + d * 16.0, tint, 3.0)
+			draw_line(c - d * 6.0, c - d * 16.0, tint, 3.0)
+
+
+## A line for everybody to read: a chat line, a map change, "REVENGE!". Held for
+## [constant NOTICE_SEC] and faded.
+##
+## [b]It did not exist[/b], and three callers in `ArenaClient` (chat lines, the map
+## changing, the map loaded) had called it since the client was written. Found adding the
+## first caller in this file, which the parser refused where the client's had not.
+func notice(text: String) -> void:
+	if notice_label == null:
+		notice_label = _make_label("Notice", Control.PRESET_CENTER_TOP, Vector2(0.0, 110.0))
+	notice_label.text = text
+	notice_label.modulate.a = 1.0
+	_notice_age = 0.0
+
+var notice_label: Label = null
+var _notice_age: float = 0.0
+const NOTICE_SEC := 4.0
+
+
+## A kill, as every client hears it. Keeps the streaks, the nemesis count and the marks.
+func note_kill(info: Dictionary, own_id: int, killer_name: String) -> void:
+	var killer := int(info.get("killer_id", 0))
+	var victim := int(info.get("victim_id", 0))
+	streaks[victim] = 0
+	if killer != 0 and killer != victim:
+		streaks[killer] = int(streaks.get(killer, 0)) + 1
+
+	if killer == own_id and killer != victim:
+		if kill_mark != null:
+			kill_mark.alpha = 1.0
+			kill_mark.colour = Color(1.0, 0.25, 0.2) if bool(info.get("headshot", false)) else Color.WHITE
+		if victim == last_killer and last_killer != 0:
+			notice("REVENGE!")
+			last_killer = 0
+
+	if victim == own_id and killer != 0 and killer != victim:
+		last_killer = killer
+		deaths_to[killer] = int(deaths_to.get(killer, 0)) + 1
+		_death_text = "Killed by %s  (%s)" % [killer_name, String(info.get("weapon", ""))]
+		if int(deaths_to[killer]) >= NEMESIS_AT:
+			_death_text += "\n%s is your NEMESIS" % killer_name
+
 ## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and
 ## not instant, so it reads as something done to the screen rather than a frame dropped.
 const BLIND_FADE_SEC := 0.25
@@ -482,6 +579,37 @@ func present_body() -> void:
 
 	slide_label.visible = live and state != null and state.is_sliding()
 	slide_label.text = "C  Cancel slide"
+
+	if streak_meter == null:
+		streak_meter = StreakMeter.new()
+		streak_meter.name = "Streak"
+		streak_meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		streak_meter.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+		streak_meter.position = Vector2(28.0, -110.0)
+		streak_meter.size = Vector2(12.0, 220.0)
+		add_child(streak_meter)
+		kill_mark = KillMark.new()
+		kill_mark.name = "KillMark"
+		kill_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		kill_mark.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(kill_mark)
+		death_label = _make_label("Death", Control.PRESET_CENTER_TOP, Vector2(0.0, 150.0))
+
+	var streak := int(streaks.get(player.player_id, 0)) if player != null else 0
+	streak_meter.visible = live
+	streak_meter.count = streak
+	streak_meter.fraction = float(streak) / float(STREAK_FULL)
+	streak_meter.queue_redraw()
+
+	kill_mark.alpha = maxf(kill_mark.alpha - get_process_delta_time() / MARK_SEC, 0.0)
+
+	if notice_label != null:
+		_notice_age += get_process_delta_time()
+		notice_label.modulate.a = clampf((NOTICE_SEC - _notice_age) / 0.5, 0.0, 1.0)
+	kill_mark.queue_redraw()
+
+	death_label.visible = player != null and not player.is_alive() and _death_text != ""
+	death_label.text = _death_text
 
 	if coins_label == null:
 		coins_label = _make_label("Coins", Control.PRESET_CENTER_BOTTOM, Vector2(0.0, -150.0))

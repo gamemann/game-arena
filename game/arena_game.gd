@@ -171,6 +171,17 @@ var projectiles: ArenaProjectiles = null
 ## change keeps what the server owner set.
 var drops: ArenaDrops = null
 
+## Kills since each player last died. Authority side; a client counts its own from KILL.
+var streaks: Dictionary = {}
+
+## Streak -> what reaching it gives: `heal` (full health), `armour`, `haste`,
+## `empowered` (more damage, a while). Set by `arena_streak_rewards` as "3:heal,5:haste";
+## empty gives nothing. Applied on the kill that reaches the streak, server side.
+var streak_rewards: Dictionary = {3: "heal", 5: "haste", 7: "empowered"}
+
+## Somebody reached a streak with a reward. Server side; the module announces it.
+signal streak_reward(player_id: int, streak: int, reward: String)
+
 ## The server owner's drop rules (`arena_drop_*`), applied to every drops layer built.
 var drop_rules := {
 	"coins": 5, "coin_value": 1, "health": 25.0, "any_kill": false, "life": 10.0,
@@ -400,6 +411,39 @@ func _build_combat() -> DotResult:
 	apply_drop_rules()
 
 	return DotResult.success(null)
+
+
+## Gives [param player_id] what [param reward] names. Authority side.
+func _reward_streak(player_id: int, streak: int, reward: String) -> void:
+	var player := player_for(player_id)
+	if player == null or not player.is_alive():
+		return
+
+	match reward:
+		"heal":
+			var _h := player.health.heal(player.health.max_health)
+		"armour":
+			player.health.add_armour(player.health.max_armour)
+		"haste":
+			if effects != null:
+				var _r := effects.apply(ArenaEffects.HASTE, player_id)
+		"empowered":
+			if effects != null:
+				var _r := effects.apply(ArenaEffects.EMPOWERED, player_id)
+		_:
+			return
+
+	streak_reward.emit(player_id, streak, reward)
+
+
+## "3:heal,5:haste" -> {3: "heal", 5: "haste"}. Unparseable pairs are skipped.
+static func parse_streak_rewards(text: String) -> Dictionary:
+	var out := {}
+	for pair in text.split(",", false):
+		var bits := pair.strip_edges().split(":")
+		if bits.size() == 2 and bits[0].is_valid_int() and int(bits[0]) > 0:
+			out[int(bits[0])] = bits[1].strip_edges()
+	return out
 
 
 ## Puts [member drop_rules] on the drops layer. Called when it is built and when a rule
@@ -1314,6 +1358,15 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 	# dot-match's entry has no field for it; the bridge reads it to tell every client a
 	# lethal critical happened, which is what breaks a body and what a reward hangs on.
 	entry.set_meta(&"critical", damage.critical)
+
+	# The streaks: the victim's ends, the killer's grows, and a reward lands on the kill
+	# that reaches it.
+	streaks[entity_id] = 0
+	if is_authority and damage.attacker != 0 and damage.attacker != entity_id:
+		var streak := int(streaks.get(damage.attacker, 0)) + 1
+		streaks[damage.attacker] = streak
+		if streak_rewards.has(streak):
+			_reward_streak(damage.attacker, streak, String(streak_rewards[streak]))
 
 	# Gun game: the killer's score just went up, so their weapon moves along the list.
 	if is_authority and mode != null and not mode.gun_game.is_empty() and damage.attacker != 0:

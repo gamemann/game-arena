@@ -133,6 +133,24 @@ func _module_load() -> DotResult:
 	_add_movement_cvars()
 	_add_drop_cvars()
 
+	add_cvar(
+		"arena_streak_rewards", "3:heal,5:haste,7:empowered",
+		"Kill streak rewards, as streak:reward pairs (heal, armour, haste, empowered); empty for none",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).changed.connect(
+		func(_old: String, new_value: String) -> void:
+			game.streak_rewards = ArenaGame.parse_streak_rewards(new_value)
+			log_info("streak rewards changed", {"rewards": new_value})
+	)
+	game.streak_reward.connect(
+		func(player_id: int, streak: int, reward: String) -> void:
+			var who := game.player_for(player_id)
+			if services != null:
+				services.announce(
+					"%s is on a %d kill streak: %s" % [who.display_name if who != null else "?", streak, reward]
+				)
+	)
+
 	# npc_skill, npc_reaction_scale, npc_reaction_min. Registered whether or not this mode
 	# has monsters, so a config that sets them does not fail on a deathmatch map and then
 	# not apply when the rotation reaches a horde one. Through `add_cvar`, so they go when

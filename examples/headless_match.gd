@@ -52,13 +52,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 497
+const CHECKS := 502
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 31
+const SECTIONS := 32
 
 var _passed := 0
 var _failed := 0
@@ -125,6 +125,7 @@ func _run() -> void:
 	await _test_capture_the_flag()
 	await _test_drops()
 	await _test_weapon_modes()
+	await _test_streaks()
 
 	# Last, and it has to be. It replaces the combat manager, the match node and the
 	# map, so everything above that reads any of them — the kill feed a HUD catches
@@ -817,6 +818,47 @@ func _test_drops() -> void:
 	_check(bool(wire["ok"]) and int(wire["id"]) == 7 and int(wire["kind"]) == 1
 		and int(wire["value"]) == 25 and (wire["at"] as Vector3).is_equal_approx(Vector3(4, 0, 6)),
 		"DROP round-trips")
+
+	remove_child(game)
+	game.queue_free()
+	await get_tree().process_frame
+	_done()
+
+
+# --- Streaks -----------------------------------------------------------------
+
+func _test_streaks() -> void:
+	_section("kill streaks and their rewards")
+
+	_check(
+		ArenaGame.parse_streak_rewards("3:heal, 5:haste,x:y,0:armour") == {3: "heal", 5: "haste"},
+		"arena_streak_rewards parses streak:reward pairs and skips the rest"
+	)
+	_check(ArenaGame.parse_streak_rewards("").is_empty(), "and empty gives nothing")
+
+	var game := _weapon_mode_game(ArenaMode.free_for_all(50), [940, 941, 942])
+	if game == null:
+		_check(false, "a streak game sets up")
+		return
+	var rewards: Array[String] = []
+	game.streak_reward.connect(func(_p: int, s: int, r: String) -> void: rewards.append("%d:%s" % [s, r]))
+
+	var killer := game.player_for(940)
+	for i in range(3):
+		killer.health.health = 30.0
+		var victim := 941 if i % 2 == 0 else 942
+		game.player_for(victim).health.alive = true
+		game.player_for(victim).hitboxes.enabled = true
+		game.combat.health_of(victim).health = 100.0
+		_kill_through_combat(game, 940, victim)
+	_check(int(game.streaks.get(940, 0)) == 3 and rewards == ["3:heal"],
+		"the third kill without dying is a streak of three and heals (%s)" % ", ".join(rewards))
+	_check(killer.health.health >= killer.health.max_health - 0.01, "to full (%.0f)" % killer.health.health)
+
+	game.player_for(941).health.alive = true
+	game.player_for(941).hitboxes.enabled = true
+	_kill_through_combat(game, 941, 940)
+	_check(int(game.streaks.get(940, -1)) == 0, "and dying ends it")
 
 	remove_child(game)
 	game.queue_free()
