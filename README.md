@@ -13,140 +13,148 @@ This project, along with every asset it is built on, was built initially with **
 
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
-## The Reference Game
-A 3D dev-textured arena deathmatch, built entirely out of the [dot-*](https://github.com/modcommunity) family and [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons). Twenty-seven weapons you can see in your hands and in everybody else's, three maps, a match that ends on its score limit, and a HUD and menus with no art assets of their own.
+## How it plays
+Arena is a fast first-person shooter on three dev-textured maps (`dm_atrium`, `dm_pit` and `dm_box`). It is also the reference game for the Dot collection: when a new game is started, this is the one it is copied from.
 
-**This is the reference game.** It exists to prove the addons compose, to show what the bridges between them look like, and to be the thing a new game is copied from.
+There are seven modes:
 
-## Playing it
+| Mode | |
+| --- | --- |
+| Free-For-All | Everybody for themselves. First to 25 kills. |
+| Team Deathmatch | Red against Blue. First side to 75. |
+| Siege | Everybody for themselves, with a horde of monsters in the arena and props to throw. |
+| King of the Hill | One point in the middle. Hold it for ninety seconds. |
+| Capture the Flag | Take theirs to yours. First side to 3. |
+| Gun Game | Every kill gives you a different gun. First through the list wins. |
+| Only Snipers | A random sniper on every spawn. First to 25. |
 
-```bash
-ln -s ../../dot-core/addons/dot_core addons/dot_core   # and the other seven
-godot --path .                                         # bots, no server needed
-```
+The weapons are all twenty-seven from [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons): melee weapons, sidearms, rifles, heavies and grenades, each with a view model, a world model, sounds and recoil. A loadout is a melee weapon, a sidearm, a primary, a grenade and armour on a seven-point budget. A headshot kill drops coins and a health pack, and kill streaks earn rewards.
 
-No dedicated server, no dot-cloud, no downloads: with no `dot_client_link` registered the client is the authority, loads `dm_atrium` out of its own build and adds three bots. `-- --offline` forces that even when a link *is* available.
+A match starts in warmup, then counts down, then goes live. Nobody spawns until it is live (about thirteen seconds on the default rules), so an empty room at the start is normal.
 
-| | |
+## Controls
+
+| Key | Action |
 | --- | --- |
 | **WASD** | Move |
-| **Space** | Jump. Hold it, auto-hop is on |
+| **Space** | Jump. Hold it to keep hopping |
 | **Ctrl** | Crouch |
+| **C** | Slide (Ctrl at a run does too) |
+| **Shift** | Dash |
+| **E** | Launch yourself forward |
 | **Mouse 1** | Fire. Hold to cook a grenade, let go to throw it |
-| **Mouse 2** | Bash with whatever gun is in hand |
+| **Mouse 2** | Aim down the sights |
+| **F** | Bash with whatever is in your hand |
 | **R** | Reload |
-| **1**..**5** / wheel | Weapon slot: melee, sidearm, primary, heavy, throwable |
+| **1**-**5** / wheel | Weapon slot: melee, sidearm, primary, heavy, grenade |
 | **Q** | Last weapon |
+| **V** | Push to talk |
+| **Y** / **U** | Chat / team chat |
 | **Tab** (hold) | Scoreboard |
-| **Esc** | Pause menu, and release the mouse |
+| **Esc** | Menu, and release the mouse |
 
-**The match starts in warmup.** It is WARMUP, then COUNTDOWN, then LIVE, and nobody spawns until LIVE, because dot-match's respawn queue is what places a player, and it does not run before then. On the shipped rules that is about thirteen seconds at 64 ticks, so a screenshot taken earlier than that shows an empty room and a player at the origin, which is correct and looks exactly like a broken spawn.
+In Siege, **E** picks up and drops a prop, **F** freezes it, **G** punts it, and launch moves to **X**.
 
-## Running it headless
-
-```bash
-godot --headless --path . res://examples/headless_match.tscn   # a whole deathmatch
-godot --headless --path . res://examples/headless_net.tscn     # the netcode
-godot --headless --path . res://examples/dedicated.tscn        # a real DotServer
-godot --headless --path . res://examples/headless_admin.tscn   # an admin's live tools on it
-```
-
-Or, once [dot-serve](https://github.com/modcommunity/dot-serve) is installed:
+## Getting started
+You need [Godot 4.7](https://godotengine.org/download). The game is built from twenty-six Dot addons, each in its own repository, so the easiest way to get everything is [dot-bootstrap](https://github.com/modcommunity/dot-bootstrap). It clones every project and links the addons into each one:
 
 ```bash
-dotserve --game res://examples/dedicated.tscn --name "My arena"
+git clone https://github.com/modcommunity/dot-bootstrap.git
+cd dot-bootstrap
+./bootstrap.sh
+cd projects/game-arena
+./game.sh
 ```
 
-## What it is made of
+On Windows, run `bootstrap.ps1` instead and open the project in Godot.
 
-| | |
+`game.sh` does everything else:
+
+| Command | What it does |
 | --- | --- |
-| [dot-core](https://github.com/modcommunity/dot-core) | Everything shared. |
-| [dot-player-controller](https://github.com/modcommunity/dot-player-controller) | Movement. Classic strafe acceleration, air-strafing, auto-hop. |
-| [dot-combat](https://github.com/modcommunity/dot-combat) | Health, hitboxes, hit registration. |
-| [dot-weapon](https://github.com/modcommunity/dot-weapon) | When a weapon fires, reloads and switches, in ticks. |
-| [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons) | The twenty-seven weapons, and everything about them a player sees and hears. |
-| [dot-loadout](https://github.com/modcommunity/dot-loadout) | What you take in, and what you may take. |
-| [dot-match](https://github.com/modcommunity/dot-match) | Rounds, scoring, spawning, respawning. |
-| [dot-ui](https://github.com/modcommunity/dot-ui) | HUD, pause menu, settings, controls, scoreboard. |
-| [dot-server](https://github.com/modcommunity/dot-server) | The dedicated server, through one module. |
+| `./game.sh` | Play offline against bots, in a window |
+| `./game.sh online` | Start a local server and the browser client, and print the link to open |
+| `./game.sh online down` | Stop them |
+| `./game.sh server` | Start a local dedicated server only |
+| `./game.sh test` | Check every script and run every test suite |
+| `./game.sh shot` | Save a screenshot to `screenshots/` |
+| `./game.sh help` | All of the options |
 
-## The four files that matter
+`online` and `server` use [dot-server-deploy](https://github.com/modcommunity/dot-server-deploy), which bootstrap clones next to this one. Run its `./setup.sh` once first.
 
-**`maps/arena_map.gd`**: a level is a list of boxes, and that list becomes three things: meshes, physics bodies, and analytic geometry for a headless server. Building them separately means three descriptions that drift, and the drift is invisible until shots start passing through something clients can see.
+## Running a server
+Settings are cvars. Set them in the server's config, on the command line, or live from the console. `cvarlist arena_` lists every one with its description.
 
-**`game/arena_player.gd`**: movement, weapons, health and hitboxes on one body. Every addon says this wiring belongs in the game, because an addon that did it would dictate a scene shape.
+```
+arena_mode free_for_all        // free_for_all, team_deathmatch, siege, king_of_the_hill, capture_the_flag, gun_game, only_snipers
+arena_scorelimit 25            // kills to win
+arena_minplayers 1             // players needed before a round starts
+arena_streak_rewards ""        // kill streak rewards as streak:reward pairs (heal, armour, haste, empowered)
+arena_spawn_mode avoid         // avoid, weighted, furthest or random
+```
 
-**`game/arena_game.gd`**: the seam. Six addons, each correct alone; this is the fifty lines where a combat kill becomes a match score and a match respawn becomes a loadout.
+Console commands:
 
-**`game/arena_module.gd`**: the only file that names dot-server. About forty lines, and it is the entire dedicated-server integration.
+| Command | |
+| --- | --- |
+| `arena_status`, `arena_score` | The match state and the scoreboard |
+| `arena_map <id>`, `arena_maps`, `arena_nextmap` | Change the map, list the maps, see what is next |
+| `arena_modes` | List the modes |
+| `arena_vote` | Open a map vote now |
+| `arena_restart` | Restart the match |
+| `arena_horde [clear]` | Show or clear the monsters |
 
-## The weapons
+### Admin commands
+These come from [dot-moderation](https://github.com/modcommunity/dot-moderation). Type them in the console, or in chat with a `!` in front.
 
-All twenty-seven of [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons): seven melee weapons, four sidearms, nine primaries, five heavies and two grenades. Arena defines none of its own. The pack already has every weapon tuned in ticks and checked as one document, and what this game decides is what a loadout may name and what it costs.
+| Command | Needs | |
+| --- | --- | --- |
+| `noclip`, `god`, `buddha` `[player] [on\|off]` | `cheats` | With no player, they act on you |
+| `hp <player> <n>`, `speed <player> <x>`, `gravity <player> <x>` | `cheats` | Speed and gravity go from 0.25x to 3x |
+| `give <player> <weapon>`, `strip <player>` | `cheats` | |
+| `freeze <player> [seconds]`, `unfreeze`, `slay`, `slap <player> [damage]`, `respawn`, `rename`, `burn` | `slay` | |
+| `blind <player> [on\|off\|seconds]` | `slay` | Blacks out that player's screen |
+| `beacon <player> [on\|off]` | `slay` | A ring and a ping on that player, for everybody to see |
+| `bring`, `goto`, `send <player> <to>`, `return` | `teleport` | |
+| `modtools [player]` | `generic` | What is on a player, or what this game supports |
 
-What the pack adds over a weapon that only exists in the simulation:
+A player can be a name, `@me`, `@all`, `@others`, `@alive`, `@dead` or `@team:<n>`.
 
-- **You see your own gun**, with arms, sway, bob, recoil that kicks the view, reloads and switches.
-- **You see everybody else's**, in their hand, kicking when they fire, gone while they switch.
-- **A shot is seen and heard**: a tracer, a muzzle flash, a spark where it lands, and a report that tells one weapon from another.
-- **Every gun bashes** on the right mouse button.
-- **Grenades are grenades.** The fuse starts when the pin comes out, so you can cook one; a frag bounces and rolls, a sticky stops dead on whatever it hits (a person included), and one held past its fuse goes off in your hand. Each has a red fuse light so you can find it on the floor.
-
-Loadouts are a melee weapon, a sidearm, a primary, a throwable and armour on a seven-point budget. A rifle, a pistol, a frag and armour fit, and so does a heavy with a sidearm and a grenade, but not a heavy *and* armour. The launcher is the one weapon a player has to have unlocked, which keeps dot-loadout's entitlement path in use. Loadouts saved before the melee and throwable slots existed are filled in when they load, not refused.
-
-To see it: `tools/screenshot_weapons.sh` plays the offline game and saves the hands, a bot holding its gun, a burst of fire, and a grenade from the hand to the explosion, into `screenshots/`.
-
-## Configuring the map vote
-
-The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote), and the rules in `game/arena_vote.gd` are only this game's defaults. A server owner overrides any of dot-vote's settings without touching code, in `user://cfg/arena_vote.json`, then `DOT_VOTE_*`, then `--vote-*` — later wins — or, on a TMC server, under `metadata: map_vote:` in the game's `game.yml`. A file that does not validate is refused whole and the defaults stand, with the reason in the log.
-
-The end-of-map vote and the option to extend the current map:
+### The map vote
+The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote). The defaults are in `game/arena_vote.gd`. To change them, put a file at `user://cfg/arena_vote.json` (or use `DOT_VOTE_*` environment variables, or `--vote-*` arguments):
 
 ```json
 { "end_vote": true, "vote_lead_sec": 120, "include_extend": true, "extend_seconds": 600, "max_extends": 3 }
 ```
 
-`end_vote: false` turns the end-of-map ballot off (the map still ends, on the rotation); `include_extend: false` takes "extend" off the ballot; `extend_seconds` is how much one extension adds and `max_extends` how many there may be. Every setting is in dot-vote's README, and its `docs/parity.md` maps the long-standing community map-chooser plugins' settings onto them.
+`end_vote: false` turns the end-of-map vote off, and `include_extend: false` takes "extend" off the ballot. dot-vote's README lists every setting.
 
-## Validating
+## Testing
 
 ```bash
-godot --headless --path . --import
-find . -name '*.gd' -not -path './.godot/*' -not -path './addons/*' | while read f; do
-    godot --headless --path . --check-only --script "res://${f#./}"
-done
-godot --headless --path . res://examples/headless_match.tscn
-godot --headless --path . res://examples/headless_net.tscn
-godot --headless --path . res://examples/dedicated.tscn
-godot --headless --path . res://examples/headless_admin.tscn
+./game.sh test                    # every script parses, then every suite runs
+./game.sh test headless_match     # one suite
 ```
 
-`headless_match`: 478 checks. Plays an entire deathmatch: four bots, real movement, real shots, real kills, real respawns, ending on the score limit. Then builds the HUD and the menus and drives them, and puts the weapons pack through a real game: a shot from the eye, a bash, a frag that bounces and goes off on its fuse, a sticky that stays where it lands, and a grenade cooked in the hand.
+| Suite | What it covers |
+| --- | --- |
+| `headless_match` | A whole match with four bots, then the HUD, the menus and the weapons |
+| `headless_net` | A server and a client in one process, over a connection that drops packets |
+| `headless_presentation` | What a client draws and plays |
+| `headless_stack` | The whole stack of addons together |
+| `headless_admin` | The admin commands on a real server |
+| `dedicated` | A real server: boots, loads the game, runs its commands, unloads it |
 
-`headless_net`: 171 checks. Runs a server and a client in one process over a loopback that drops packets: the wire round-trips, a spawn is mirrored, movement replicates, the client moves on the tick it presses, the two stay together under loss, a player an admin noclips on the server is predicted flying by their own client rather than rubber-banding, an admin's blind reaches the blinded player's client and no other while a beacon reaches both, what a player carries reaches their own client and only what is in their hand reaches anybody else's, a replayed tick draws nothing, and a thrown grenade flies on a client and hurts nobody there.
+## How the code is laid out
+- `maps/arena_map.gd` builds every map from a list of boxes: the meshes, the collision, and what a headless server checks shots against.
+- `game/arena_player.gd` puts movement, weapons, health and hitboxes on one body.
+- `game/arena_game.gd` joins the addons together, for example turning a kill into a point.
+- `game/arena_module.gd` is the dedicated-server side: cvars and console commands.
 
-`dedicated`: 112 checks. Boots a real `DotServer`, binds a port, loads the module, runs its console commands, unloads it and loads it again.
+[`CLAUDE.md`](CLAUDE.md) has the reasoning behind each of these.
 
-`headless_admin`: 46 checks over ten sections. The same real server, with an administrator, a moderator and a player typing `!noclip`, `!god`, `!freeze`, `!slay` and the rest: a noclipped player goes through the wall and the floor, a godded one takes a hit and loses nothing, a frozen one holding forward does not move, a slain one dies and is counted, a moderator cannot noclip anybody, a player with no flags is refused, a blind lifts on its own when its seconds are up, a slay inside spawn protection still kills, and blind and beacon survive a respawn.
+## Credits
+The characters are from Kenney's character kits, and the weapons are from [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), which credits its own art. Kenney's assets are CC0.
 
-### The admin tools
-
-dot-moderation's live tools, with this game's verbs in `game/arena_mod_tools.gd`. Everything is typable in chat with a `!`:
-
-| Command | Flag | |
-| --- | --- | --- |
-| `noclip`, `god`, `buddha` `[player] [on\|off]` | `cheats` | bare, they act on you |
-| `hp <player> <n>`, `speed <player> <x>`, `gravity <player> <x>` | `cheats` | speed and gravity are steps from 0.25× to 3×, so the client can predict them |
-| `give <player> <weapon>`, `strip <player>` | `cheats` | |
-| `freeze <player> [seconds]`, `unfreeze`, `slay`, `slap <player> [damage]`, `respawn`, `rename`, `burn` | `slay` | |
-| `blind <player> [on\|off\|seconds]` | `slay` | blacks out that player's own screen and nobody else's |
-| `beacon <player> [on\|off]` | `slay` | a pulsing ring, a column through walls and a ping, on every screen, until turned off |
-| `bring`, `goto`, `send <player> <to>`, `return` | `teleport` | |
-| `modtools [player]` | `generic` | what this game supports, or what is on somebody |
-
-Targets are anything `kick` takes, plus `@me`, `@all`, `@others`, `@alive`, `@dead` and `@team:<n>`. Blind and beacon both outlive a death, as god does; noclip and freeze end with the body. `tools/screenshot.sh dm_box --admin` renders both.
-
-## Licence
-
+## License
 MIT. See [LICENSE](LICENSE).
