@@ -251,6 +251,8 @@ func _module_load() -> DotResult:
 		var voted := _build_vote()
 		DotLog.result(CHANNEL, "the vote", voted)
 
+	_follow_hibernation()
+
 	_add_extra_commands()
 	_build_query_provider()
 	_register_game()
@@ -464,6 +466,19 @@ func _build_maps() -> DotResult:
 	maps.map_over.connect(_on_map_over)
 
 	return DotResult.success(maps)
+
+
+## Both map clocks follow the server's hibernation: they stop while nobody is here and start
+## again from the top when somebody joins. The vote's is the one that runs; the map
+## director's is the fallback for a server whose vote did not load. With hibernation off the
+## vote's own [code]empty_choice[/code] changes the map when the limit runs out on nobody.
+## This module is not on DotGameModule, which does this by itself for the games that are.
+func _follow_hibernation() -> void:
+	if vote != null and vote.director != null:
+		vote.director.follow_hibernation(server)
+
+	if maps != null and maps.session != null:
+		maps.session.follow_hibernation(server)
 
 
 func _build_vote() -> DotResult:

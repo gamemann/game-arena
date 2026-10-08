@@ -44,7 +44,7 @@ const APP_URL := "arena"
 ## against a runtime error that aborts a test function part-way: the checks after the
 ## error never happen, the ones before it still print ok, and "N passed, 0 failed" cannot
 ## show the difference. See docs/testing.md.
-const CHECKS := 112
+const CHECKS := 114
 
 var _passed := 0
 var _failed := 0
@@ -494,6 +494,18 @@ func _test_maps_and_vote() -> void:
 
 	var options := module.vote.source.choices()
 	_check(options.size() > 0, "and there is something to vote for", "%d" % options.size())
+
+	# Both map clocks follow the server's hibernation: they wait while nobody is here and
+	# start again from the top when somebody joins (dot-vote's and dot-map's own suites
+	# assert what following does; this asserts the game wired it).
+	_check(
+		_server.hibernation_changed.is_connected(module.vote.director.set_hibernating),
+		"the vote's clock follows the server's hibernation"
+	)
+	_check(
+		_server.hibernation_changed.is_connected(module.maps.session.set_hibernating),
+		"and so does the map director's fallback clock"
+	)
 
 	# Every choice id says what kind of change it is. A bare id would have to be
 	# looked up in the map catalogue and then in the mode catalogue, which is a lookup
