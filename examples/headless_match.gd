@@ -3031,8 +3031,7 @@ func _test_crate_climb() -> void:
 	# this route — and re-aiming a bot continuously would make its arrival a statement
 	# about the steering rather than about the map. So: north and jump until it is up,
 	# then west and no jump. Each leg is one key, held, exactly as every other map
-	# check in this file drives one. `game-simple-lobby`'s gallery walk is driven the
-	# same way for the same reason.
+	# check in this file drives one.
 	# Twenty-four seconds. The climbing leg holds jump, and a bot holding jump travels
 	# at a fraction of walking pace — `_test_bot_ground_speed` measures exactly that —
 	# so eighteen metres of stack costs most of the budget and the walk along the roof

@@ -13,9 +13,9 @@ extends Node
 ## [/codeblock]
 ##
 ## A host who can cheat and a leaderboard are not two features. They are one exploit, and
-## the only honest answers are a dedicated server or a sandbox. game-simple-lobby takes the
-## same addon at `HOST_AUTHORITATIVE` because it has no score at all, and game-g2gfast
-## refuses to host a ranked run outright — three games, three answers, one addon.
+## the only honest answers are a dedicated server or a sandbox. game-g2gfast
+## refuses to host a ranked run outright, and game-playground hosts authoritatively because
+## nothing it builds is ranked: three games, three answers, one addon.
 ##
 ## [method reporting_allowed] is what the rest of the game asks before it files anything.
 ## It is a method rather than a flag so that there is one place to look, and so that a

@@ -61,8 +61,7 @@ var services: ArenaServices = null
 ## it from a path inside `load_module`, so there is no instance for a host to set a field on
 ## first. `examples/dedicated.tscn` points it at a directory of its own; before it could,
 ## every run wrote an hour-long gag against the same test uid into the real store, 457
-## records by the time anybody counted. game-simple-lobby's `RoomModule.punishments_path`
-## is the same seam.
+## records by the time anybody counted.
 static var punishments_file: String = ""
 
 ## The live tools' commands. See [method _build_mod_commands].
