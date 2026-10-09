@@ -2,7 +2,6 @@ extends RefCounted
 
 const ArenaMap := preload("arena_map.gd")
 const ArenaBspMap := preload("arena_bsp_map.gd")
-const ArenaFlatBody := preload("arena_flat_body.gd")
 const ArenaImportedMaps := preload("arena_imported_maps.gd")
 const ArenaMapMechanics := preload("arena_map_mechanics.gd")
 
@@ -1625,8 +1624,7 @@ func shot_trace() -> DotTrace:
 
 ## The movement backend for a headless server or a test.
 func to_fps_body() -> DotFpsFlatBody:
-	# Arena's subclass, which pushes a player out of a box the short way; see its header.
-	var body: DotFpsFlatBody = ArenaFlatBody.new()
+	var body := DotFpsFlatBody.new()
 	body.floor_y = floor_y
 
 	for box in boxes:
