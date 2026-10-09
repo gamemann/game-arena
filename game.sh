@@ -32,7 +32,7 @@
 GAME_NAME="Arena"
 PACK="arena"
 EXTRA_PACKS=""
-SUITES="headless_match headless_net headless_presentation headless_stack headless_admin headless_imported dedicated"
+SUITES="headless_match headless_net headless_lossy headless_presentation headless_stack headless_admin headless_imported dedicated"
 # --------------------------------------------------------------------------------
 
 set -uo pipefail

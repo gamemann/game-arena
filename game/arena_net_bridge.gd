@@ -42,6 +42,14 @@ const CHANNEL := "arena.net"
 ## packet. Fixed width, so the command that follows starts at a known offset.
 const ACK_BYTES := 4
 
+## Commands in every input packet: this tick's and the two before it, so a packet lost
+## costs the server no tick unless two more after it are lost too. See [method encode_input].
+const INPUT_COPIES := 3
+
+## Input packets taken, per peer. Server side; what `arena_net` reads to tell one client's
+## lossy uplink from another's.
+var inputs_from: Dictionary = {}
+
 ## Announced a player. Server side: these bytes go to every client.
 signal player_announced(payload: PackedByteArray)
 
@@ -104,7 +112,45 @@ var map_report_fn: Callable = Callable()
 ## simulates N. With no samples the lead is a guess, and on any link past about 30 ms
 ## every input arrives after its tick has passed and is discarded as late — the player
 ## moves perfectly on their own screen and nowhere else.
+##
+## [b]Point it at [method link_rtt_ms], not at `ping_ms` alone.[/b] See there.
 var rtt_source: Callable = Callable()
+
+
+## A client link's round trip, in milliseconds: ENet's own measurement when the link is on
+## ENet, and dot-server's heartbeat ping otherwise. 0 while neither knows.
+##
+## [b]Why not just `DotClientLink.ping_ms`.[/b] That is one heartbeat every two seconds,
+## sent unreliable, and it is -1 until the first comes back -- once, through a real UDP
+## relay (`headless_lossy`), eight seconds after connecting. Until then the clock believes
+## the link is instant and leaves the flight time out of its input lead, so the commands
+## arrive after their ticks and are thrown away while the player moves perfectly on their
+## own screen: on a steady 55 ms each way, the server had the client's command for 46% of
+## its ticks in the first three seconds, 102 of them late (`--ping-rtt`, the control).
+## ENet times every acknowledged packet from the connect handshake on, so on ENet its
+## number is right before the first snapshot lands (100% in time, 0 late). Read by duck
+## typing, because a web build has no ENet class to name.
+static func link_rtt_ms(link: Node) -> float:
+	if link == null or not is_instance_valid(link):
+		return 0.0
+
+	var api := link.multiplayer
+	var peer: Object = api.multiplayer_peer if api != null else null
+
+	if peer != null and peer.has_method("get_peer") and ClassDB.class_exists(&"ENetPacketPeer"):
+		var server: Object = peer.call("get_peer", 1)
+
+		if server != null and server.has_method("get_statistic"):
+			var stat := ClassDB.class_get_integer_constant(&"ENetPacketPeer", &"PEER_ROUND_TRIP_TIME")
+			var rtt := float(server.call("get_statistic", stat))
+
+			if rtt > 0.0:
+				return rtt
+
+	if link.has_method("ping_ms"):
+		return float(maxi(0, int(link.call("ping_ms"))))
+
+	return 0.0
 
 ## Peers that have said they can receive. Server side.
 ##
@@ -539,6 +585,16 @@ func receive_snapshot(payload: PackedByteArray) -> DotResult:
 ##
 ## The acknowledgement goes first because it is fixed width. A bit-packed command is
 ## not, so a reader that had to skip it would need to decode it to know where it ends.
+##
+## [b]And the command rides with the two before it.[/b] An input is unreliable and a lost
+## one is a tick the server simulates on the previous command -- with the view turning,
+## a different command -- so the client is corrected for something it did right. Through a
+## real UDP relay in front of an ENet server (`headless_lossy`), one copy: the server had a
+## moving player's command for 80% of its ticks at 20% loss and 94% at 5%, and corrected
+## his prediction on 9% of snapshots; three copies: 99-100% and under 3%. WebSocket never
+## loses one, which is why nothing had seen it. The copies come out of the client's own
+## replay history, so they are exactly what it predicted with, and the server skips the
+## ones it has already simulated.
 func encode_input(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> PackedByteArray:
 	var command := ArenaNetCommand.new()
 	command.tick = tick
@@ -546,8 +602,14 @@ func encode_input(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> Pac
 	command.move = move
 	command.fire = fire
 
+	# The ones before this tick from the replay history; this one from the arguments,
+	# because a caller may encode before or after `client_tick` recorded it.
+	var batch: Array = Array(net.local_inputs().recent(INPUT_COPIES, tick - 1))
+	batch = batch.slice(maxi(0, batch.size() - (INPUT_COPIES - 1)))
+	batch.append(command)
+
 	var writer := DotNetWriter.new()
-	command.write(writer)
+	DotNetInput.write_batch(writer, batch)
 
 	var out := net.encode_ack()
 	out.append_array(writer.to_bytes())
@@ -567,11 +629,30 @@ func receive_input(peer_id: int, payload: PackedByteArray) -> DotResult:
 		return DotResult.fail(DotError.CODE_PARSE, "Input packet is too short.")
 
 	net.receive_ack_payload(peer_id, payload.slice(0, ACK_BYTES))
+	inputs_from[peer_id] = int(inputs_from.get(peer_id, 0)) + 1
 
-	var command := ArenaNetCommand.new()
-	command.read(DotNetReader.new(payload.slice(ACK_BYTES)))
+	var batch := DotNetInput.read_batch(
+		DotNetReader.new(payload.slice(ACK_BYTES)),
+		func() -> DotNetInput: return ArenaNetCommand.new()
+	)
 
-	return net.input_buffer_for(peer_id).push(command)
+	if batch.is_empty():
+		return DotResult.fail(DotError.CODE_PARSE, "Input packet carries no command.")
+
+	var buffer := net.input_buffer_for(peer_id)
+	var newest := batch[batch.size() - 1]
+	var pushed := DotResult.success(false)
+
+	# The copies of ticks already simulated are skipped rather than pushed, or every one
+	# would count as a late input and the number that says "this client's clock is
+	# behind" would say it about every healthy client. The packet's own tick is always
+	# pushed, so a genuinely late one is still counted.
+	for command in batch:
+		if command != newest and command.tick <= buffer.last_consumed_tick():
+			continue
+		pushed = buffer.push(command)
+
+	return pushed
 
 
 # --- Joins -----------------------------------------------------------------
@@ -1289,4 +1370,5 @@ func describe() -> Dictionary:
 		"peers": _players_by_peer.size(),
 		"tick": _tick,
 		"ticked_for": _game_ticked_for,
+		"inputs_from": inputs_from,
 	}

@@ -549,12 +549,13 @@ done
 godot --headless --path . res://examples/headless_match.tscn
 godot --headless --path . res://examples/headless_presentation.tscn
 godot --headless --path . res://examples/headless_net.tscn
+godot --headless --path . res://examples/headless_lossy.tscn
 godot --headless --path . res://examples/dedicated.tscn
 godot --headless --path . res://examples/headless_admin.tscn
 godot --headless --path . res://examples/headless_imported.tscn
 ```
 
-`headless_match` 502 checks over 32 sections, `headless_net` 192 over 17 (183 without g2gfast-maps linked), `headless_presentation` 135, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 53 over eleven (it skips, and says so, without the link).
+`headless_match` 502 checks over 32 sections, `headless_net` 192 over 17 (183 without g2gfast-maps linked), `headless_lossy` 62 over six (about 50 seconds: it plays in real time), `headless_presentation` 135, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 53 over eleven (it skips, and says so, without the link).
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1339,4 +1340,44 @@ Pushes and boosters, water, ladders, conveyors, gravity volumes and hurt volumes
 **Checked.** `headless_imported` gained two sections (53 checks over eleven, from 41 over nine): on `surf_10x_reloaded_fixed`, the mechanics are read, a 47.6 m/s floor booster throws a player at 47.6 m/s, a player put in water to the chest swims, sinks at 1.14 m/s, and comes up out of it holding jump, and a ladder is climbed 5.2 m in a second with 63 ticks on it; on `surf_xiv_v2a`, a 100-a-second volume takes 50 at once through dot-combat as world damage, the next 50 lands half a second later and not a tick sooner (and kills, which the kill feed reports as the world's), and a -5 volume heals 2.5. `headless_net` gained two checks in the imported-map window (192, from 190): a booster carries the server's player 35.6 m, and the client predicts it tick for tick, 0.017 m against the server's same tick. That check compares against the server's next tick because this lockstep harness has the client one tick ahead, which at 47 m/s is 0.74 m by itself (the jump check's 0.09 m is the same tick at a jump's speed). **Armed**, each fired and was put back: pushes off (the booster check), the displaced-out hand-over off (the booster, 5.5 m/s), the swim update removed (three water checks), the ladder update removed (the climb, 0 ticks on), `_hurt_from_map` not called (four hurt checks), the pulse every tick (the half-second check), the heal skipped (the heal check), and the client's prediction run without the mechanics (`headless_net`'s booster, 5.95 m from the server).
 
 **Rendered.** `tools/screenshot.sh <imported map>` now also writes `<id>_water` (a bot put in the map's deepest pool and left to sink) and `<id>_booster` (a bot put on its strongest floor booster, thrown off the end). Looked at on `surf_10x_reloaded_fixed`: the swimmer is in the pool 1.44 m under its (undrawn) surface in swim mode, and the rider is in the air past the end of the booster at 47.6 m/s; the existing frames are unchanged.
+
+## Real loss: `headless_lossy` (2026-10-09, `dual-stack-follow-1`)
+
+Servers listen on ENet as well as WebSocket now, and over WebSocket "unreliable" is TCP: nothing here had ever had a datagram arrive late, out of order, twice or not at all, or a reliable message retransmitted. `headless_net`'s loss is its own loopback dropping one in five, in order and instantly. `examples/headless_lossy` puts dot-net's lossy UDP relay (`res://addons/dot_net/testing/dot_net_udp_relay.gd`, by path; see dot-net's CLAUDE.md) between a real `DotClientLink` on ENet and a real dual-stack `DotServer` running `ArenaModule`, and plays. Client **A** goes through the relay and is measured: it runs, strafes and turns every tick. Client **B** connects straight to the server and runs a circle, the smooth reference A's drawing is held to. A dummy the server seats is slain every 1.2 s for the kill feed. Each end has its own `MultiplayerAPI` (`SceneTree.set_multiplayer`), so one process holds all three.
+
+It measures A's first three seconds on their own, then three windows: a steady 55 ms each way, and 5% and 20% loss each way with 30..80 ms of delay (uniform, so packets reorder), 16 checks each: still connected; the relay injected the loss; A's clock error settled within 3 ticks with no snaps; the share of the server's ticks that had A's command; that A drew B every frame, never froze more than 100 ms while B moved, never jumped more than 0.5 m past B's own motion, was within 10 cm of where the server had B at that render time for 95% of frames, that the render timeline went back at most twice by a tick at most, and at most a quarter of frames extrapolated; A's prediction against the server's A tick for tick; `DotNetStats.loss_rate()` against the relay's measured loss; and every numbered notice, kill and chat line (down, and A's own up and back) exactly once and in order; then a leave. `--verbose` prints the diagnostics every finding below was made with.
+
+**Measured, three runs, 2026-10-09** (64 ticks, 32 snapshots; ENet round trip 121-136 ms):
+
+| | steady 55 ms | 5%, 30..80 ms | 20%, 30..80 ms |
+| --- | --- | --- | --- |
+| A connected throughout | yes | yes | yes |
+| clock error once settled | 0 ticks | +-1 | +-1 |
+| real input lead (needed ~5) | 7 ticks | 8-9 | 8-9 |
+| server ticks with A's command | 100% | 98.3-100% | 98.6-99.9% |
+| A's prediction vs server, p95 / max | 7 mm / 8 mm | 8 mm / 11 mm | 8-9 mm / 0.15-0.30 m |
+| replays that corrected | 0.5-1% | 0.4-1.1% | 0.8-1.7% |
+| B drawn vs server at render time, p95 / max | 5 mm / 0.12-0.18 m | 8-9 mm / 0.03-0.04 m | 11 mm / 0.05-0.19 m |
+| longest freeze / largest jump | 0 / 0.05-0.10 m | 15-33 ms / 0.03-0.04 m | 14-45 ms / 0.04-0.17 m |
+| frames extrapolated | 0% | 11-13% | 12% |
+| render timeline steps back | 0 | 0-1 (0.02 tick) | 0 |
+| `loss_rate()` vs injected | 0.000 / 0.000 | 0.06-0.07 / 0.05 | 0.17-0.20 / 0.21 |
+| notices, kills, chat down, A's chat | 24, 5, 15, 2 | 40, 8, 25, 3 | 40, 8, 25, 3 |
+
+and in A's first three seconds the server had its command for 100% of 192 ticks.
+
+**What it found, in the order it was found, every one armed:**
+
+- **`DotNetStats` reported half of every clean link lost** (dot-net #22): it counted ticks, and arena snapshots every second tick. 0.55 against 0.04 injected, 0.60 against 0.21, 0.50 against nothing.
+- **No input was ever resent** (dot-net #25): every lost input packet was a tick the server ran on the previous command, with the view turning every tick. `ArenaNetBridge.encode_input` sends this tick's command and the two before it (`INPUT_COPIES`), and `receive_input` skips the copies already simulated so they do not count as late. Armed (`INPUT_COPIES := 1`): the server had A's command for 80.0% of its ticks at 20% loss and 94.4% at 5%, and corrected him on 9% of snapshots. `inputs_from` (per peer, in `describe()`) is what told one client's uplink from the other's.
+- **The clock's round trip came from a two-second heartbeat that is -1 until it first answers** -- eight seconds after connecting, once. Until then the clock left the flight time out of its input lead and the commands arrived after their ticks. `ArenaNetBridge.link_rtt_ms(link)` reads ENet's own round trip (by duck typing; a web build has no ENet class) and falls back to `ping_ms`; `ArenaClient` uses it. Armed (`--ping-rtt`): 45.9% of A's first three seconds in time, 102 commands late.
+- **The render timeline went backwards with every late packet, and the interpolation delay had the flight time taken out of it** (dot-net #23 and #24). Armed: 38-48 steps back per window by up to 3 ticks; 93-100% of frames extrapolated and B drawn 0.65 m from where the server had him.
+- **A Godot engine bug made every native client drop its commands at connect, and the fix belongs in dot-core.** `ENetMultiplayerPeer.create_server` passes its `max_channels` argument to ENet as the host's incoming bandwidth (`modules/enet/enet_multiplayer_peer.cpp`: `create_host_bound(bind_ip, port, max_clients, 0, max_channels + SYSCH_MAX, out_bandwidth)`; checked in the 4.8-dev source, and measured on 4.7.2). dot-core's `DotTransportENet` passes its four channels, so every dot-server tells every ENet client it can take **six bytes a second**. The client's ENet believes it: its bandwidth throttle caps the packet throttle at 1/32 and drops 31 of every 32 unreliable packets -- the commands -- until the server's first bandwidth pass corrects it, and then the RTT throttle climbs back 2/32 at a time; measured, 1/32 for about two seconds and not back to 32 for up to twenty. Reliable traffic is slowed with it: at 20% loss some notices and chat lines took more than three seconds to arrive (none was lost, and all were in within six). **The fix, for DotTransportENet `_create_server`: pass 0 as the channel count.** The same engine call always passes 0 as ENet's channel limit, so the channels a client asks for are granted either way and the only thing it changes is the bandwidth (0, unlimited). The harness builds the server's transport that way (`_boot`); `--stock-enet` builds it as dot-core does and is the control: 17-20% of A's first three seconds in time and 61-85% of the steady window, and A's prediction corrected on up to 18% of snapshots. A `throttle_configure` on the client does not help -- the cap is the bandwidth limit, not the RTT throttle -- and on a peer that is still connecting it stops the connect completing.
+
+**What is left, not fixed:**
+
+- **Lag compensation never rewinds in this game.** `ArenaGame.tick` calls `combat.resolve_shot(shot)` with no view tick ("a real dedicated server passes the client's acknowledged tick here"), and nothing does, so `_begin_rewind` returns at once on every shot. That is `dual-stack-follow-1` point 3's starting point: a TCP and a UDP player's shots are both judged against the present.
+- The ten other games' bridges send one command per input packet and feed the clock `ping_ms`; each wants `DotNetInput.write_batch` and its own `link_rtt_ms`.
+- dot-server's `SCOREBOARD` is sent unreliable and the client keeps whichever arrived last, so on ENet a reordered one shows the previous scoreboard for a period. Every other unreliable message in the family is order-free (dot-net's CLAUDE.md has the audit).
+- The input lead runs 2-4 ticks over what the transit needs (dot-net's clock has no jitter source on ENet; the arrival filter covers it by leaning early), and 12% of frames extrapolate at 5-20% loss because the interpolation buffer adapts to jitter, not to loss.
 

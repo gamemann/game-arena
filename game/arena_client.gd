@@ -482,9 +482,9 @@ func _build_netcode() -> DotResult:
 	# The one thing that writes an RTT sample. dot-net never touches a transport, so
 	# nothing in it can; without this the clock's input lead omits the flight time and
 	# past ~30 ms every command arrives after its tick and is discarded as late.
-	if link != null and link.has_method("ping_ms"):
-		bridge.rtt_source = func() -> float:
-			return float(maxi(0, int(link.call("ping_ms"))))
+	# ENet's own round trip when on ENet, the heartbeat's otherwise: see `link_rtt_ms`.
+	if link != null:
+		bridge.rtt_source = func() -> float: return ArenaNetBridge.link_rtt_ms(link)
 
 	# READY, and not one byte before the scene exists. dot-server's signon finishes and
 	# THEN the client builds this; anything the server sent in between landed on a node
