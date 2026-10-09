@@ -3369,8 +3369,12 @@ func _play() -> void:
 				_grounded_ticks += 1
 
 		# Loadouts are applied through an awaited store call, so the frame has to be
-		# allowed to turn over or the deferred half never runs.
-		if ticks % 64 == 0:
+		# allowed to turn over or the deferred half never runs. Every 4 ticks, not 64: a
+		# respawned bot is unarmed until its loadout lands, and at 64 ticks a frame a slow
+		# runner left bots unarmed long enough that a match which ends in 2,500-3,300
+		# ticks here ran past 5,760 on CI (2026-10-09). A real server runs one or two
+		# ticks a frame.
+		if ticks % 4 == 0:
 			await get_tree().process_frame
 
 	_check(
