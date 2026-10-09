@@ -1383,3 +1383,7 @@ and in A's first three seconds the server had its command for 100% of 192 ticks.
 - dot-server's `SCOREBOARD` is sent unreliable and the client keeps whichever arrived last, so on ENet a reordered one shows the previous scoreboard for a period. Every other unreliable message in the family is order-free (dot-net's CLAUDE.md has the audit).
 - The input lead runs 2-4 ticks over what the transit needs (dot-net's clock has no jitter source on ENet; the arrival filter covers it by leaning early), and 12% of frames extrapolate at 5-20% loss because the interpolation buffer adapts to jitter, not to loss.
 
+
+## The scoreboard is dot-menu's (2026-10-09)
+
+`ArenaMenus.ScoreboardScreen` draws a `DotMenuScoreboard`, the family's Tab board, rather than its own `DotTableView`. The columns are this game's (K, D, A, Score, then the board's own Time and Ping), the rows come from dot-match's scoreboard sorted by match rank, and on a connected client the server's roster (`DotClientLink.want_scoreboard`, sent only while Tab is held) is merged in by player key for the connected time and the ping. A team mode groups the rows under `DotTeamManager`'s sides; a free-for-all draws one list. `follow(key)` highlights the local player once the client adopts it. Offline, Time and Ping read "-", because there is no server to have measured them. Rendered with `tools/screenshot_menus.sh` and looked at.

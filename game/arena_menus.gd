@@ -110,62 +110,102 @@ class ControlsScreen extends DotScreen:
 ## Both matter: it is held down during a live game, so it must not stop the player
 ## moving and must not hide what they are looking at. That is the distinction between
 ## `blocks_input` and `hides_below` that dot-ui exists to keep straight.
+##
+## [b]Drawn by dot-menu's `DotMenuScoreboard` since 2026-10-09.[/b] The rows are dot-match's
+## records (kills, deaths, assists, score), with the server's roster merged in by key for
+## what only the server knows: how long each player has been on and their ping. The ping
+## column was a literal 0 before, for as long as this screen existed. Sides are the board's
+## teams when the match has more than one.
 class ScoreboardScreen extends DotScreen:
-	var table: DotTableView = null
+	var board: DotMenuScoreboard = null
 
-	var _board: DotScoreboard = null
+	var _records: DotScoreboard = null
+	var _teams: DotTeamManager = null
 	var _me: String = ""
 
 	func _screen_id() -> StringName:
 		return &"scoreboard"
 
-	func build(board: DotScoreboard) -> void:
-		_board = board
+	func build(records: DotScoreboard, link: Object = null, teams: DotTeamManager = null) -> void:
+		_records = records
+		_teams = teams
 		blocks_input = false
 		hides_below = false
 		closable = true
 		mouse_mode = DotScreen.Mouse.INHERIT
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-		var container := PanelContainer.new()
-		container.set_anchors_preset(Control.PRESET_CENTER)
-		container.offset_left = -340.0
-		container.offset_right = 340.0
-		container.offset_top = -200.0
-		container.offset_bottom = 200.0
-		add_child(container)
+		board = DotMenuScoreboard.new()
+		board.name = "Board"
+		board.title_text = "Arena"
+		board.columns = [
+			{"key": &"name", "title": "Player", "width": 3.0},
+			{"key": &"kills", "title": "K", "kind": DotMenuScoreboard.KIND_NUMBER},
+			{"key": &"deaths", "title": "D", "kind": DotMenuScoreboard.KIND_NUMBER},
+			{"key": &"assists", "title": "A", "kind": DotMenuScoreboard.KIND_NUMBER},
+			{"key": &"score", "title": "Score", "kind": DotMenuScoreboard.KIND_NUMBER},
+			{"key": &"seconds", "title": "Time", "kind": DotMenuScoreboard.KIND_DURATION},
+			{"key": &"ping", "title": "Ping", "kind": DotMenuScoreboard.KIND_PING},
+		]
+		# dot-match's own order: best score, then kills.
+		board.sort_with = func(a: Dictionary, b: Dictionary) -> bool: return int(a.get("rank", 0)) < int(b.get("rank", 0))
+		board.prepare = _rows_from_match
+		if link != null and link.has_signal(&"scoreboard_received"):
+			board.feed_from(link)
+		add_child(board)
 
-		table = DotTableView.new()
-		table.max_rows = 32
-		container.add_child(table)
-		table.set_columns(DotTableView.scoreboard_columns())
-
+	## Which record is this client's. The roster says so online; offline nobody else will.
 	func follow(key: String) -> void:
 		_me = key
 
 	func _on_push() -> void:
-		refresh()
+		if board != null:
+			board.open()
+
+	func _on_pop() -> void:
+		if board != null:
+			board.close()
 
 	func refresh() -> void:
-		if _board == null or table == null:
+		if board != null and board.is_open():
+			board.redraw()
+
+	## The match's records, in the match's order, with the roster's time and ping merged in.
+	func _rows_from_match(snap: Dictionary) -> void:
+		if _records == null:
 			return
-
-		var rows: Array[Dictionary] = []
-
-		for record in _board.ranked():
+		var roster := {}
+		for r in (snap.get("players", []) as Array):
+			if r is Dictionary:
+				roster[str(r.get("id", ""))] = r
+		var you := str(snap.get("you", ""))
+		var rows: Array = []
+		var rank := 1
+		var sides := {}
+		for record in _records.ranked():
 			if not record.present:
 				continue
-
+			var known: Dictionary = roster.get(record.key, {})
 			rows.append({
-				&"name": record.display_name,
-				&"kills": record.kills,
-				&"deaths": record.deaths,
-				&"assists": record.assists,
-				&"score": record.score,
-				&"ping": 0,
-				"highlight": record.key == _me,
+				"id": record.key, "rank": rank, "name": record.display_name, "team": record.team,
+				"kills": record.kills, "deaths": record.deaths, "assists": record.assists, "score": record.score,
+				"seconds": int(known.get("seconds", -1)), "ping": int(known.get("ping", -1)),
+				"you": record.key == _me or (you != "" and record.key == you),
 			})
-
-		table.set_rows(rows)
+			if record.team > 0:
+				sides[record.team] = true
+			rank += 1
+		snap["players"] = rows
+		if _teams != null and sides.size() > 1:
+			var listed: Array = []
+			for id: int in _teams.team_ids():
+				var side := _teams.team(id)
+				if side != null and not side.is_spectator:
+					listed.append({"id": id, "name": side.display_name, "color": side.colour,
+						"score": _records.team_score(id)})
+			snap["teams"] = listed
+		if not snap.has("server"):
+			snap["server"] = {"name": "Arena"}
 
 
 ## Registers all four screens with a stack and wires the buttons that navigate.
@@ -175,7 +215,8 @@ static func install(
 	stack: DotScreenStack,
 	game: ArenaGame,
 	ui_config: DotUiConfig,
-	player_settings: Object = null
+	player_settings: Object = null,
+	link: Object = null
 ) -> DotPauseScreen:
 	# [b]dot-ui's pause screen, and it used to be a copy of it.[/b] That addon grew
 	# `DotPauseScreen` because four clients here had written the same forty lines -- a
@@ -242,7 +283,7 @@ static func install(
 
 	var scoreboard := ScoreboardScreen.new()
 	scoreboard.name = "Scoreboard"
-	scoreboard.build(game.match_node.scoreboard)
+	scoreboard.build(game.match_node.scoreboard, link, game.match_node.teams)
 	stack.register(scoreboard)
 
 	# [b]Greyed rather than removed.[/b] A button that is absent on one build and present

@@ -300,7 +300,8 @@ func _build_interface() -> void:
 		menus,
 		game,
 		_ui_config,
-		presentation.settings if presentation != null else null
+		presentation.settings if presentation != null else null,
+		link if not _offline else null
 	)
 
 	# The server browser, which is the only screen here that is about something other
@@ -915,6 +916,9 @@ func _adopt(candidate: ArenaPlayer) -> void:
 
 	if hud != null:
 		hud.follow(player)
+		var board_screen := menus.screen(&"scoreboard") as ArenaMenus.ScoreboardScreen if menus != null else null
+		if board_screen != null:
+			board_screen.follow(str(player.player_id) if "player_id" in player else "")
 
 	if _sampler != null:
 		_sampler.tunables = player.controller.tunables

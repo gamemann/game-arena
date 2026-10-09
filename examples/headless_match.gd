@@ -3650,9 +3650,9 @@ func _test_interface() -> void:
 	stack.push(&"scoreboard")
 	var scoreboard := stack.screen(&"scoreboard") as ArenaMenus.ScoreboardScreen
 	_check(
-		scoreboard.table.row_count() == BOTS,
+		scoreboard.board.is_open() and scoreboard.board.rows().size() == BOTS,
 		"the scoreboard fills from the match that just ended",
-		"%d rows" % scoreboard.table.row_count()
+		"%d rows" % scoreboard.board.rows().size()
 	)
 
 	# The distinction dot-ui exists to keep straight: a scoreboard held down during a
