@@ -295,7 +295,7 @@ func _rules() -> DotVoteRules:
 
 	rules.rtv_enabled = true
 	rules.rtv_fraction = 0.6
-	rules.rtv_min_players = 2
+	rules.rtv_min_players = 1
 	rules.rtv_delay_sec = 120.0
 
 	rules.nominations_enabled = true
