@@ -1110,6 +1110,53 @@ func _drive_bots() -> void:
 		bot.set_meta("bot_fire", fire)
 
 
+## Whether the local player was alive last frame, for [method _face_a_respawn].
+var _was_alive: bool = true
+
+
+## A connected client's respawn faces the way its spawn faces.
+##
+## [b]Only the client can turn the view[/b]: the server teleports the player facing the spawn,
+## then applies the next command, whose angles are this client's sampler's -- the look the
+## mouse left before the death. Offline `spawned` does this (see [method _adopt]); a mirror
+## never fires it, so a respawn is read where the spectate layer reads one, off the
+## replicated health: dead last frame, alive now. The spawn is the map's own nearest one,
+## which this client holds, rather than a yaw off the wire, because by the time the client
+## sees the snapshot the server has already put this client's old angles back.
+##
+## A pit's teleport is not turned here: it runs inside the predicted tick, replays included,
+## and a look turned on a replayed tick would snap a player's view back to the destination's
+## yaw after they had moved the mouse.
+func _face_a_respawn() -> void:
+	if _offline or player == null or player.controller == null or _sampler == null or game == null:
+		return
+
+	var alive := player.is_alive()
+	var came_back := alive and not _was_alive
+	_was_alive = alive
+
+	if not came_back or game.map == null:
+		return
+
+	var at := player.controller.state.position
+	var nearest := INF
+	var yaw := NAN
+
+	for spawn: Transform3D in game.map.spawns:
+		var d := spawn.origin.distance_to(at)
+		if d < nearest:
+			nearest = d
+			yaw = rad_to_deg(spawn.basis.get_euler().y)
+
+	if nearest < SPAWN_FACE_REACH:
+		_sampler.look_at_angles(yaw, 0.0)
+
+
+## How near a respawn has to land to a map spawn to take its yaw, in metres. The server
+## puts a player exactly on one; anything further is somewhere else entirely.
+const SPAWN_FACE_REACH := 2.0
+
+
 func _process(delta: float) -> void:
 	if net != null and not _offline:
 		# Once a frame, and it is not optional: `DotNetInterpolator` blends two
@@ -1127,6 +1174,8 @@ func _process(delta: float) -> void:
 	# Your own body when you look down, if the server's `fp_body` rule is on.
 	if player != null and game != null and player.controller != null:
 		player.present_own_body(game.rule("fp_body") != 0.0, player.controller.state.yaw)
+
+	_face_a_respawn()
 
 	if presentation != null:
 		# dot-audio culls by distance from the listener and dot-fx ages what it spawned;

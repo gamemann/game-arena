@@ -554,7 +554,7 @@ godot --headless --path . res://examples/headless_admin.tscn
 godot --headless --path . res://examples/headless_imported.tscn
 ```
 
-`headless_match` 502 checks over 32 sections, `headless_net` 190 over 17 (183 without g2gfast-maps linked), `headless_presentation` 133, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 41 over nine (it skips, and says so, without the link).
+`headless_match` 502 checks over 32 sections, `headless_net` 190 over 17 (183 without g2gfast-maps linked), `headless_presentation` 135, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 41 over nine (it skips, and says so, without the link).
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never
@@ -1315,4 +1315,4 @@ game-g2gfast imports compiled maps from the surf genre, and ten of them are not 
 - **Delivery.** Locally the maps are the link; a delivered arena pack does not contain them (the link is gitignored) and arena has no fetch. The way is g2gfast's: each map is its own signed pack `gamemann/<id>`, listed under the game's `maps:` in `game.yml` with the installer pinning versions, fetched through dot-cloud on a map change on server and client (`G2GGame.ensure_map_content` / `_mark_delivered` is the reference), with `ArenaImportedMaps` given the mount directory as a root. Release steps before that can work: the ten maps published by a g2gfast-maps tag (their zones notes say "Not published"), each author's permission for redistribution confirmed (g2gfast's rule for shipping extracted geometry), then arena's `ensure` path and its `maps:` list, then an arena tag. A dedicated server running from source with the link plays them today (`-- --map surf_10x_reloaded_fixed`, or `arena_map`).
 - **The map's mechanics.** Pushes, water, ladders and moving blocks (`mechanics` in the manifest) are g2gfast's `G2GMapMechanics` and are not run here; a combat surf map's boosters do nothing and its water is not swum in.
 - **The hull is the arena's 1.8 m**, not the genre's 72 units (1.37 m), because the hitboxes and the avatars are built for it. Every spawn room and doorway the renders and the suite reached fits it; a 72-unit vent somewhere would not.
-- **A connected client's respawn yaw**, above.
+- ~~A connected client's respawn yaw~~ — done 2026-10-09: `ArenaClient._face_a_respawn` turns this client's own sampler to the nearest map spawn's yaw when its player is seen dead and then alive (the server's teleport turns only the server's controller, and its next command carries the client's old look). Pits are deliberately not turned there, because they run inside prediction replays. `headless_presentation`'s respawn section (2 checks, armed).

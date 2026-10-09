@@ -25,7 +25,7 @@ const ArenaVote := preload("../game/arena_vote.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 133
+const CHECKS := 135
 
 var _passed := 0
 var _failed := 0
@@ -58,6 +58,7 @@ func _run() -> void:
 	_test_mouse_drives_view()
 	_test_vote_is_heard()
 	_test_blind_and_beacon()
+	_test_a_respawn_faces_its_spawn()
 	_test_criticals_and_the_body()
 
 	print("")
@@ -938,6 +939,63 @@ func _test_mouse_drives_view() -> void:
 	client.player = null
 	stand_in.free()
 	client.free()
+	_done()
+
+
+## A connected client's respawn faces the way its spawn faces. The server's teleport turns
+## the server's controller, and its next command carries this client's old look; so the
+## client turns its own sampler when its player comes back alive on a map spawn.
+func _test_a_respawn_faces_its_spawn() -> void:
+	_section("A connected client's respawn faces the way its spawn faces")
+
+	var g := ArenaGame.new()
+	g.is_authority = true
+	add_child(g)
+	var _set := g.setup(ArenaMap.dm_box())
+	var added: DotResult = g.add_player(7, "Seven")
+	var p: ArenaPlayer = added.value if added.ok else null
+
+	var client := ArenaClient.new()
+	client.game = g
+	client.player = p
+	client._offline = false
+	client._sampler = DotFpsSampler.new(p.controller.tunables if p != null else DotFpsTunables.new())
+
+	# A spawn whose yaw is not where the mouse is.
+	var spawn: Transform3D = Transform3D.IDENTITY
+	for candidate: Transform3D in g.map.spawns:
+		if absf(rad_to_deg(candidate.basis.get_euler().y)) > 30.0:
+			spawn = candidate
+			break
+	var want := rad_to_deg(spawn.basis.get_euler().y)
+
+	client._sampler.look_at_angles(want + 120.0, 10.0)
+	client._face_a_respawn()
+
+	# Dead, then alive on the spawn.
+	if p != null and p.health != null:
+		p.health.alive = false
+		p.health.health = 0.0
+	client._face_a_respawn()
+	if p != null:
+		p.controller.state.position = spawn.origin
+		p.health.alive = true
+		p.health.health = 100.0
+	client._face_a_respawn()
+
+	var turned := client._sampler.sample(1.0 / 64.0)
+	_check(p != null and absf(wrapf(turned.yaw - want, -180.0, 180.0)) < 0.5,
+		"the look turns to the spawn's yaw (%.1f, wanted %.1f)" % [turned.yaw if turned != null else NAN, want])
+
+	# And only on the way back: alive frame to alive frame leaves the mouse alone.
+	client._sampler.look_at_angles(want + 45.0, 0.0)
+	client._face_a_respawn()
+	var kept := client._sampler.sample(1.0 / 64.0)
+	_check(absf(wrapf(kept.yaw - (want + 45.0), -180.0, 180.0)) < 0.5,
+		"and a living player's look is left where the mouse put it (%.1f)" % kept.yaw)
+
+	client.free()
+	g.queue_free()
 	_done()
 
 
