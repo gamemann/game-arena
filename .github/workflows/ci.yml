@@ -22,9 +22,8 @@ jobs:
         uses: modcommunity/dot-ci/.github/workflows/validate.yml@v1
         with:
             suite-timeout: 900
-            # game.sh's SUITES, so the runner checks what a person checks. headless_lossy
-            # is left out of both: real ENet through real loss, failing about one run in
-            # four (CLAUDE.md "Real loss", lossy-stalls-1). Auto-detect ran it on every push.
-            suites: 'examples/headless_match examples/headless_net examples/headless_presentation examples/headless_stack examples/headless_admin examples/headless_imported examples/dedicated'
+            # game.sh's SUITES, so the runner checks what a person checks, and release.yml
+            # runs the same list. headless_lossy is in it again since 2026-10-09.
+            suites: 'examples/headless_match examples/headless_net examples/headless_presentation examples/headless_stack examples/headless_admin examples/headless_imported examples/dedicated examples/headless_lossy'
         secrets:
             DEPS_TOKEN: ${{ secrets.DOT_DEPS_TOKEN }}

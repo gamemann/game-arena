@@ -996,7 +996,10 @@ func _test_leave() -> void:
 	var b_net: DotNetManager = b["net"]
 	b_net.stop()
 
-	var gone := await _until(func() -> bool: return a_game.player_for(b_session) == null, 10.0)
+	# 35 s, the windows' contract: the link is still at the last window's 20% loss, and a
+	# reliable message there either lands inside ENet's 30 s or the peer is dropped. Ten
+	# failed a CI release run (v0.1.6) on exactly that tail; the wait ends when A is told.
+	var gone := await _until(func() -> bool: return a_game.player_for(b_session) == null, 35.0)
 	_check(gone, "A's B is gone once the server has seen the disconnect",
 		"the server has %d sessions and %s B in its game" % [
 			_server.sessions().size(), "still has" if _game.player_for(b_session) != null else "no longer has"])
