@@ -76,7 +76,11 @@ func update(motor: DotFpsMotor, state: DotFpsState) -> void:
 	var box := touching(state.position, t.radius, t.height_at(state.crouch_fraction))
 	if box.size == Vector3.ZERO:
 		return
-	if state.time_since_jump < 0.15 or now - _jumped_off_tick < JUMP_OFF_GRACE_TICKS:
+	# A jump-off AFTER this tick is one a replay has not reached yet: a client corrected
+	# back past its own jump-off replays the ticks before it, and counted as a negative gap
+	# those ticks refused the grab the server had made. Only a gap of 0..grace holds it off.
+	var since := now - _jumped_off_tick
+	if state.time_since_jump < 0.15 or (since >= 0 and since < JUMP_OFF_GRACE_TICKS):
 		return    # a jump at the foot of a ladder, or off it, is a jump
 	var flat := Vector3(state.velocity.x, 0.0, state.velocity.z)
 	var into := -flat.dot(_away(box, state.position))

@@ -933,7 +933,8 @@ func _adopt(candidate: ArenaPlayer) -> void:
 		# is a room; on an imported combat surf map it is the spawn room's back wall, three
 		# metres away, which is what the first rendered frame showed. `spawned` fires where
 		# the spawn is simulated: offline and on a listen server. A connected client's
-		# respawn is the server's, and its look still stays where the mouse left it.
+		# respawn is the server's and does not fire it; [method _face_a_respawn] turns that
+		# client's look instead, when its own snapshot shows the player alive again.
 		player.spawned.connect(func(at: Transform3D) -> void:
 			if _sampler != null:
 				_sampler.look_at_angles(rad_to_deg(at.basis.get_euler().y), 0.0)

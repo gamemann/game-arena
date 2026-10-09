@@ -58,7 +58,7 @@ const SCORE_LIMIT := 4
 const HURT_MAP := &"surf_xiv_v2a"
 
 const SECTIONS := 11
-const CHECKS := 53
+const CHECKS := 55
 
 var _passed := 0
 var _failed := 0
@@ -729,6 +729,8 @@ func _test_mechanics() -> void:
 	var climbed := 0.0
 	var on_ladder := 0
 	var tried := 0
+	var best_at := Vector3.ZERO
+	var best_climb: Dictionary = {}
 	for rung in mech.ladders:
 		if rung.size.y < 2.5:
 			continue
@@ -757,11 +759,27 @@ func _test_mechanics() -> void:
 			if high - from > climbed:
 				climbed = high - from
 				on_ladder = on
+				best_at = at
+				best_climb = up
 		if climbed > 2.0:
 			break
 	_line("     ladders tried from %d sides: climbed %.2f m, %d ticks on" % [tried, climbed, on_ladder])
 	_check(on_ladder > TICK_RATE / 2 and climbed > 2.0,
 		"a ladder is climbed: %.2f m up it in a second, %d ticks on it" % [climbed, on_ladder])
+
+	# A replay of the ticks before a jump-off: the mode's jump-off tick is still the later
+	# one, and a prediction replaying an earlier tick must take the ladder as the server
+	# did then. Armed by counting the gap without the `since >= 0`.
+	var grabbed := false
+	if not best_climb.is_empty():
+		player.controller.teleport(best_at, 0.0, 0.0)
+		player.controller.state.mode = DotFpsState.Mode.AIR
+		player.ladder._jumped_off_tick = player.ladder.now + 6
+		for _i in range(4):
+			_game.tick(best_climb)
+			grabbed = grabbed or player.controller.state.mode == player.ladder.mode_id
+		player.ladder._jumped_off_tick = -1000
+	_check(grabbed, "a replayed tick before a jump-off still takes the ladder")
 
 	_done()
 
@@ -846,10 +864,21 @@ func _test_hurt() -> void:
 			dealt.size(), dealt[0].attacker if not dealt.is_empty() else -1,
 			dealt[0].type.id if not dealt.is_empty() and dealt[0].type != null else &"?"])
 
+	# Out of it for a tick and straight back in takes nothing new: the half second is the
+	# volume's, not restarted by leaving it (a hop or a bob across a thin sheet's edge was a
+	# full pulse every re-entry). Armed by erasing the due tick on leaving.
+	player.controller.teleport(_game.map.spawns[0].origin, 0.0, 0.0)
+	_game.tick(idle)
+	_stand_in(player, hurts["box"])
+	_game.tick(idle)
+	_check(is_equal_approx(before - player.health.health, pulse),
+		"stepping out and back in a tick later takes no second pulse (%.0f off in all)" % [
+			before - player.health.health])
+
 	# The next pulse is half a second on, and not a tick sooner: then a second one, which
 	# from a full 100 at 50 a pulse is the death.
 	var interval := roundi(ArenaMap.ArenaMapMechanics.HURT_INTERVAL * TICK_RATE)
-	for _i in range(interval - 1):
+	for _i in range(interval - 3):
 		_game.tick(idle)
 	var held := player.health.health
 	_game.tick(idle)

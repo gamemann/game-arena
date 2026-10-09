@@ -555,7 +555,7 @@ godot --headless --path . res://examples/headless_admin.tscn
 godot --headless --path . res://examples/headless_imported.tscn
 ```
 
-`headless_match` 502 checks over 32 sections, `headless_net` 192 over 17 (183 without g2gfast-maps linked), `headless_lossy` 62 over six (about 50 seconds: it plays in real time), `headless_presentation` 135, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 53 over eleven (it skips, and says so, without the link).
+`headless_match` 502 checks over 32 sections, `headless_net` 192 over 17 (183 without g2gfast-maps linked), `headless_lossy` 62 over six (about 50 seconds: it plays in real time), `headless_presentation` 135, `dedicated` 114, `headless_stack` 60 over six sections, `headless_admin` 46 over ten, and `headless_imported` 55 over eleven (it skips, and says so, without the link).
 
 **`headless_presentation` is reachable from none of the other three.** `headless_match`
 plays a whole deathmatch with no client in it and `dedicated` boots a real server and never

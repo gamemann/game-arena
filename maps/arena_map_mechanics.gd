@@ -133,20 +133,20 @@ func simulate(motor: DotFpsMotor, state: DotFpsState, start: Vector3, delta: flo
 				break
 
 
-## Damage per second every hurt volume the hull at [param feet] touches deals, summed
-## (negative heals). Zero for none, and for noclip.
-func hurt_at(feet: Vector3, tunables: DotFpsTunables, crouch_fraction: float) -> float:
+## The indexes into [member hurt] of every volume the hull touches, so a caller can time
+## each one on its own: the engine these maps come from times a hurt trigger per trigger,
+## and a player stepping from one into the next takes the second's pulse at once.
+func hurts_at(feet: Vector3, tunables: DotFpsTunables, crouch_fraction: float) -> PackedInt32Array:
+	var touched := PackedInt32Array()
 	if hurt.is_empty():
-		return 0.0
+		return touched
 
 	var hull := hull_at(feet, tunables, crouch_fraction)
-	var total := 0.0
+	for i in range(hurt.size()):
+		if (hurt[i]["box"] as AABB).intersects(hull):
+			touched.append(i)
 
-	for h: Dictionary in hurt:
-		if (h["box"] as AABB).intersects(hull):
-			total += float(h["damage"])
-
-	return total
+	return touched
 
 
 func _pushes(motor: DotFpsMotor, state: DotFpsState, hull: AABB, before: AABB, delta: float) -> void:

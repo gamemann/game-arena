@@ -274,7 +274,8 @@ var _world_collision: Node3D = null
 var _tick: int = 0
 var _registered_name: StringName = &""
 
-## The tick each player standing in an imported map's hurt volume is next hurt on. See
+## The tick each (player, hurt volume) pair is next hurt on, kept after the player leaves
+## the volume until it passes. See
 ## [method _hurt_from_map].
 var _hurt_due: Dictionary = {}
 
@@ -1480,31 +1481,36 @@ func _hurt_from_map() -> void:
 
 	var interval := maxi(1, roundi(ArenaMap.ArenaMapMechanics.HURT_INTERVAL * float(tick_rate)))
 
+	# Due ticks are per player AND per volume, and kept when the player steps out: the
+	# half second belongs to the volume, so a hull bobbing across a thin sheet's edge (a
+	# hop, water) takes one pulse per interval rather than one per re-entry. An entry whose
+	# tick has passed means the same as none, so those go, and the table stays small.
+	for key: Vector2i in _hurt_due.keys():
+		if int(_hurt_due[key]) <= _tick:
+			var _gone: bool = _hurt_due.erase(key)
+
 	for id in player_ids():
 		var player: ArenaPlayer = _players[id]
 		var state := player.controller.state
-		var per_second := 0.0
-
-		if player.is_alive() and state.mode != DotFpsState.Mode.NOCLIP:
-			per_second = map.mechanics.hurt_at(state.position, player.controller.tunables, state.crouch_fraction)
-
-		if per_second == 0.0:
-			var _gone: bool = _hurt_due.erase(id)
+		if not player.is_alive() or state.mode == DotFpsState.Mode.NOCLIP:
 			continue
 
-		if _tick < int(_hurt_due.get(id, _tick)):
-			continue
+		for i in map.mechanics.hurts_at(state.position, player.controller.tunables, state.crouch_fraction):
+			var key := Vector2i(id, i)
+			if _hurt_due.has(key):
+				continue
+			_hurt_due[key] = _tick + interval
 
-		_hurt_due[id] = _tick + interval
-		var amount := per_second * ArenaMap.ArenaMapMechanics.HURT_INTERVAL
+			var amount := float(map.mechanics.hurt[i]["damage"]) * ArenaMap.ArenaMapMechanics.HURT_INTERVAL
+			if amount < 0.0:
+				var _healed := player.health.heal(-amount)
+				continue
+			if amount == 0.0 or not player.is_alive():
+				continue
 
-		if amount < 0.0:
-			var _healed := player.health.heal(-amount)
-			continue
-
-		var damage := DotDamage.make(0, id, amount, combat.damage_type(ArenaContent.DAMAGE_WORLD))
-		damage.tick = _tick
-		var _dealt := combat.apply_damage(damage)
+			var damage := DotDamage.make(0, id, amount, combat.damage_type(ArenaContent.DAMAGE_WORLD))
+			damage.tick = _tick
+			var _dealt := combat.apply_damage(damage)
 
 
 # --- Events ----------------------------------------------------------------
