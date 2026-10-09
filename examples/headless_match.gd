@@ -52,7 +52,7 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 502
+const CHECKS := 506
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -921,6 +921,26 @@ func _test_weapon_modes() -> void:
 	held = game.player_for(920).arsenal.current_def()
 	_check(held != null and held.id == StringName(gun.gun_game[1]),
 		"a kill moves the killer to the next gun (%s)" % (held.id if held else &"none"))
+
+	# A knife kill sets the victim back a gun. 920 is on level 1, 921 on 0. Each victim
+	# is revived first: a dead one refuses the hit and the check would pass on nothing.
+	var knifed := game.match_node.scoreboard.find("920")
+	var knifer := game.match_node.scoreboard.find("921")
+	_revive(game, 921)
+	_kill_through_combat(game, 920, 921, ZeeWeaponIds.KNIFE)
+	_check(knifer != null and knifer.score == 0 and knifer.deaths == 2,
+		"a knife kill on the first gun leaves the victim there (921 at %d, %d deaths)" % [knifer.score if knifer else -1, knifer.deaths if knifer else -1])
+	_revive(game, 920)
+	_kill_through_combat(game, 921, 920, ZeeWeaponIds.KNIFE)
+	_check(knifed != null and knifed.score == 1,
+		"a knife kill sets the victim back one gun (920 from 2 to %d)" % (knifed.score if knifed else -1))
+	_check(knifer.score == 1, "and moves the knifer on (921 at %d)" % knifer.score)
+	gun.gun_game_melee_demotes = false
+	_revive(game, 920)
+	_kill_through_combat(game, 921, 920, ZeeWeaponIds.KNIFE)
+	_check(knifed.score == 1 and knifer.score == 2,
+		"with gun_game_melee_demotes off, a knife kill is only a kill (920 %d, 921 %d)" % [knifed.score, knifer.score])
+	gun.gun_game_melee_demotes = true
 	remove_child(game)
 	game.queue_free()
 
@@ -1408,7 +1428,7 @@ func _go_live(game: ArenaGame) -> void:
 ## to, so every layer hanging off `ArenaGame.player_killed` — the spectator camera, the
 ## flag drop — never hears about it. A test that kills the scoreboard's way is a test
 ## that never exercises the path a real death takes.
-func _kill_through_combat(game: ArenaGame, killer: int, victim: int) -> void:
+func _kill_through_combat(game: ArenaGame, killer: int, victim: int, weapon: StringName = &"") -> void:
 	var health := game.combat.health_of(victim)
 	if health == null:
 		return
@@ -1424,9 +1444,16 @@ func _kill_through_combat(game: ArenaGame, killer: int, victim: int) -> void:
 	health.invulnerable_until_tick = -1
 	var damage := DotDamage.make(killer, victim, health.health + health.armour + 50.0, type)
 	damage.tick = game.current_tick()
+	damage.weapon_id = weapon
 	var applied := health.apply(damage)
 	if applied != null and applied.lethal:
 		game.combat.entity_killed.emit(victim, applied)
+
+
+func _revive(game: ArenaGame, id: int) -> void:
+	var health := game.combat.health_of(id)
+	if health != null and not health.alive:
+		health.revive()
 
 
 ## Put a player somewhere, without simulating a walk there.

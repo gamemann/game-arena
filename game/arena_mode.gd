@@ -104,6 +104,12 @@ const ArenaMode := preload("arena_mode.gd")
 ## counter that could disagree with it.
 @export var gun_game: PackedStringArray = PackedStringArray()
 
+## Gun game: a kill with a melee weapon (any weapon tagged `melee`) also sets the VICTIM
+## back one gun. On by default, because it is what makes the knife worth carrying through
+## a list that otherwise never uses it until the last step; off makes the knife just
+## another kill. A victim on the first gun has nowhere to go back to and stays there.
+@export var gun_game_melee_demotes: bool = true
+
 @export_group("Objectives")
 
 ## Which objective layout this mode plays, or empty for none.

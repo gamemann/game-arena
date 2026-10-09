@@ -1556,6 +1556,7 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 		var killer_player := player_for(damage.attacker)
 		if killer_player != null and killer_player != victim:
 			arm_for_mode(killer_player)
+			_demote_for_melee(damage, killer_player)
 
 	# Coins out of the body, if the rules say this kill drops any.
 	if drops != null and is_authority:
@@ -1564,6 +1565,31 @@ func _on_entity_killed(entity_id: int, damage: DotDamage) -> void:
 		)
 
 	player_killed.emit(entry)
+
+
+## Gun game: a melee kill costs the victim a gun ([member ArenaMode.gun_game_melee_demotes]).
+##
+## The level IS the score, so this is a point off the victim's record and nothing else:
+## [method arm_for_mode] reads the score at their respawn and hands them the gun before.
+## Never below zero, because a negative score would be a level the list has no gun for
+## and a scoreboard showing a player behind where they started.
+func _demote_for_melee(damage: DotDamage, killer: ArenaPlayer) -> void:
+	if not mode.gun_game_melee_demotes or killer.arsenal == null:
+		return
+
+	var weapon_id := damage.weapon_id
+	if weapon_id == &"":
+		return
+	var def := killer.arsenal.catalogue.get_def(weapon_id)
+	if def == null or not def.tags.has(ZeeWeaponIds.TAG_MELEE):
+		return
+
+	var record := match_node.scoreboard.find(str(damage.victim))
+	if record == null or record.score <= 0:
+		return
+
+	record.score -= 1
+	match_node.scoreboard.score_changed.emit(record)
 
 
 func _on_damage_applied(damage: DotDamage) -> void:
