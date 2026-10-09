@@ -4,6 +4,7 @@ const ArenaMap := preload("arena_map.gd")
 const ArenaBspMap := preload("arena_bsp_map.gd")
 const ArenaFlatBody := preload("arena_flat_body.gd")
 const ArenaImportedMaps := preload("arena_imported_maps.gd")
+const ArenaMapMechanics := preload("arena_map_mechanics.gd")
 
 ## A level as a list of boxes, and the three things that list becomes.
 ##
@@ -117,6 +118,11 @@ var bounds: AABB = AABB()
 ## enter one is put at its destination facing its yaw; on a combat surf map those are
 ## the pits under the ramps and the ways into and out of its jail.
 var pits: Array[Dictionary] = []
+
+## What the map's brush entities do to a player — pushes, water, ladders, gravity,
+## conveyors and hurt — read from the manifest's `mechanics` block. Null on a built-in map,
+## which is how every caller knows there is nothing to run. See `arena_map_mechanics.gd`.
+var mechanics: ArenaMapMechanics = null
 
 ## The map's solid, in the tree. Set by `ArenaGame` when it adds [method to_collision];
 ## the physics backends bind to it, which is why it has to be in the tree before any
@@ -1465,6 +1471,8 @@ static func imported(map_id: StringName) -> ArenaMap:
 		var _m := map.add_spawn(at)
 
 	map.pits = ArenaBspMap.pits_of(manifest)
+	map.mechanics = ArenaMapMechanics.new()
+	map.mechanics.read(manifest)
 	return map
 
 
@@ -1795,5 +1803,8 @@ func describe() -> Dictionary:
 		out["movement"] = String(movement_profile)
 		out["pits"] = pits.size()
 		out["author"] = author
+
+		if mechanics != null:
+			out["mechanics"] = mechanics.describe_lines()[0]
 
 	return out

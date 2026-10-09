@@ -284,6 +284,7 @@ func _play_imported() -> void:
 
 		game.tick(commands)
 
+	var mechanics_shots := _stage_mechanics(game)
 	var players := game.players()
 
 	for player in players:
@@ -363,6 +364,7 @@ func _play_imported() -> void:
 		},
 	]
 
+	_shots.append_array(mechanics_shots)
 	var ramp := _biggest_ramp(_staged_map)
 
 	if not ramp.is_empty():
@@ -375,6 +377,88 @@ func _play_imported() -> void:
 		})
 
 	_camera.far = 2000.0
+
+
+## Two of the walking bots handed to the map's own mechanics, and a frame of each: one put
+## in its deepest pool to the chest and left to sink (`<id>_water`), one put on its
+## strongest floor booster and ticked until it has been thrown off the end
+## (`<id>_booster`). A map with neither gets neither frame. The players are moved by the
+## game's own tick, so what is drawn is where the mechanics put them.
+func _stage_mechanics(game: ArenaGame) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var mech := _staged_map.mechanics
+	var swimmer := game.player_for(205)
+	var rider := game.player_for(204)
+
+	if mech == null or swimmer == null or rider == null:
+		return out
+
+	var probe := DotFpsPhysicsBody.for_node(_staged_map.collision_root)
+	var tunables := swimmer.controller.tunables
+	var depth := swimmer.swim.waist + 0.3
+	var pool := AABB()
+	var in_water := Vector3.ZERO
+
+	for w in mech.water:
+		if w.size.x < 3.0 or w.size.z < 3.0 or w.size.y < 1.5 or w.size.y <= pool.size.y:
+			continue
+		for i in range(1, 8):
+			for j in range(1, 8):
+				var at := Vector3(w.position.x + w.size.x * i / 8.0, w.end.y - depth,
+					w.position.z + w.size.z * j / 8.0)
+				var height := tunables.stand_height - 0.2
+				if not probe.overlaps(at + Vector3.UP * (0.1 + height * 0.5), height, tunables.radius - 0.05):
+					pool = w
+					in_water = at
+					break
+			if pool == w:
+				break
+
+	var booster := {}
+	for p: Dictionary in mech.pushes:
+		var push: Vector3 = p["push"]
+		if not p["once"] and (p["box"] as AABB).size.y < 0.5 and Vector2(push.x, push.z).length() \
+				> Vector2(booster.get("push", Vector3.ZERO).x, booster.get("push", Vector3.ZERO).z).length():
+			booster = p
+
+	if pool.size != Vector3.ZERO:
+		swimmer.controller.teleport(in_water, 0.0, 0.0)
+	if not booster.is_empty():
+		var pad: AABB = booster["box"]
+		rider.controller.teleport(Vector3(pad.get_center().x, pad.end.y + 0.02, pad.get_center().z), 0.0, 0.0)
+
+	# Long enough for the rider to be carried off the end of a booster most of a
+	# hundred metres long, and the swimmer to sink a little.
+	var start := rider.controller.state.position
+	for _i in range(18):
+		var idle := {}
+		for player in game.players():
+			idle[player.player_id] = [DotFpsCommand.new(), DotWeaponCommand.new()]
+		game.tick(idle)
+
+	if pool.size != Vector3.ZERO:
+		var at := swimmer.controller.state.position
+		print("  swimmer at %s, mode %s, %.2f m under the surface" % [
+			at, swimmer.controller.motor.mode_name(swimmer.controller.state.mode), pool.end.y - at.y])
+		out.append({
+			"name": "%s_water" % String(_staged_id),
+			"from": Vector3(at.x, pool.end.y + 1.2, at.z) + Vector3(3.0, 0.0, 3.0),
+			"at": at + Vector3.UP * 0.9,
+		})
+
+	if not booster.is_empty():
+		var at := rider.controller.state.position
+		var push: Vector3 = booster["push"]
+		var along := Vector3(push.x, 0.0, push.z).normalized()
+		print("  booster rider carried %.1f m to %s, %.1f m/s" % [
+			start.distance_to(at), at, rider.controller.state.horizontal_speed()])
+		out.append({
+			"name": "%s_booster" % String(_staged_id),
+			"from": at - along * 7.0 + along.cross(Vector3.UP) * 3.0 + Vector3.UP * 2.5,
+			"at": at + Vector3.UP * 0.9,
+		})
+
+	return out
 
 
 ## The biggest triangle the map draws as a surf ramp, `{centre, normal}`.

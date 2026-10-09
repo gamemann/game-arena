@@ -35,13 +35,13 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 190
+const CHECKS := 192
 
 ## The imported combat surf map the map-sync section also follows a client onto, and how
 ## many checks that adds. Without g2gfast-maps linked they are skipped and said so, and
 ## the total expected drops by exactly that many: a skip is allowed, a silent one is not.
 const IMPORTED_MAP := &"surf_10x_reloaded_fixed"
-const IMPORTED_CHECKS := 7
+const IMPORTED_CHECKS := 9
 var _skipped_checks := 0
 
 ## Sections entered against sections that ran to their last line, and against this. A
@@ -818,6 +818,32 @@ func _follow_onto_imported(
 		"jumping on it, the client predicts the server to within a hand's width",
 		"peak %.2f m, worst %.2f m" % [float(peak[0]) - start_y, float(hop["worst_gap"])])
 
+	# A booster: the map's mechanics run inside prediction on the client exactly as on the
+	# server, from the map each end loaded, so a player thrown at 47 m/s is predicted
+	# thrown. A client that left them to the server would be corrected across the map.
+	var booster := {}
+	for p: Dictionary in _server_game.map.mechanics.pushes:
+		var push: Vector3 = p["push"]
+		if not p["once"] and (p["box"] as AABB).size.y < 0.5 and Vector2(push.x, push.z).length() \
+				> Vector2(booster.get("push", Vector3.ZERO).x, booster.get("push", Vector3.ZERO).z).length():
+			booster = p
+	var pad: AABB = booster["box"]
+	var on_pad := Vector3(pad.get_center().x, pad.end.y + 0.02, pad.get_center().z)
+	on_server.controller.teleport(on_pad, 0.0, 0.0)
+	var boosted := _flight_window(peer, 48, 0)
+	var carried := on_server.controller.state.position.distance_to(on_pad)
+	print("  measured: imported map, booster carried the player %.1f m, worst gap %.2f m, %.3f m against the server's same tick" % [
+		carried, float(boosted["worst_gap"]), float(boosted["worst_aligned"])
+	])
+	_check(carried > 20.0, "a booster on it carries the server's player on at its speed",
+		"%.1f m in 48 ticks" % carried)
+	# Against the server's same tick, because at 47 m/s the harness's one tick of lead is
+	# 0.74 m by itself (the jump's 0.09 above is that same tick, at a jump's speed).
+	_check(float(boosted["worst_aligned"]) < 0.1,
+		"and the client predicts the push with it, tick for tick",
+		"worst %.3f m against the server's same tick, %.2f m at the same moment" % [
+			float(boosted["worst_aligned"]), float(boosted["worst_gap"])])
+
 	var back: DotResult = await host.change_to(back_to)
 	_check(back.ok and client_game.map.id == back_to and client_game.map.collision_root == null,
 		"and back to %s, with the imported solid gone from the client too" % back_to,
@@ -1500,6 +1526,9 @@ func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 	var worst := 0.0
 	var worst_at := ""
 	var grounded := 0
+	var worst_aligned := 0.0
+	var previous := Vector3.ZERO
+	var has_previous := false
 
 	# Measured only once a snapshot from inside the window has arrived. Until then the
 	# client cannot know anything the server did at the top of it — the first run of this
@@ -1549,6 +1578,12 @@ func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 		var predicted: ArenaPlayer = (_clients[peer]["bridge"] as ArenaNetBridge).behaviour_for(session).player
 		var actual: ArenaPlayer = _server_bridge.behaviour_for(session).player
 		var gap := predicted.controller.state.position.distance_to(actual.controller.state.position)
+		# The client runs a tick ahead of the server in this lockstep (its input is for the
+		# tick the server runs next), so its last position is where the server is NOW.
+		if has_previous:
+			worst_aligned = maxf(worst_aligned, previous.distance_to(actual.controller.state.position))
+		previous = predicted.controller.state.position
+		has_previous = true
 		if gap > worst:
 			worst_at = "tick %d client %s server %s" % [
 				tick, predicted.controller.state.position, actual.controller.state.position
@@ -1557,7 +1592,8 @@ func _flight_window(peer: int, ticks: int, buttons: int) -> Dictionary:
 		if predicted.controller.state.mode != DotFpsState.Mode.NOCLIP:
 			grounded += 1
 
-	return {"worst_gap": worst, "grounded_ticks": grounded, "worst_at": worst_at}
+	return {"worst_gap": worst, "grounded_ticks": grounded, "worst_at": worst_at,
+		"worst_aligned": worst_aligned}
 
 func _test_event_wire() -> void:
 	print("")

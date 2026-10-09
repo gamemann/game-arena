@@ -274,6 +274,10 @@ var _world_collision: Node3D = null
 var _tick: int = 0
 var _registered_name: StringName = &""
 
+## The tick each player standing in an imported map's hurt volume is next hurt on. See
+## [method _hurt_from_map].
+var _hurt_due: Dictionary = {}
+
 
 func _exit_tree() -> void:
 	if _registered_name != &"":
@@ -848,6 +852,7 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 		roster.append({"id": id, "name": player.display_name})
 
 	_teardown_world()
+	_hurt_due.clear()
 
 	map = new_map
 
@@ -1393,6 +1398,11 @@ func tick(commands: Dictionary = {}) -> void:
 			# turns on with no other change.
 			combat.resolve_shot(shot)
 
+	# After the shots, before everything that can end the round: a hurt volume that kills
+	# somebody is a death the win check below has to count this tick.
+	if is_authority:
+		_hurt_from_map()
+
 	# After the shots and before the match, and the position in the order is the
 	# reason this is not two lines somewhere else. A monster has to perceive where the
 	# players ended the tick, and a monster killed by a shot resolved above has to be
@@ -1448,6 +1458,53 @@ func tick(commands: Dictionary = {}) -> void:
 
 func current_tick() -> int:
 	return _tick
+
+
+## Deals an imported map's hurt volumes (`trigger_hurt`) to everybody standing in one, as
+## world damage through dot-combat.
+##
+## [b]Real damage, where game-g2gfast's is "100 or more is a death, the rest ignored"[/b],
+## because a timer run has no health and this game does. The engine these maps come from
+## reads the volume's `damage` as per second and deals it every half second, the first
+## pulse on entering; this does the same, through [method DotCombatManager.apply_damage]
+## with attacker 0, so the resolver, armour (the world type ignores it), spawn protection,
+## the kill feed, the scoreboard and the statistics all hear it as they hear a fall. A
+## negative amount heals, as it does there (surf_forbidden_ways_reloaded has one).
+##
+## On the authority only: health is the server's and replicates, so a client predicting a
+## hurt would only be corrected. Its movement half (where the player is) is already
+## predicted, which is all this reads.
+func _hurt_from_map() -> void:
+	if map == null or map.mechanics == null or map.mechanics.hurt.is_empty():
+		return
+
+	var interval := maxi(1, roundi(ArenaMap.ArenaMapMechanics.HURT_INTERVAL * float(tick_rate)))
+
+	for id in player_ids():
+		var player: ArenaPlayer = _players[id]
+		var state := player.controller.state
+		var per_second := 0.0
+
+		if player.is_alive() and state.mode != DotFpsState.Mode.NOCLIP:
+			per_second = map.mechanics.hurt_at(state.position, player.controller.tunables, state.crouch_fraction)
+
+		if per_second == 0.0:
+			var _gone: bool = _hurt_due.erase(id)
+			continue
+
+		if _tick < int(_hurt_due.get(id, _tick)):
+			continue
+
+		_hurt_due[id] = _tick + interval
+		var amount := per_second * ArenaMap.ArenaMapMechanics.HURT_INTERVAL
+
+		if amount < 0.0:
+			var _healed := player.health.heal(-amount)
+			continue
+
+		var damage := DotDamage.make(0, id, amount, combat.damage_type(ArenaContent.DAMAGE_WORLD))
+		damage.tick = _tick
+		var _dealt := combat.apply_damage(damage)
 
 
 # --- Events ----------------------------------------------------------------

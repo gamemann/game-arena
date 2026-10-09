@@ -5,6 +5,8 @@ const ArenaAvatars := preload("arena_avatars.gd")
 const ArenaBeacon := preload("arena_beacon.gd")
 const ArenaContent := preload("arena_content.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaLadderMode := preload("../maps/arena_ladder_mode.gd")
+const ArenaMapMechanics := preload("../maps/arena_map_mechanics.gd")
 
 ## One player: movement, weapons, health and hitboxes, assembled.
 ##
@@ -168,6 +170,18 @@ var beacon_marker: ArenaBeacon = null
 ## build time, so a game that never uses classes never duplicates a tunables object.
 var _class_base: DotFpsTunables = null
 
+## Swimming, in an imported map's water. [b]Registered on every player on every map, the
+## same on every machine[/b], because a mode's id travels on the wire in the state's flags:
+## a client that registered it only on a map with water would read a swimming player's
+## mode as whatever its own next mode was, or as nothing. With no water it is never
+## entered, so a built-in map moves exactly as it did. game-g2gfast registers its two for
+## the same reason.
+var swim := DotFpsSwimMode.new()
+
+## Climbing, on an imported map's ladders. Registered beside [member swim], after it, in
+## that order everywhere: the order is the id.
+var ladder := ArenaLadderMode.new()
+
 var _map: ArenaMap = null
 var _combat: DotCombatManager = null
 var _hand: Node3D = null
@@ -237,6 +251,20 @@ func _build_controller() -> void:
 	# and a client that had not registered it would read that index as something else.
 	controller.admin_abilities = true
 	controller.body_ref = DotNodeRef.of_path(NodePath(".."))
+	# The genre's water, in the genre's numbers, because the maps were built for them: 200
+	# u/s at most, and a player who presses nothing sinks at 60 u/s rather than floating,
+	# so a pit full of water is climbed out of by holding jump. The waist and the float
+	# depth are the genre's proportions of the ARENA's 1.8 m hull (half its height, and
+	# 56/72 of it), not its 72-unit ones, because they are measured up from these feet.
+	swim.swim_speed = 200.0 * GENRE_UNIT
+	swim.idle_sink_speed = 60.0 * GENRE_UNIT
+	swim.accelerate = 10.0
+	swim.waist = tunables.stand_height * 0.5
+	swim.float_depth = tunables.stand_height * 56.0 / 72.0
+	swim.exit_speed = 300.0 * GENRE_UNIT
+	swim.exit_reach = 24.0 * GENRE_UNIT
+	controller.extra_modes = [swim, ladder]
+	_use_map_volumes()
 	add_child(controller)
 
 
@@ -403,6 +431,57 @@ func _follow_map_volumes() -> void:
 
 ## How far under an imported map's bounds a player is counted as out of it, metres.
 const FALL_OUT_DEPTH := 10.0
+
+## One unit of the engine the combat surf maps come from, in metres.
+const GENRE_UNIT := 0.01905
+
+
+## What the map's brush entities do to this player this tick: its pushes, gravity and
+## conveyors, then into the water or onto a ladder.
+##
+## [b]Inside the simulated tick, for [method _follow_map_volumes]' reason[/b], and from
+## the same data on both ends: the server and the owning client's prediction each run it
+## from the map they loaded and the state the tick started from ([param start], which a
+## rewind restores), so a booster throws the predicted player exactly as it throws the
+## server's and nothing has to be sent. A ladder is asked before the water, as the engine
+## these maps come from asks its ladder move first: a climb out of a pit is ladder walls
+## over water, and with the water asked last a climber was put back to swimming every tick
+## (g2gfast's finding).
+##
+## Hurt is not here: it is health, which is the server's, so `ArenaGame` deals it.
+func _run_map_mechanics(start: Vector3, delta: float) -> void:
+	if _map == null or _map.mechanics == null or controller.motor == null:
+		return
+
+	var state := controller.state
+	_map.mechanics.simulate(controller.motor, state, start, delta)
+
+	if not ladder.volumes.is_empty():
+		ladder.update(controller.motor, state)
+
+	if not swim.volumes.is_empty() and state.mode != ladder.mode_id:
+		swim.update(controller.motor, state)
+
+	# A push moved the state after the controller wrote it out; the node follows, as the
+	# controller's own publish does, so the muzzle and the hitboxes are where the player is.
+	global_position = state.position
+
+
+## Hands the swim and ladder modes the map's water and ladders, or nothing. A player left
+## swimming or climbing on a map with none is put in the air, which the motor resolves.
+func _use_map_volumes() -> void:
+	var mechanics: ArenaMapMechanics = _map.mechanics if _map != null else null
+	swim.volumes = mechanics.water if mechanics != null else ([] as Array[AABB])
+	ladder.volumes = mechanics.ladders if mechanics != null else ([] as Array[AABB])
+
+	if controller == null or controller.state == null or controller.motor == null:
+		return
+
+	var mode_now := controller.state.mode
+
+	if (mode_now == swim.mode_id and swim.volumes.is_empty()) \
+			or (mode_now == ladder.mode_id and ladder.volumes.is_empty()):
+		controller.motor.set_mode(controller.state, DotFpsState.Mode.AIR)
 
 
 ## Writes [param rules] (key -> number, from [constant MOVEMENT_RULES]) into this player's
@@ -600,6 +679,8 @@ func rebind_map(new_map: ArenaMap) -> void:
 
 	if controller is HeadlessController:
 		(controller as HeadlessController).flat_body = new_map.movement_body()
+
+	_use_map_volumes()
 
 	# `setup()` is what builds the body and the motor, and it is the documented way to
 	# rebuild both. Re-running it also re-resolves the node references, which is
@@ -907,8 +988,13 @@ func simulate_tick(
 	if not health.alive:
 		return DotWeaponOutcome.nothing("Dead.")
 
+	# Where the tick starts, for the pushes: "was this player in a booster last tick" is
+	# asked of this position rather than remembered. See `arena_map_mechanics.gd`.
+	var start := controller.state.position
+	ladder.now = tick
 	controller.apply_command(movement_command)
 	controller.simulate_tick(tick, delta)
+	_run_map_mechanics(start, delta)
 	_follow_map_volumes()
 
 	var state := controller.state
