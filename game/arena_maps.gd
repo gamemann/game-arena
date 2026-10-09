@@ -3,6 +3,7 @@ extends RefCounted
 const ArenaPaths := preload("arena_paths.gd")
 
 const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaImportedMaps := preload("../maps/arena_imported_maps.gd")
 const ArenaMode := preload("arena_mode.gd")
 
 ## This game's maps as dot-map content: a catalogue, a rotation and a vote can address.
@@ -104,7 +105,9 @@ static func catalogue() -> DotMapCatalogue:
 	var out := DotMapCatalogue.new()
 	out.meta = {"game": "arena"}
 
-	for id in ArenaMap.ids():
+	# The built-ins, then every imported combat surf map that was found — discovered by
+	# `ArenaImportedMaps` off each manifest's own `kind`, not listed here either.
+	for id in ArenaMap.ids() + ArenaMap.imported_ids():
 		var map := ArenaMap.by_id(id)
 
 		if map == null:
@@ -132,6 +135,9 @@ static func catalogue() -> DotMapCatalogue:
 
 
 static func _def_for(id: StringName, map: ArenaMap) -> DotMapDef:
+	if map.is_imported():
+		return _imported_def_for(id, map)
+
 	var def := DotMapDef.new()
 	def.id = id
 	def.version = MAP_VERSIONS.get(id, MAP_VERSION)
@@ -165,6 +171,84 @@ static func _def_for(id: StringName, map: ArenaMap) -> DotMapDef:
 	return def
 
 
+## The imported combat surf maps in the rotation when nothing says otherwise.
+##
+## [b]Christian's two, by name, because he named them[/b] ("small maps that don't need a
+## timer and should be used in game-arena, since they are intended for deathmatch"): the
+## rest are installed, loadable with `arena_map <id>` and offered by nothing until an
+## operator lists them. `arena_imported_rotation` is the setting (`all`, `none`, or ids
+## separated by commas), read into [member imported_rotation].
+const IMPORTED_ROTATION_DEFAULT := "surf_10x_reloaded_fixed,surf_110b_austinpowers"
+
+## Which imported maps the rotation, the vote and nominations may offer: `all`, `none`
+## (or empty), or a comma-separated list of ids. See [constant IMPORTED_ROTATION_DEFAULT].
+##
+## A map left out is [member DotMapDef.enabled] false — the field dot-map's rotation pool,
+## dot-vote's ballot and its nominations already read, which is how game-g2gfast keeps
+## these same maps out of ITS rotation — and stays in the catalogue, so a change to it by
+## name still works and a client still recognises it when a server plays it.
+static var imported_rotation: String = IMPORTED_ROTATION_DEFAULT
+
+
+## Whether imported map [param id] is in the rotation under [member imported_rotation].
+static func in_rotation(id: StringName) -> bool:
+	var wanted := imported_rotation.strip_edges().to_lower()
+
+	if wanted == "all":
+		return true
+
+	if wanted == "" or wanted == "none":
+		return false
+
+	for part in imported_rotation.split(",", false):
+		if StringName(part.strip_edges()) == id:
+			return true
+
+	return false
+
+
+## Puts [member imported_rotation] onto an existing catalogue, for a setting changed on a
+## running server. In place, because a rotation holds its catalogue by reference.
+static func apply_rotation(catalogue: DotMapCatalogue) -> void:
+	if catalogue == null:
+		return
+
+	for def in catalogue.maps:
+		if bool(def.meta.get("imported", false)):
+			def.enabled = in_rotation(def.id)
+
+
+## An imported map as dot-map content.
+##
+## [b]Local, not delivered[/b] — no `content_id` — because on every machine that has it the
+## map is files in this build's tree (the linked g2gfast-maps) that `ArenaMap.by_id`
+## builds, exactly like a built-in. The version is its manifest's hash
+## (`ArenaImportedMaps.version_of`), so a server and a client holding different imports of
+## one map disagree at the announce instead of colliding against different brushes.
+static func _imported_def_for(id: StringName, map: ArenaMap) -> DotMapDef:
+	var def := DotMapDef.new()
+	def.id = id
+	def.version = ArenaImportedMaps.version_of(id)
+	def.display_name = map.display_name
+	def.kind = DotMapDef.KIND_ARENA
+	def.scene_path = BUILDER_PATH
+	def.author = map.author if map.author != "" else "unknown"
+	def.enabled = in_rotation(id)
+	def.tier = clampi(int(map.extent / 32.0), 1, 10)
+	def.description = "Combat surf, %d spawns, %.0f m across." % [
+		map.spawns.size(), maxf(map.bounds.size.x, map.bounds.size.z)
+	]
+	def.meta = {
+		"builder": "ArenaMap.by_id",
+		"spawns": map.spawns.size(),
+		"teams": _has_team_spawns(map),
+		"imported": true,
+		"manifest": map.manifest_path,
+		"movement": String(map.movement_profile),
+	}
+	return def
+
+
 ## Whether a map can host a team mode: some spawn is tagged.
 static func _has_team_spawns(map: ArenaMap) -> bool:
 	for index in range(map.spawns.size()):
@@ -182,7 +266,23 @@ static func supports_mode(def: DotMapDef, mode: ArenaMode) -> bool:
 	if def == null or mode == null:
 		return false
 
+	# An imported map has no box list, and the monsters' navigation, the objectives'
+	# layout and the scattered props are all built out of one. Offered such a mode it
+	# would build a hill in mid-air and a navmesh of nothing, so it hosts the modes that
+	# are only about the players: free-for-all, gun game, a weapon pool.
+	if bool(def.meta.get("imported", false)) and needs_built_world(mode):
+		return false
+
 	if not mode.is_team_mode():
 		return true
 
 	return bool(def.meta.get("teams", false))
+
+
+## Whether [param mode] builds a layer out of a built-in map's boxes: monsters,
+## objectives or props.
+static func needs_built_world(mode: ArenaMode) -> bool:
+	return (
+		mode.horde or mode.objective_layout != &""
+		or mode.player_props or mode.scatter_props > 0
+	)

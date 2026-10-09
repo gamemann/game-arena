@@ -43,8 +43,14 @@ const SERVICE := &"arena_game"
 ##
 ## That is what happened here the first time the two were written separately, in two
 ## files, a hundred lines apart. This constant exists so there is nothing to keep in
-## step. `dm_box` is 48 metres across; 128 leaves room for a player thrown out of it.
-const NET_WORLD_EXTENT := 128.0
+## step.
+##
+## 512, since the imported combat surf maps: they reach 312 m from the origin
+## (`surf_110b_austinpowers`), and a position past the extent is CLAMPED rather than
+## wrapped, so at the old 128 every player on the far half of one was pinned to a wall of
+## the quantiser in every snapshot — alive on the server, stuck on every client. Two more
+## bits a position axis at 1 cm, for every map.
+const NET_WORLD_EXTENT := 512.0
 
 ## Snapshots a second. 32, because it divides 64 and 128 — an uneven send spacing
 ## arrives as jitter no interpolator can remove. Also one number, for the reason above.
@@ -261,6 +267,10 @@ var movement_rules: Dictionary = {}
 ## project had added itself.
 var _spawn_points: Array[DotSpawnPoint] = []
 
+## An imported map's solid, in the tree on every machine (see `ArenaMap.movement_body`).
+## Held so a map change can take it away again; null on a built-in map.
+var _world_collision: Node3D = null
+
 var _tick: int = 0
 var _registered_name: StringName = &""
 
@@ -305,6 +315,9 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 			{"mode": str(mode.id), "map": map.display_name}
 		)
 
+	# Before the combat manager and before any player: both bind to it.
+	_build_world_collision()
+
 	var combat_result := _build_combat()
 
 	if not combat_result.ok:
@@ -335,6 +348,9 @@ func setup(p_map: ArenaMap = null) -> DotResult:
 	if not stack_result.ok:
 		return stack_result
 
+	# The stack is what knows the collision layout, and it is built last.
+	_classify_world_collision()
+
 	if register_service:
 		_registered_name = (
 			DotRegistry.scoped_name(SERVICE, service_scope)
@@ -353,7 +369,7 @@ func _build_combat() -> DotResult:
 	combat.name = "Combat"
 	combat.is_authority = is_authority
 	combat.register_service = false
-	combat.trace = map.to_trace()
+	combat.trace = map.shot_trace()
 
 	var rules := DotDamageRules.new()
 	# Both from the mode. friendly_fire is meaningless without teams and harmless to
@@ -838,6 +854,10 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 	if new_mode != null:
 		mode = new_mode
 
+	# Before the combat manager and before any player is re-bodied: both bind to it.
+	_build_world_collision()
+	_classify_world_collision()
+
 	var combat_result := _build_combat()
 
 	if not combat_result.ok:
@@ -858,6 +878,8 @@ func change_map(new_map: ArenaMap, new_mode: ArenaMode = null) -> DotResult:
 		# The body first. A player whose collision is still the old map's geometry is
 		# one standing inside a wall that no longer exists, and the first tick after
 		# the change would push them out of a room they are not in.
+		# The movement first, so the motor `rebind_map` rebuilds (and logs) is the map's.
+		player.apply_map_movement(map_movement())
 		player.rebind_map(map)
 		player.join_combat(combat)
 
@@ -934,6 +956,46 @@ func _respawn_for_new_map() -> void:
 		_on_respawn_due(key, match_node.choose_spawn(key, _tick), _tick)
 
 
+## Puts an imported map's solid in the tree, replacing the last one; nothing on a
+## built-in map.
+##
+## [b]On every machine, the dedicated server included.[/b] A built-in map is analytic and a
+## headless server never builds its level; an imported map's movement and shots are
+## physics queries (`ArenaMap.movement_body`), so the brushes have to be in this process's
+## physics space wherever anybody moves. [b]`free()`, not `queue_free()`[/b]: the next
+## map's solid goes in on the next line, and two maps' brushes in one space for a frame
+## is a player standing on the wrong one.
+func _build_world_collision() -> void:
+	if _world_collision != null and is_instance_valid(_world_collision):
+		remove_child(_world_collision)
+		_world_collision.free()
+
+	_world_collision = null
+
+	if map == null or not map.is_imported():
+		return
+
+	_world_collision = map.to_collision()
+	_world_collision.name = "WorldCollision"
+	add_child(_world_collision)
+	map.collision_root = _world_collision
+
+	# Before `_build_match` turns the spawns into spawn points: a mapper's spawn inside the
+	# floor would otherwise be a player rising through it. See `ArenaMap.settle_spawns`.
+	var lifted := map.settle_spawns(map.movement_body(), ArenaPlayer.arena_tunables())
+
+	if lifted > 0:
+		DotLog.debug(CHANNEL, "spawns lifted out of an imported map's solid", {
+			"map": String(map.id), "lifted": lifted, "of": map.spawns.size()
+		})
+
+
+## The solid on the layout's `world` layer, once there is a layout to ask.
+func _classify_world_collision() -> void:
+	if _world_collision != null and player_stack != null:
+		var _n := player_stack.classify_tree(_world_collision, &"world")
+
+
 ## Frees everything that belongs to the map, in the order the connections require.
 ##
 ## [b]Disconnect before free, and disconnect from the object that holds the
@@ -1007,6 +1069,8 @@ func add_player(
 		id,
 		display_name
 	)
+	# Before it enters the tree, so the controller that readies (and logs) is the map's.
+	player.apply_map_movement(map_movement())
 	add_child(player)
 
 	# The layout's player mask, rather than `DotFpsTunables`' default of 1. See
@@ -1108,6 +1172,9 @@ func set_movement_rules(rules: Dictionary) -> void:
 	for player in players():
 		player.apply_movement_rules(movement_rules)
 
+		if rules.has("surf") or rules.has("surf_air_accelerate"):
+			player.apply_map_movement(map_movement())
+
 	if not is_authority and rules.has("mode_index"):
 		var all := ArenaModes.all()
 		var index := int(rules["mode_index"])
@@ -1122,8 +1189,30 @@ func set_movement_rules(rules: Dictionary) -> void:
 ## movement ones (RULES) because a client draws them and the server owner sets them:
 ## `break_mode` 0 none / 1 limbs / 2 explode, `break_limbs`, `break_criticals_only`, and
 ## `fp_body` (your own body in first person). Defaults in [constant SHOW_DEFAULTS].
-const SHOW_RULES: PackedStringArray = ["break_mode", "break_limbs", "break_criticals_only", "fp_body", "mode_index"]
-const SHOW_DEFAULTS := {"break_mode": 1.0, "break_limbs": 1.0, "break_criticals_only": 1.0, "fp_body": 0.0}
+##
+## `surf` and `surf_air_accelerate` ride the same set because a client PREDICTS with them:
+## `surf` 1 plays a combat surf map with the genre's air control and 0 with the arena's own
+## (`arena_surf`), `surf_air_accelerate` is that air control's `sv_airaccelerate`
+## (`arena_surf_airaccelerate`). See [method map_movement].
+const SHOW_RULES: PackedStringArray = ["break_mode", "break_limbs", "break_criticals_only", "fp_body", "mode_index", "surf", "surf_air_accelerate"]
+const SHOW_DEFAULTS := {"break_mode": 1.0, "break_limbs": 1.0, "break_criticals_only": 1.0, "fp_body": 0.0, "surf": 1.0, "surf_air_accelerate": 150.0}
+
+
+## The movement overrides the current map asks for, after the server's rules.
+##
+## [b]Per map, and derived on both ends from the map itself[/b] — `ArenaMap.movement_profile`,
+## which an imported map's manifest decides — so a client that loaded the map already knows,
+## and only an operator's change has to travel (in RULES, as `surf` and
+## `surf_air_accelerate`). Empty on the arena's own maps, which is what puts the arena's air
+## control back after a surf map: `ArenaPlayer.apply_map_movement` resets every key it is
+## not given.
+func map_movement() -> Dictionary:
+	if map == null or map.movement_profile != &"surf" or rule("surf") == 0.0:
+		return {}
+
+	var out: Dictionary = ArenaPlayer.SURF_TUNABLES.duplicate()
+	out["air_accelerate"] = rule("surf_air_accelerate")
+	return out
 
 
 ## The mode a client is told is being played, for its banner and its keys. A client's own

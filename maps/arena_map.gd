@@ -1,6 +1,9 @@
 extends RefCounted
 
 const ArenaMap := preload("arena_map.gd")
+const ArenaBspMap := preload("arena_bsp_map.gd")
+const ArenaFlatBody := preload("arena_flat_body.gd")
+const ArenaImportedMaps := preload("arena_imported_maps.gd")
 
 ## A level as a list of boxes, and the three things that list becomes.
 ##
@@ -78,6 +81,52 @@ var climbs: Array[Climb] = []
 ## so an unreachable top is a decision somebody wrote down rather than a thing nobody
 ## noticed. Append through [method add_out_of_reach].
 var out_of_reach: Array[AABB] = []
+
+
+# --- An imported map -------------------------------------------------------
+#
+# [b]The one place this class is not a list of boxes.[/b] A combat surf map imported by
+# game-g2gfast is a compiled level of a few thousand convex brushes, and its collision is
+# the brushes themselves in Godot's physics space (`ArenaBspMap.build_collision`) — there
+# is no list of boxes it could be reduced to without losing the ramps, which are the
+# whole map. So an imported map has no `boxes`; [method movement_body] and
+# [method shot_trace] answer with the physics backends instead of the analytic ones, and
+# the game puts the solid in the tree on EVERY machine, a dedicated server included,
+# before anything moves or shoots. That keeps this class's rule — one description, every
+# representation generated from it — with the manifest as the description.
+
+## The manifest this map was built from; empty for a built-in map.
+var manifest_path: String = ""
+
+## The manifest's `kind` (`arena` for the maps this game plays).
+var source_kind: String = ""
+
+## Who made it, from the manifest. Shown on a map change; an imported map is somebody
+## else's work and the credit travels with it.
+var author: String = ""
+
+## The movement this map asks for: `&"surf"` for a combat surf map, empty for the
+## arena's own. See `ArenaPlayer.apply_map_movement` for what each means, and
+## `ArenaGame.map_movement` for the rule that can switch it off.
+var movement_profile: StringName = &""
+
+## The space the map occupies, in metres. A built-in map leaves it empty.
+var bounds: AABB = AABB()
+
+## The map's teleport volumes: `{box: AABB, to: Vector3, yaw: float}`. A player whose feet
+## enter one is put at its destination facing its yaw; on a combat surf map those are
+## the pits under the ramps and the ways into and out of its jail.
+var pits: Array[Dictionary] = []
+
+## The map's solid, in the tree. Set by `ArenaGame` when it adds [method to_collision];
+## the physics backends bind to it, which is why it has to be in the tree before any
+## player is built or re-bodied on this map.
+var collision_root: Node3D = null
+
+
+## Whether this is an imported map rather than a list of boxes.
+func is_imported() -> bool:
+	return manifest_path != ""
 
 
 ## One step up a map expects a player to make, measured off the geometry it is made of.
@@ -1357,7 +1406,8 @@ static func by_id(id: StringName) -> ArenaMap:
 		&"dm_pit":
 			return dm_pit()
 
-	return null
+	# Not one of ours: an imported map, if one by that id was found, else nothing.
+	return imported(id)
 
 
 ## The ids [method by_id] answers to, in rotation order.
@@ -1367,6 +1417,55 @@ static func by_id(id: StringName) -> ArenaMap:
 ## cannot be loaded, and `headless_match` checks the two agree.
 static func ids() -> Array[StringName]:
 	return [&"dm_box", &"dm_atrium", &"dm_pit"]
+
+
+## The imported maps [method by_id] also answers to: every combat surf map found under the
+## link, discovered rather than listed (see `ArenaImportedMaps`). Empty without the link.
+static func imported_ids() -> Array[StringName]:
+	return ArenaImportedMaps.ids()
+
+
+## An imported map by id, built from its manifest, or null.
+##
+## [b]A fresh object every call, like the built-ins.[/b] What it holds per instance —
+## [member collision_root] above all — belongs to the one game that loaded it, and a
+## shared instance would hand a second game in the same process (a suite runs several)
+## the first one's solid.
+##
+## [b]`extent` and `floor_y` are derived, and only the generic layers read them[/b]: the
+## half-width of the space the map occupies, round the origin, and the bottom of it. The
+## monster navigation, the objective layout and the scattered props are built from them
+## and from `boxes`, which an imported map does not have, so `ArenaMaps.supports_mode`
+## keeps those modes off it rather than letting them build a layout out of nothing.
+static func imported(map_id: StringName) -> ArenaMap:
+	var manifest := ArenaImportedMaps.manifest(map_id)
+
+	if manifest.is_empty():
+		return null
+
+	var map := ArenaMap.new()
+	map.id = map_id
+	map.display_name = String(map_id)
+	map.manifest_path = ArenaImportedMaps.manifest_path(map_id)
+	map.source_kind = str(manifest.get("kind", ""))
+	map.author = str(manifest.get("author", ""))
+	# Every map this game imports is a combat SURF map: built for the genre's air control,
+	# with ramps a player rides rather than walks. A kind added later that is not one would
+	# say so here.
+	map.movement_profile = &"surf" if map.source_kind == ArenaImportedMaps.KIND else &""
+	map.bounds = ArenaBspMap.bounds_of(manifest)
+	map.floor_y = map.bounds.position.y
+	map.wall_height = map.bounds.size.y
+	map.extent = maxf(
+		maxf(absf(map.bounds.position.x), absf(map.bounds.end.x)),
+		maxf(absf(map.bounds.position.z), absf(map.bounds.end.z))
+	)
+
+	for at in ArenaBspMap.spawns_of(manifest):
+		var _m := map.add_spawn(at)
+
+	map.pits = ArenaBspMap.pits_of(manifest)
+	return map
 
 
 ## Adds a spawn and its tag together, which is the only way to add one.
@@ -1424,9 +1523,103 @@ func add_perimeter(thickness: float = 2.0) -> ArenaMap:
 
 # --- The three representations ---------------------------------------------
 
+## The movement backend the game hands every player on this map.
+##
+## [method to_fps_body] for a built-in map, unchanged. For an imported one, a
+## [DotFpsPhysicsBody] bound to [member collision_root] — the brushes in Godot's physics
+## space, on the server and on every client alike. [b]That is still one backend at both
+## ends[/b], which is the rule `ArenaClient`'s HEADLESS note is about: a predicting client
+## must collide against what the server collides against, and here both query the same
+## convex hulls through the same solver. g2gfast predicts against exactly this.
+##
+## Unbound when the solid is not in the tree yet; the body then answers every query with
+## nothing there, which is a player falling through a level, so the game builds the
+## solid first.
+func movement_body() -> DotFpsBody:
+	if not is_imported():
+		return to_fps_body()
+
+	var body := DotFpsPhysicsBody.new()
+
+	if collision_root != null and collision_root.is_inside_tree():
+		var _bound := body.bind(collision_root)
+
+	return body
+
+
+## Lifts every spawn, and every pit's destination, whose standing hull is inside solid
+## until it is clear, and returns how many moved. Needs [member collision_root] in the tree; a built-in map is untouched.
+##
+## [b]A mapper's spawn is a point, and on some of these maps it is inside the floor.[/b]
+## Every one of `surf_10x_final`'s 48 is 44 units under the top of the brush they stand
+## in, and the motor pushes a player out of solid at most a step a tick — so each spawn
+## there was a player rising through the floor for a sixth of a second, visibly, and on a
+## floor any thicker one who never came out. g2gfast's notes name the answer and leave it
+## open: one shape query per spawn, at load, in the one place that knows about brushes and
+## terrain alike. Up in 5 cm steps to [constant SPAWN_LIFT_MAX]; a spawn that is not clear
+## by then is left where it was, because a spawn moved two metres is somewhere the mapper
+## never put one.
+func settle_spawns(body: DotFpsBody, tunables: DotFpsTunables) -> int:
+	if not is_imported() or body == null:
+		return 0
+
+	var height := tunables.stand_height - 0.2
+	var radius := tunables.radius - 0.05
+	var moved := 0
+
+	for index in range(spawns.size()):
+		var at := spawns[index]
+		var lift := 0.0
+
+		while lift <= SPAWN_LIFT_MAX and body.overlaps(
+			at.origin + Vector3.UP * (lift + 0.1 + height * 0.5), height, radius
+		):
+			lift += 0.05
+
+		if lift > 0.0 and lift <= SPAWN_LIFT_MAX:
+			spawns[index] = Transform3D(at.basis, at.origin + Vector3.UP * lift)
+			moved += 1
+
+	# And where every pit sends somebody, which is a spawn by another name: the map's
+	# teleport destinations are entity points the mapper placed exactly like a spawn.
+	for pit in pits:
+		var to: Vector3 = pit["to"]
+		var lift := 0.0
+
+		while lift <= SPAWN_LIFT_MAX and body.overlaps(
+			to + Vector3.UP * (lift + 0.1 + height * 0.5), height, radius
+		):
+			lift += 0.05
+
+		if lift > 0.0 and lift <= SPAWN_LIFT_MAX:
+			pit["to"] = to + Vector3.UP * lift
+			moved += 1
+
+	return moved
+
+
+## The furthest [method settle_spawns] lifts a spawn, metres.
+const SPAWN_LIFT_MAX := 2.0
+
+
+## The shot-tracing backend for this map: [method to_trace], or the physics space.
+func shot_trace() -> DotTrace:
+	if not is_imported():
+		return to_trace()
+
+	var trace := DotTracePhysics.new()
+
+	if collision_root != null and collision_root.is_inside_tree():
+		trace.bind_from_node(collision_root)
+
+	return trace
+
+
 ## The movement backend for a headless server or a test.
 func to_fps_body() -> DotFpsFlatBody:
-	var body := DotFpsFlatBody.with_floor(floor_y)
+	# Arena's subclass, which pushes a player out of a box the short way; see its header.
+	var body: DotFpsFlatBody = ArenaFlatBody.new()
+	body.floor_y = floor_y
 
 	for box in boxes:
 		body.add_box(box)
@@ -1450,6 +1643,15 @@ func to_trace() -> DotTraceFlat:
 ## than loaded from a scene so that the geometry cannot drift from
 ## [method to_fps_body] and [method to_trace] — which is the whole point of the class.
 func to_scene() -> Node3D:
+	if is_imported():
+		# The drawn map only. Its solid is the game's (see [method movement_body]), so a
+		# client that drew colliders here as well would have two of every brush.
+		var drawn := ArenaBspMap.build_visual(
+			ArenaImportedMaps.manifest(id), manifest_path.get_base_dir()
+		)
+		drawn.name = "Level"
+		return drawn
+
 	var root := Node3D.new()
 	root.name = "Level"
 
@@ -1487,6 +1689,11 @@ func to_scene() -> Node3D:
 ## a shot that stops at a wall the player can walk through. [ArenaProps] builds one or
 ## the other, never both.
 func to_collision() -> Node3D:
+	if is_imported():
+		return ArenaBspMap.build_collision(
+			ArenaImportedMaps.manifest(id), manifest_path.get_base_dir()
+		)
+
 	var root := Node3D.new()
 	root.name = "Collision"
 
@@ -1575,10 +1782,18 @@ static func dev_material(tint: Color = Color.WHITE) -> StandardMaterial3D:
 
 
 func describe() -> Dictionary:
-	return {
+	var out := {
 		"name": display_name,
 		"boxes": boxes.size(),
 		"spawns": spawns.size(),
 		"tagged_spawns": spawn_tags.size() - Array(spawn_tags).count(""),
 		"extent": extent,
 	}
+
+	if is_imported():
+		out["imported"] = manifest_path
+		out["movement"] = String(movement_profile)
+		out["pits"] = pits.size()
+		out["author"] = author
+
+	return out

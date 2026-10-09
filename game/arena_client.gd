@@ -202,7 +202,9 @@ func _ready() -> void:
 			hud.notice("%s  -  %s" % [shown.display_name, shown.description])
 	)
 
-	var built := game.setup(ArenaMap.dm_box())
+	# Offline, `-- --map <id>` picks the map, as it does for a dedicated server; a
+	# connected client is told the server's map and rebuilds on it.
+	var built := game.setup(_startup_map() if _offline else ArenaMap.dm_box())
 
 	if not built.ok:
 		DotLog.result(CHANNEL, "the arena could not be built", built)
@@ -343,6 +345,29 @@ func _build_interface() -> void:
 
 
 # --- Offline ---------------------------------------------------------------
+
+## The map an offline client starts on: `-- --map <id>`, else `dm_box`.
+##
+## An unknown id is said out loud and the default played, because a person who typed a
+## map name and got a different room has nothing else to tell the two apart by.
+static func _startup_map() -> ArenaMap:
+	var args := OS.get_cmdline_user_args()
+	var index := args.find("--map")
+
+	if index < 0 or index + 1 >= args.size():
+		return ArenaMap.dm_box()
+
+	var map := ArenaMap.by_id(StringName(args[index + 1]))
+
+	if map == null:
+		DotLog.warn(CHANNEL, "no such map, playing dm_box", {
+			"asked": args[index + 1],
+			"known": ArenaMap.ids() + ArenaMap.imported_ids(),
+		})
+		return ArenaMap.dm_box()
+
+	return map
+
 
 func _start_offline() -> void:
 	game.start(0)
@@ -588,7 +613,14 @@ func _on_map_changed(map: DotMapDef) -> void:
 	#
 	# Nothing errored on either end. The server was right, the protocol completed, the
 	# handshake reported success, and the one line that mattered read a stale field.
-	var adopted := ArenaMap.by_id(map.id)
+	# [b]Only when it is not already the one in hand.[/b] The client's own
+	# `ArenaMapSession` ran `ArenaGame.change_map` before this signal, so normally
+	# `game.map` IS the announced map — and for an imported one it is the instance the game
+	# bound its solid to (`collision_root`). Replacing it with a fresh `by_id` would leave
+	# the trace below bound to nothing: every shot through every wall.
+	var adopted := (
+		game.map if game.map != null and game.map.id == map.id else ArenaMap.by_id(map.id)
+	)
 
 	if adopted != null:
 		game.map = adopted
@@ -614,7 +646,7 @@ func _on_map_changed(map: DotMapDef) -> void:
 	# and its trace is what the copies of every rocket and grenade bounce off. Left alone,
 	# a grenade on the new map bounces off the walls of the old one.
 	if not _offline and game.combat != null:
-		game.combat.trace = game.map.to_trace()
+		game.combat.trace = game.map.shot_trace()
 	if game.projectiles != null:
 		game.projectiles.clear()
 
@@ -625,7 +657,12 @@ func _on_map_changed(map: DotMapDef) -> void:
 		presentation.on_map_changed()
 
 	if hud != null:
-		hud.notice("Now playing %s." % map.name_or_id())
+		# An imported map is somebody else's work, and its author is named where it starts.
+		var by := (
+			", by %s" % game.map.author
+			if game.map != null and game.map.is_imported() and game.map.author != "" else ""
+		)
+		hud.notice("Now playing %s%s." % [map.name_or_id(), by])
 
 
 ## Asks the server to do something with a prop.
@@ -884,6 +921,19 @@ func _adopt(candidate: ArenaPlayer) -> void:
 		# A different tunables object, carrying the default sensitivity again.
 		if presentation != null:
 			presentation.bind_look(_sampler.tunables)
+
+		# [b]A spawn faces the way its mapper faced it, and the look is the sampler's.[/b]
+		# `DotFpsController.teleport` turns the controller's OWN sampler, and this client
+		# samples with its own — so every spawn's yaw was overwritten by the next command
+		# and an offline player always started looking along -Z. On the built-in maps that
+		# is a room; on an imported combat surf map it is the spawn room's back wall, three
+		# metres away, which is what the first rendered frame showed. `spawned` fires where
+		# the spawn is simulated: offline and on a listen server. A connected client's
+		# respawn is the server's, and its look still stays where the mouse left it.
+		player.spawned.connect(func(at: Transform3D) -> void:
+			if _sampler != null:
+				_sampler.look_at_angles(rad_to_deg(at.basis.get_euler().y), 0.0)
+		)
 
 	_hear_the_local_player()
 

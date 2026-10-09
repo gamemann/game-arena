@@ -14,7 +14,7 @@ This project, along with every asset it is built on, was built initially with **
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
 ## How it plays
-Arena is a fast first-person shooter on three dev-textured maps (`dm_atrium`, `dm_pit` and `dm_box`). It is also the reference game for the Dot collection: when a new game is started, this is the one it is copied from.
+Arena is a fast first-person shooter on three dev-textured maps (`dm_atrium`, `dm_pit` and `dm_box`) and ten combat surf maps: small surf maps built for fighting rather than for a timer, imported by [game-g2gfast](https://github.com/gamemann/game-g2gfast) and kept in [g2gfast-maps](https://github.com/gamemann/g2gfast-maps). Two of them are in the rotation by default (`surf_10x_reloaded_fixed` and `surf_110b_austinpowers`); the rest are installed and can be played with `arena_map <id>`. On a surf map the air control is the surf genre's, so you can ride the ramps; on the arena's own maps it goes back to the arena's. It is also the reference game for the Dot collection: when a new game is started, this is the one it is copied from.
 
 There are seven modes:
 
@@ -80,6 +80,8 @@ On Windows, run `bootstrap.ps1` instead and open the project in Godot.
 | `./game.sh shot` | Save a screenshot to `screenshots/` |
 | `./game.sh help` | All of the options |
 
+The combat surf maps come from g2gfast-maps, which bootstrap links in at `maps/imported`. Without it the game plays its three own maps. `./game.sh -- --offline --map surf_10x_reloaded_fixed` plays one offline.
+
 `online` and `server` use [dot-server-deploy](https://github.com/modcommunity/dot-server-deploy), which bootstrap clones next to this one. Run its `./setup.sh` once first.
 
 ## Running a server
@@ -91,6 +93,9 @@ arena_scorelimit 25            // kills to win
 arena_minplayers 1             // players needed before a round starts
 arena_streak_rewards ""        // kill streak rewards as streak:reward pairs (heal, armour, haste, empowered)
 arena_spawn_mode avoid         // avoid, weighted, furthest or random
+arena_imported_rotation "surf_10x_reloaded_fixed,surf_110b_austinpowers"   // combat surf maps in the rotation: all, none, or ids
+arena_surf 1                   // a combat surf map plays with the surf air control (1) or the arena's own (0)
+arena_surf_airaccelerate 150   // the air acceleration on a combat surf map
 ```
 
 Console commands:
@@ -143,10 +148,12 @@ The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote
 | `headless_presentation` | What a client draws and plays |
 | `headless_stack` | The whole stack of addons together |
 | `headless_admin` | The admin commands on a real server |
+| `headless_imported` | A deathmatch on a combat surf map: spawns, floors, ramps, pits and the surf air control (skipped without g2gfast-maps) |
 | `dedicated` | A real server: boots, loads the game, runs its commands, unloads it |
 
 ## How the code is laid out
 - `maps/arena_map.gd` builds every map from a list of boxes: the meshes, the collision, and what a headless server checks shots against.
+- `maps/arena_bsp_map.gd` and `maps/arena_imported_maps.gd` find the combat surf maps and build them from game-g2gfast's map format.
 - `game/arena_player.gd` puts movement, weapons, health and hitboxes on one body.
 - `game/arena_game.gd` joins the addons together, for example turning a kill into a point.
 - `game/arena_module.gd` is the dedicated-server side: cvars and console commands.
@@ -155,6 +162,8 @@ The vote for the next map is [dot-vote](https://github.com/modcommunity/dot-vote
 
 ## Credits
 The characters are from Kenney's character kits, and the weapons are from [zee-dot-weapons](https://github.com/gamemann/zee-dot-weapons), which credits its own art. Kenney's assets are CC0.
+
+The combat surf maps are other people's work, imported by game-g2gfast. [g2gfast-maps](https://github.com/gamemann/g2gfast-maps) credits each one's author and where it came from (`maps.json`), and `arena_maps` names the author beside each one.
 
 ## License
 MIT. See [LICENSE](LICENSE).

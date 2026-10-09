@@ -7,6 +7,7 @@ const ArenaEvents := preload("arena_events.gd")
 const ArenaGame := preload("arena_game.gd")
 const ArenaIdentity := preload("arena_identity.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
+const ArenaMaps := preload("arena_maps.gd")
 const ArenaMapDirector := preload("arena_map_director.gd")
 const ArenaModTools := preload("arena_mod_tools.gd")
 const ArenaModes := preload("arena_modes.gd")
@@ -464,6 +465,20 @@ func _build_maps() -> DotResult:
 	maps.map_changed.connect(_on_map_changed)
 	maps.map_over.connect(_on_map_over)
 
+	# Which imported combat surf maps the rotation and the vote offer. A server setting
+	# rather than a per-player one, written onto the running catalogue in place because
+	# the rotation holds it by reference. See `ArenaMaps.imported_rotation`.
+	add_cvar(
+		"arena_imported_rotation", ArenaMaps.imported_rotation,
+		"Imported combat surf maps in the rotation: all, none, or ids separated by commas",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY
+	).changed.connect(
+		func(_old: String, new_value: String) -> void:
+			ArenaMaps.imported_rotation = new_value
+			ArenaMaps.apply_rotation(maps.session.catalogue if maps != null and maps.session != null else null)
+			log_info("imported rotation changed", {"rotation": new_value})
+	)
+
 	return DotResult.success(maps)
 
 
@@ -894,6 +909,8 @@ const MOVEMENT_CVARS := {
 	"arena_break_limbs": ["break_limbs", "How many limbs come off when arena_break is 1"],
 	"arena_break_criticals": ["break_criticals_only", "Only a critical (a headshot) breaks a body (1), or any kill (0)"],
 	"arena_fp_body": ["fp_body", "Players see their own body when they look down (1)"],
+	"arena_surf": ["surf", "A combat surf map plays with the genre's air control (1) or the arena's own (0)"],
+	"arena_surf_airaccelerate": ["surf_air_accelerate", "Air acceleration on a combat surf map (the genre's sv_airaccelerate)"],
 	"arena_crit_scale": ["", "Extra damage multiplier on a critical hit (1 for none)"],
 	"arena_crit_chance": ["", "Chance any hit is a critical, 0 to 1 (headshots always are)"],
 }
@@ -1407,6 +1424,16 @@ func _cmd_maps(ctx: DotCmdContext) -> void:
 
 	for id in ArenaMap.ids():
 		ctx.reply("%s %s" % ["*" if String(id) == current else " ", String(id)])
+
+	# The imported combat surf maps, marked by whether the rotation offers them.
+	# The imported combat surf maps, with their author (somebody else's work, and the
+	# credit travels with it) and whether the rotation offers them.
+	for id in ArenaMap.imported_ids():
+		var author := str(ArenaMap.ArenaImportedMaps.manifest(id).get("author", "?"))
+		ctx.reply("%s %s  (combat surf by %s%s)" % [
+			"*" if String(id) == current else " ", String(id), author,
+			"" if ArenaMaps.in_rotation(id) else ", not in rotation",
+		])
 
 	ctx.reply("`arena_map <id>` changes it under the players. `arena_maps` lists them.")
 

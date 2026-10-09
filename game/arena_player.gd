@@ -219,7 +219,9 @@ func _build_controller() -> void:
 
 	if mode == Mode.HEADLESS:
 		var headless := HeadlessController.new()
-		headless.flat_body = _map.to_fps_body()
+		# The map's own backend: its boxes for a built-in map, the physics space for an
+		# imported one (see `ArenaMap.movement_body`).
+		headless.flat_body = _map.movement_body()
 		controller = headless
 	else:
 		controller = DotFpsController.new()
@@ -325,6 +327,82 @@ const MOVEMENT_RULES: PackedStringArray = [
 	"launch_enabled", "launch_velocity", "launch_forward", "launch_cooldown",
 	"dash_enabled", "dash_speed", "dash_lift", "dash_cooldown",
 ]
+
+
+## What a combat surf map plays with, as overrides on [method arena_tunables].
+##
+## [b]The genre's air control, because the map was built for it.[/b] A surf ramp is ridden
+## by strafing into it in the air, and how far that turns a player is `air_accelerate`
+## against a wish speed capped at `max_air_wish_speed`: the arena's own pair (140 against
+## a 1.2 m/s cap) is a floaty deathmatch, and on a ramp it is a player who cannot hold the
+## line the mapper drew. The numbers are the genre's, converted at 0.01905 m a unit:
+## `sv_airaccelerate 150` (what game-g2gfast runs these maps at, and `arena_surf_airaccelerate`
+## changes it), a 30 u/s wish cap, 800 u/s² of gravity, a 57-unit jump and the 3500 u/s
+## speed limit. Gravity and the jump travel together because the gaps between ramps were
+## sized for that arc — at the arena's 22 m/s² a jump off a ramp lands 30% short.
+##
+## The ground is left alone: running speed, friction, slide, launch and dash are the
+## arena's on every map, because the fights between the ramps are an arena fight.
+const SURF_TUNABLES := {
+	"air_accelerate": 150.0,
+	"max_air_wish_speed": 30.0 * 0.01905,
+	"gravity": 800.0 * 0.01905,
+	"jump_height": 57.0 * 0.01905,
+	"max_velocity": 3500.0 * 0.01905,
+}
+
+
+## Puts this player's movement on what the map asks for: [param overrides] (keys from
+## [constant SURF_TUNABLES]) on top of [method arena_tunables], and every key it does not
+## name back to the arena's own.
+##
+## [b]Back as well as on, and that is the half that matters.[/b] A rule written only when a
+## surf map loads is a rule still in force on the next map, where the arena's 1.2 m/s air
+## cap is a quarter of what the player now has. Into the class base too, for
+## [method apply_movement_rules]' reason.
+func apply_map_movement(overrides: Dictionary) -> void:
+	if controller == null or controller.tunables == null:
+		return
+
+	var base := arena_tunables()
+
+	for key: String in SURF_TUNABLES:
+		var value := float(overrides.get(key, base.get(key)))
+		controller.tunables.set(key, value)
+
+		if _class_base != null:
+			_class_base.set(key, value)
+
+
+## Sends this player through a teleport volume of an imported map, or back to a spawn when
+## they have fallen out of the bottom of it.
+##
+## [b]Inside the simulated tick, on every machine that simulates it[/b] — the server and the
+## owning client's prediction — because it reads only the simulated state and the map both
+## ends loaded. Done by the server alone, the client would predict a fall the server ended
+## a tick ago and be corrected across the map on every pit.
+##
+## The fall-out floor is ten metres under the map's own bounds, for a map whose pits leave
+## gaps (a teleport aimed at nothing is dropped at import): without it a player who fell
+## past every volume falls for ever, alive, and the round cannot end on him.
+func _follow_map_volumes() -> void:
+	if _map == null or not _map.is_imported():
+		return
+
+	var feet := controller.state.position
+
+	for pit in _map.pits:
+		if (pit["box"] as AABB).has_point(feet):
+			controller.teleport(pit["to"], float(pit["yaw"]), 0.0)
+			return
+
+	if feet.y < _map.bounds.position.y - FALL_OUT_DEPTH and not _map.spawns.is_empty():
+		var at: Transform3D = _map.spawns[0]
+		controller.teleport(at.origin, rad_to_deg(at.basis.get_euler().y), 0.0)
+
+
+## How far under an imported map's bounds a player is counted as out of it, metres.
+const FALL_OUT_DEPTH := 10.0
 
 
 ## Writes [param rules] (key -> number, from [constant MOVEMENT_RULES]) into this player's
@@ -521,7 +599,7 @@ func rebind_map(new_map: ArenaMap) -> void:
 		return
 
 	if controller is HeadlessController:
-		(controller as HeadlessController).flat_body = new_map.to_fps_body()
+		(controller as HeadlessController).flat_body = new_map.movement_body()
 
 	# `setup()` is what builds the body and the motor, and it is the documented way to
 	# rebuild both. Re-running it also re-resolves the node references, which is
@@ -831,6 +909,7 @@ func simulate_tick(
 
 	controller.apply_command(movement_command)
 	controller.simulate_tick(tick, delta)
+	_follow_map_volumes()
 
 	var state := controller.state
 

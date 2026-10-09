@@ -72,7 +72,7 @@ static func startup_map() -> ArenaMap:
 	if map == null:
 		DotLog.warn(CHANNEL, "no such map, booting the default instead", {
 			"asked": String(id),
-			"known": ArenaMap.ids(),
+			"known": ArenaMap.ids() + ArenaMap.imported_ids(),
 		})
 		return ArenaMap.dm_box()
 

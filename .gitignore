@@ -34,6 +34,14 @@
 /addons/dot_voice
 /addons/dot_weapon
 
+# The imported maps: the g2gfast-maps repository, linked here by dot-bootstrap off the
+# comment line below (copied, on Windows), at the same path game-g2gfast links it, so the
+# `.import` markers in it are right for both games. Arena plays the ones whose manifest says
+# "kind": "arena" (combat surf maps); a checkout without the link plays the three built-in
+# maps, which is a supported state, not a broken one.
+# bootstrap-link: g2gfast-maps/maps
+/maps/imported
+
 # Exports
 build/
 export_presets.cfg

@@ -3931,10 +3931,12 @@ func _test_map_change() -> void:
 
 	var catalogue := ArenaMaps.catalogue()
 
+	# The built-ins and every imported combat surf map the link holds (none without it).
+	var buildable := ArenaMap.ids().size() + ArenaMap.imported_ids().size()
 	_check(
-		catalogue.size() == ArenaMap.ids().size(),
+		catalogue.size() == buildable,
 		"every map ArenaMap can build is in the catalogue",
-		"%d of %d" % [catalogue.size(), ArenaMap.ids().size()]
+		"%d of %d" % [catalogue.size(), buildable]
 	)
 
 	var problems := catalogue.problems()

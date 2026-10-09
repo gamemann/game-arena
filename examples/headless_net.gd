@@ -35,7 +35,14 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 183
+const CHECKS := 190
+
+## The imported combat surf map the map-sync section also follows a client onto, and how
+## many checks that adds. Without g2gfast-maps linked they are skipped and said so, and
+## the total expected drops by exactly that many: a skip is allowed, a silent one is not.
+const IMPORTED_MAP := &"surf_10x_reloaded_fixed"
+const IMPORTED_CHECKS := 7
+var _skipped_checks := 0
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
@@ -107,9 +114,9 @@ func _run() -> void:
 	# The total the section counter cannot be. A runtime error inside a section aborts
 	# that function, and the counter is satisfied because the section had already
 	# announced itself. See docs/testing.md.
-	if _passed + _failed != CHECKS:
+	if _passed + _failed != CHECKS - _skipped_checks:
 		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
-			_passed + _failed, CHECKS
+			_passed + _failed, CHECKS - _skipped_checks
 		])
 		get_tree().quit(1)
 		return
@@ -730,6 +737,13 @@ func _test_map_sync_wire() -> void:
 		]
 	)
 
+	# The same wire onto an imported combat surf map, and back.
+	if ArenaMap.imported_ids().has(IMPORTED_MAP):
+		await _follow_onto_imported(host, client_game, client_entry, peer, target)
+	else:
+		print("  skip  no imported maps linked (g2gfast-maps); %d checks not run" % IMPORTED_CHECKS)
+		_skipped_checks += IMPORTED_CHECKS
+
 	host.queue_free()
 	follower.queue_free()
 	follower_session.queue_free()
@@ -743,6 +757,71 @@ func _test_map_sync_wire() -> void:
 	remove_child(server_link)
 	remove_child(client_link)
 	_done()
+
+
+## A client follows the server onto an imported combat surf map, and predicts on it.
+##
+## [b]Three things only an imported map exercises over the wire[/b]: the client builds the
+## map's solid itself (its own `change_map`, from its own copy of the files) and its player
+## moves against the physics space; its movement is the surf profile the map asks for,
+## derived on its own end rather than sent; and the map is far bigger than any built-in —
+## its spawns stand 190 m from the origin, past the 128 m `NET_WORLD_EXTENT` was until
+## this map, where every position the server sent was clamped to the edge of the quantiser.
+func _follow_onto_imported(
+	host: DotMapSyncHost, client_game: ArenaGame, client_entry: Dictionary, peer: int,
+	back_to: StringName
+) -> void:
+	var changed: DotResult = await host.change_to(IMPORTED_MAP)
+	_check(changed.ok and _server_game.map.id == IMPORTED_MAP and client_game.map.id == IMPORTED_MAP,
+		"the server changes to an imported combat surf map and the client follows",
+		str(changed.error) if not changed.ok else String(client_game.map.id))
+
+	var solid := client_game.map.collision_root
+	_check(solid != null and solid.is_inside_tree() and solid.get_child_count() > 0
+		and solid != _server_game.map.collision_root,
+		"the client built the map's solid itself",
+		"%d shapes" % (solid.get_child_count() if solid != null else -1))
+
+	var session_id := int(client_entry["session"])
+	var client_bridge: ArenaNetBridge = client_entry["bridge"]
+	var on_server: ArenaPlayer = _server_bridge.behaviour_for(session_id).player
+	var on_client: ArenaPlayer = client_bridge.behaviour_for(session_id).player
+	_check(is_equal_approx(on_client.controller.tunables.gravity, float(ArenaPlayer.SURF_TUNABLES["gravity"]))
+		and is_equal_approx(on_client.controller.tunables.air_accelerate, 150.0),
+		"and moves its player on the genre's air control there, as the server does",
+		"gravity %.2f, air %.0f" % [on_client.controller.tunables.gravity, on_client.controller.tunables.air_accelerate])
+
+	var at := on_server.controller.state.position
+	var nearest := INF
+
+	for spawn in _server_game.map.spawns:
+		nearest = minf(nearest, spawn.origin.distance_to(at))
+
+	_check(nearest < 0.5, "the server put the player at one of the map's spawns, %.0f m out" % Vector2(at.x, at.z).length(),
+		"%.1f m from the nearest" % nearest)
+
+	var _settle := _flight_window(peer, 48, 0)
+	var gap := on_client.controller.state.position.distance_to(on_server.controller.state.position)
+	_check(gap < 0.1, "and the client's predicted player followed it, past the old 128 m extent",
+		"%.2f m apart (client %s, server %s)" % [gap, on_client.controller.state.position, at])
+
+	var start_y := on_server.controller.state.position.y
+	var peak := [start_y]
+	var watch := func(_t: int, state: DotFpsState) -> void: peak[0] = maxf(peak[0], state.position.y)
+	on_server.controller.simulated.connect(watch)
+	var hop := _flight_window(peer, 64, DotFpsCommand.BUTTON_JUMP)
+	on_server.controller.simulated.disconnect(watch)
+	print("  measured: imported map, jump peak %.2f m, worst gap %.2f m (%s)" % [
+		float(peak[0]) - start_y, float(hop["worst_gap"]), hop["worst_at"]
+	])
+	_check(float(peak[0]) - start_y > 0.8 and float(hop["worst_gap"]) < 0.75,
+		"jumping on it, the client predicts the server to within a hand's width",
+		"peak %.2f m, worst %.2f m" % [float(peak[0]) - start_y, float(hop["worst_gap"])])
+
+	var back: DotResult = await host.change_to(back_to)
+	_check(back.ok and client_game.map.id == back_to and client_game.map.collision_root == null,
+		"and back to %s, with the imported solid gone from the client too" % back_to,
+		str(back.error) if not back.ok else "")
 
 
 ## A voice frame, client to server to another client.
