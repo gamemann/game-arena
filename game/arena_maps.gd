@@ -20,9 +20,10 @@ const ArenaMode := preload("arena_mode.gd")
 ## map def — rotation, cooldowns, nominations, ballots, the announce/ready/load
 ## protocol — works on the id and the version and never opens the scene. The only thing
 ## that reads `scene_path` is [DotMapLoader], and [ArenaMapDirector] does not use it for
-## a built-in map: it calls [method ArenaMap.by_id]. A [b]delivered[/b] arena map would
-## set [member DotMapDef.content_id], [member DotMapDef.manifest_url] and a real scene
-## path, and the loader would take over with nothing else changing.
+## a built-in map: it calls [method ArenaMap.by_id]. A [b]delivered[/b] map — one the
+## server names, see [method delivered_def] — sets [member DotMapDef.content_id] and points
+## its scene path at the manifest inside its pack, and is still built by `ArenaMap.by_id`
+## once `ArenaMapSession` has fetched it, because the pack holds data, not a scene.
 ##
 ## The path is a real file rather than a sentinel deliberately. A catalogue full of
 ## `code://` strings is a catalogue no validator can ever check; this one points at
@@ -247,6 +248,198 @@ static func _imported_def_for(id: StringName, map: ArenaMap) -> DotMapDef:
 		"movement": String(map.movement_profile),
 	}
 	return def
+
+
+# --- Delivered: the maps the server names --------------------------------
+
+## Where dot-cloud mounts every pack. dot-cloud's own constant, spelled out so this file
+## parses in a build that does not link it.
+const MOUNT_ROOT := "res://dot_cloud/"
+
+## Keys the server named whose pack turned out not to be an arena map, so a refresh does
+## not offer them again (and does not warn again).
+static var _refused_keys: Dictionary = {}
+
+
+## The pack keys (`<owner>/<map id>@<version>`) the server names for the running game:
+## [code]server.games.current_maps()[/code], which dot-server-deploy's `cfg/content.yml`
+## fills. Duck-typed, so a dot-server that predates the field — or a stand-in in a suite —
+## is an empty list rather than a parse error.
+##
+## [b]Not dot-game's `DotGameContent.map_keys`[/b], which says the same thing, because this
+## game does not link dot-game: its module is a `DotModule`, and pulling an addon into the
+## client shell's dependency list for six lines of duck typing is the wrong trade.
+static func server_map_keys(server: Object) -> PackedStringArray:
+	var out := PackedStringArray()
+	var games: Variant = server.get("games") if server != null else null
+
+	if not (games is Object) or not (games as Object).has_method("current_maps"):
+		return out
+
+	for key: Variant in (games as Object).call("current_maps"):
+		if not out.has(str(key)):
+			out.append(str(key))
+
+	return out
+
+
+## A map the server names, as dot-map content: delivered, not downloaded.
+##
+## [b]Built from the key alone[/b], because nothing else is on the disk yet: these packs are
+## a megabyte to five each and a server that fetched every one at boot would sit
+## unreachable while it did, so a pack is fetched when the map is changed to
+## (`ArenaMapSession`), as game-g2gfast fetches its own. So the def says what the key says
+## — id, content id, version — and nothing measured: no spawn count, no size, untagged, so
+## the team modes are refused by the existing rule and the box-built modes by `imported`.
+##
+## [b]The version is the pack's, not the manifest's hash.[/b] A local import is hashed
+## because nobody versions a link; a pack is versioned by whoever published it, the server
+## named exactly that version, and a client is told it in the announce and fetches it from
+## its own origin — so both ends agree on the bytes by construction, and a republish is a
+## new version by dot-cloud's rule. Hashing would need the manifest before the fetch.
+##
+## [b]The scene path is the manifest inside the mount[/b] (`<mount>/<id>.json`): the file
+## [ArenaMap] is built from, and inside the pack's own content — which is what lets a client
+## that has never heard of the map accept it (`DotMapSyncClient` takes an unknown map only
+## when its scene is under its mount). Null when the key is not `<owner>/<id>@<version>`.
+static func delivered_def(key: String) -> DotMapDef:
+	var def := DotMapDef.from_content_key(key)
+
+	if def == null or def.content_version == "":
+		return null
+
+	def.scene_path = manifest_in_mount(def)
+	def.version = def.content_version
+	def.display_name = String(def.id)
+	def.kind = DotMapDef.KIND_ARENA
+	def.author = "unknown"
+	def.enabled = in_rotation(def.id)
+	def.tier = 1
+	def.description = "Combat surf, delivered as %s." % key
+	def.meta = {
+		"builder": "ArenaMap.by_id",
+		"imported": true,
+		"delivered": true,
+		"key": key,
+		"teams": false,
+		"movement": "surf",
+	}
+	return def
+
+
+## `res://dot_cloud/<content id>/<version>`, where [param def]'s pack mounts.
+static func mount_of(def: DotMapDef) -> String:
+	return "%s%s/%s" % [MOUNT_ROOT, String(def.content_id), def.effective_content_version()]
+
+
+## `<mount>/<id>.json`: the manifest a delivered map is built from.
+static func manifest_in_mount(def: DotMapDef) -> String:
+	return mount_of(def).path_join("%s.json" % String(def.id))
+
+
+## Whether [param def] is one of this game's delivered maps: content, and its scene the
+## manifest in its own mount. Structural rather than a meta flag, because a def from a host
+## carries whatever meta the host wrote; the mount is checked plain by `DotMapSyncClient`.
+static func is_delivered(def: DotMapDef) -> bool:
+	return (
+		def != null and not def.is_local()
+		and String(def.content_id).get_file() == String(def.id)
+		and def.scene_path == manifest_in_mount(def)
+	)
+
+
+## Makes [param catalogue]'s delivered maps the ones [param keys] names: adds each one not
+## there (replacing a local import of the same id, because the server named a version and a
+## client without the link can only fetch a pack), and removes each delivered map no longer
+## named (putting back a local import of that id, when this machine has one). Returns how
+## many were added and removed. [param playing] is the map running now: it leaves the
+## catalogue like any other, but its mount stays registered, because the running game
+## rebuilds its solid from that manifest on a mode change.
+##
+## [b]A pack already on the disk is checked now[/b]: one whose manifest is not
+## `"kind": "arena"` is skipped with one warning. One not fetched yet is checked when it is
+## (`ArenaMapSession`), and leaves the catalogue then. A built-in map's id is never
+## replaced: `ArenaMap.by_id` would build the built-in whatever the catalogue said.
+static func adopt_delivered(
+	catalogue: DotMapCatalogue, keys: PackedStringArray, playing: StringName = &""
+) -> Dictionary:
+	var added := 0
+	var removed := 0
+
+	if catalogue == null:
+		return {"added": 0, "removed": 0}
+
+	var named: Dictionary = {}
+
+	for key in keys:
+		var def := delivered_def(key)
+
+		if def == null:
+			DotLog.warn(CHANNEL, "a map the server names is not <owner>/<map>@<version>", {"entry": key})
+			continue
+
+		if ArenaMap.ids().has(def.id):
+			DotLog.warn(CHANNEL, "a map the server names has a built-in map's id, and is skipped", {
+				"pack": key,
+			})
+			continue
+
+		if _refused_keys.has(key):
+			continue
+
+		var on_disk := ArenaImportedMaps.kind_at(def.scene_path)
+
+		if FileAccess.file_exists(def.scene_path) and on_disk != ArenaImportedMaps.KIND:
+			refuse(key, on_disk)
+			continue
+
+		named[def.id] = key
+		var existing := catalogue.get_map(def.id)
+
+		if existing != null and str(existing.meta.get("key", "")) == key:
+			continue
+
+		var res := catalogue.add(def)
+
+		if res.ok:
+			added += 1
+		else:
+			DotLog.warn(CHANNEL, "a map the server names could not be catalogued", {
+				"pack": key, "why": res.error.message,
+			})
+
+	for def in catalogue.maps.duplicate():
+		if not bool(def.meta.get("delivered", false)) or named.has(def.id):
+			continue
+
+		catalogue.remove(def.id)
+		removed += 1
+
+		if def.id != playing:
+			ArenaImportedMaps.remove_mounted(def.id)
+
+		var local := ArenaMap.imported(def.id)
+
+		if local != null:
+			var _put_back := catalogue.add(_def_for(def.id, local))
+
+	if added > 0 or removed > 0:
+		DotLog.info(CHANNEL, "the server's maps are in the catalogue", {
+			"added": added, "removed": removed, "named": keys.size(),
+		})
+
+	return {"added": added, "removed": removed}
+
+
+## Records that the pack [param key] is not an arena map, once, with the one warning.
+static func refuse(key: String, kind: String) -> void:
+	if _refused_keys.has(key):
+		return
+
+	_refused_keys[key] = true
+	DotLog.warn(CHANNEL, "a map the server names is not an arena map, and is skipped", {
+		"pack": key, "kind": kind if kind != "" else "(none)",
+	})
 
 
 ## Whether a map can host a team mode: some spawn is tagged.

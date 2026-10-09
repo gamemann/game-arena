@@ -80,6 +80,12 @@ signal time_warning(seconds_left: float)
 ## The game whose world is replaced. Required before [method setup].
 var game: ArenaGame = null
 
+## Whatever names this server's delivered maps: the dot-server, read through
+## [code]games.current_maps()[/code] (see `ArenaMaps.server_map_keys`). Null — a suite, a
+## listen server with no host config — means none, and the catalogue is the built-ins and
+## the local imports, exactly as before.
+var server: Object = null
+
 var session: ArenaMapSession = null
 var sync: DotMapSyncHost = null
 
@@ -109,6 +115,11 @@ func setup() -> DotResult:
 		)
 
 	var catalogue := ArenaMaps.catalogue()
+
+	# The maps the server owner named, catalogued as delivered and fetched only when one is
+	# changed to (`ArenaMapSession`). Before the session and the cooldown, so the rotation
+	# and its pool size see them.
+	var _adopted := ArenaMaps.adopt_delivered(catalogue, ArenaMaps.server_map_keys(server))
 
 	session = ArenaMapSession.new()
 	session.name = "MapSession"
@@ -165,6 +176,21 @@ func setup() -> DotResult:
 	_ready_for_changes = true
 
 	return DotResult.success(self)
+
+
+## Reads the server's list again and makes the catalogue's delivered maps match it: a map
+## newly named is offered, one no longer named is gone. In place, because the rotation and
+## the vote hold the catalogue by reference. Returns `{added, removed}`.
+func adopt_server_maps() -> Dictionary:
+	if session == null or session.catalogue == null:
+		return {"added": 0, "removed": 0}
+
+	var playing := current.id if current != null else &""
+	var out := ArenaMaps.adopt_delivered(
+		session.catalogue, ArenaMaps.server_map_keys(server), playing
+	)
+	restrict_rotation()
+	return out
 
 
 # --- Changing --------------------------------------------------------------

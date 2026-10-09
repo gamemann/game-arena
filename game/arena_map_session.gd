@@ -3,6 +3,7 @@ extends DotMapSession
 const ArenaGame := preload("arena_game.gd")
 const ArenaMap := preload("../maps/arena_map.gd")
 const ArenaMaps := preload("arena_maps.gd")
+const ArenaImportedMaps := preload("../maps/arena_imported_maps.gd")
 const ArenaMode := preload("arena_mode.gd")
 const ArenaModes := preload("arena_modes.gd")
 
@@ -57,7 +58,14 @@ func change_to_map(map: DotMapDef) -> DotResult:
 	if map == null:
 		return DotResult.fail(DotError.CODE_INVALID, "No map.")
 
-	if not map.is_local():
+	if ArenaMaps.is_delivered(map):
+		# One of this game's delivered maps: a pack of data, not a scene. Fetched and
+		# registered here, then built by `ArenaMap.by_id` below like any import.
+		var mounted: DotResult = await _mount_delivered(map)
+
+		if not mounted.ok:
+			return mounted
+	elif not map.is_local():
 		# Delivered content. dot-cloud fetches it, dot-map mounts it, and the base
 		# class does the rest — there is nothing arena-specific about a map that
 		# really is a scene.
@@ -155,6 +163,47 @@ func change_to_map(map: DotMapDef) -> DotResult:
 	changed_world()
 
 	return DotResult.success(world)
+
+
+## Fetches a delivered map's pack, if it is not mounted yet, and gives `ArenaImportedMaps`
+## its directory, so `ArenaMap.by_id` builds the map from the mounted manifest.
+##
+## [b]Here, at the change, on both ends.[/b] The server reaches it from the sync host after
+## announcing (the peers fetch in parallel), and a client from `DotMapSyncClient`'s load,
+## after its own fetch — so the second `ensure` is the content client's no-op for a pack it
+## has. Not at boot: these packs are megabytes each and most are never played in a session.
+##
+## With no content client (`ensure_content` answers false), the mount is used if it is
+## already on the disk — a suite's stand-in, or a pack an earlier run left — and the change
+## is refused naming the pack if it is not. A pack whose manifest is not
+## `"kind": "arena"` is refused, warned about once, and leaves the catalogue.
+func _mount_delivered(map: DotMapDef) -> DotResult:
+	var key := str(map.meta.get("key", "%s@%s" % [String(map.content_id), map.effective_content_version()]))
+
+	if not ArenaImportedMaps.is_mounted(map.id) \
+			or ArenaImportedMaps.manifest_path(map.id) != ArenaMaps.manifest_in_mount(map):
+		var fetched: DotResult = await loader.ensure_content(map)
+
+		if not fetched.ok:
+			return fetched.wrap("could not fetch the map %s" % String(map.id))
+
+		var dir := ArenaMaps.mount_of(map)
+		var added := ArenaImportedMaps.add_mounted(map.id, dir)
+
+		if not added.ok:
+			if added.error.code == DotError.CODE_INVALID:
+				ArenaMaps.refuse(key, ArenaImportedMaps.kind_at(ArenaMaps.manifest_in_mount(map)))
+
+				if catalogue != null:
+					catalogue.remove(map.id)
+
+			return added.wrap("%s is not a map this game can build" % key)
+
+		DotLog.info(LOG_CHANNEL, "a delivered map is mounted", {
+			"map": String(map.id), "pack": key, "dir": dir,
+		})
+
+	return DotResult.success(null)
 
 
 ## Replaces the meshes, where this deployment draws any.

@@ -21,6 +21,18 @@ const ArenaBspMap := preload("arena_bsp_map.gd")
 ##
 ## A checkout without the link has none, and every caller treats an empty list as the
 ## supported state it is: the three built-in maps still play.
+##
+## [b]A delivered map is registered by its directory, not found under a root.[/b] A map the
+## SERVER names (`<owner>/<id>@<version>` in [member DotGameDescriptor.maps]) is its own
+## dot-cloud pack, mounted at `res://dot_cloud/<owner>/<id>/<version>/` with `<id>.json`
+## and `<id>.bin` directly inside — the directory is named for the version, the files for
+## the map, so a scan of `<root>/<name>/<name>.json` pointed at a mount silently finds
+## nothing (game-g2gfast found the same thing and wrote `G2GMapCatalogue.at_directory`).
+## [method add_mounted] takes the id and the directory, which the caller already has
+## because it is the key it fetched. A mounted map is not in [method ids] — the catalogue
+## offers it as delivered content, under its pack version, not as a local import — and it
+## WINS over a copy of the same id under a root, because the server named that version and
+## a client that fetched the same pack must build the same brushes.
 
 ## The manifest `kind` that marks a map for this game.
 const KIND := "arena"
@@ -42,6 +54,9 @@ static var _manifests: Dictionary = {}
 
 ## id -> version string, from the manifest's own bytes.
 static var _versions: Dictionary = {}
+
+## id -> the mount directory of a delivered map. See [method add_mounted].
+static var _mounted: Dictionary = {}
 
 
 ## Where manifests are looked for, in order.
@@ -66,10 +81,68 @@ static func has(id: StringName) -> bool:
 	return _paths.has(String(id))
 
 
-## The manifest's path, or empty when there is no such map.
+## The manifest's path, or empty when there is no such map. A mounted map's when there
+## is one (see [method add_mounted]), else the first root's.
 static func manifest_path(id: StringName) -> String:
+	var key := String(id)
+
+	if _mounted.has(key):
+		return str(_mounted[key]).path_join("%s.json" % key)
+
 	_scan()
-	return str(_paths.get(String(id), ""))
+	return str(_paths.get(key, ""))
+
+
+## Registers a delivered map's mount directory for [param id], so [method manifest] and
+## `ArenaMap.imported(id)` read it from there. Fails, and registers nothing, when the
+## directory has no `<id>.json` and `<id>.bin`, or when the manifest's kind is not
+## [constant KIND]: a pack the server names is still only an arena map if it says so,
+## which is the same rule the roots are scanned by.
+static func add_mounted(id: StringName, dir: String) -> DotResult:
+	var key := String(id)
+	var base := dir.rstrip("/")
+	var path := base.path_join("%s.json" % key)
+
+	if not FileAccess.file_exists(path):
+		return DotResult.fail(DotError.CODE_IO, "The delivered map has no manifest.", path)
+
+	if not FileAccess.file_exists(base.path_join("%s.bin" % key)):
+		return DotResult.fail(DotError.CODE_IO, "The delivered map has no mesh.", base)
+
+	var parsed := ArenaBspMap.read_manifest(path)
+
+	if str(parsed.get("kind", "")) != KIND:
+		return DotResult.fail(
+			DotError.CODE_INVALID,
+			"The delivered map is not an arena map.",
+			"%s says kind \"%s\"" % [path, str(parsed.get("kind", ""))]
+		)
+
+	_mounted[key] = base
+	_manifests[key] = parsed
+	return DotResult.success(base)
+
+
+## Forgets a delivered map's directory, so the id falls back to a root's copy, if any.
+static func remove_mounted(id: StringName) -> void:
+	var key := String(id)
+
+	if _mounted.erase(key):
+		_manifests.erase(key)
+
+
+## Whether [param id] is registered from a mount.
+static func is_mounted(id: StringName) -> bool:
+	return _mounted.has(String(id))
+
+
+## The kind a manifest at [param path] declares, or empty. For a pack already on the disk,
+## checked before the map is offered.
+static func kind_at(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+
+	return str(ArenaBspMap.read_manifest(path).get("kind", ""))
 
 
 ## The parsed manifest, or empty.
@@ -99,13 +172,17 @@ static func manifest(id: StringName) -> Dictionary:
 ## about a map AT a version. A re-import in g2gfast-maps that moved a brush is a different
 ## map; hashing the manifest (which carries every offset into the mesh) says so on both
 ## ends without anybody remembering to bump anything — the rule g2gfast's packs follow.
+##
+## Of the root's copy, never a mount's: a delivered map's version is its pack version, which
+## the def carries from the server's key (`ArenaMaps.delivered_def`).
 static func version_of(id: StringName) -> String:
 	var key := String(id)
 
 	if _versions.has(key):
 		return _versions[key]
 
-	var path := manifest_path(id)
+	_scan()
+	var path := str(_paths.get(key, ""))
 
 	if path.is_empty():
 		return ""
@@ -116,7 +193,8 @@ static func version_of(id: StringName) -> String:
 	return version
 
 
-## Forgets what was found, so the next ask reads the disk again.
+## Forgets what was found, so the next ask reads the disk again. The mounted maps stay
+## registered (a mount cannot go away), and their manifests are read again on the next ask.
 static func rescan() -> void:
 	_scanned = false
 	_paths.clear()
@@ -154,4 +232,7 @@ static func _scan() -> void:
 				continue
 
 			_paths[name] = path
-			_manifests[name] = parsed
+
+			# A mounted copy of the same id is the one `manifest` answers with.
+			if not _mounted.has(name):
+				_manifests[name] = parsed

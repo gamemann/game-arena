@@ -42,6 +42,9 @@
 # bootstrap-link: g2gfast-maps/maps
 /maps/imported
 
+# dot-cloud mounts packs here; headless_imported writes a fake one and deletes it.
+/dot_cloud/
+
 # Exports
 build/
 export_presets.cfg

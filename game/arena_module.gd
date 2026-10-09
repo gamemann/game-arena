@@ -443,6 +443,9 @@ func _build_maps() -> DotResult:
 	# A dedicated server draws nothing, so there is no world node to put meshes in.
 	# `ArenaGame.change_map` has already replaced everything that decides the game.
 	maps.world_ref = null
+	# The server owner's map list (`cfg/content.yml` -> `DotGameDescriptor.maps`): the
+	# combat surf maps this server offers as packs. See `ArenaMaps.delivered_def`.
+	maps.server = server
 	add_child(maps)
 
 	var ready := maps.setup()
@@ -1446,6 +1449,19 @@ func _cmd_maps(ctx: DotCmdContext) -> void:
 			"*" if String(id) == current else " ", String(id), author,
 			"" if ArenaMaps.in_rotation(id) else ", not in rotation",
 		])
+
+	# The maps the server names as packs: fetched the first time one is changed to.
+	if maps != null and maps.session != null and maps.session.catalogue != null:
+		for def in maps.session.catalogue.maps:
+			if not ArenaMaps.is_delivered(def):
+				continue
+
+			ctx.reply("%s %s  (delivered: %s%s%s)" % [
+				"*" if game.map != null and game.map.id == def.id else " ", String(def.id),
+				str(def.meta.get("key", "")),
+				", mounted" if ArenaMap.ArenaImportedMaps.is_mounted(def.id) else ", fetched on change",
+				"" if def.enabled else ", not in rotation",
+			])
 
 	ctx.reply("`arena_map <id>` changes it under the players. `arena_maps` lists them.")
 

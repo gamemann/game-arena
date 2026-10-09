@@ -328,7 +328,39 @@ func _build_maps() -> void:
 
 	bridge.map_in_fn = func(payload: Dictionary) -> void:
 		if maps != null:
+			_prefer_delivered(payload)
 			maps.handle(payload)
+
+
+## A server announcing one of its delivered maps wins over a local import of the same id.
+##
+## [b]Because dot-map would refuse it otherwise[/b]: a client with g2gfast-maps linked has
+## `surf_x` in its catalogue as a local def at `0.0.0-<hash>`, and `DotMapSyncClient` refuses
+## an announce for a known LOCAL map at another version ("this client has a different
+## version of that map"). The server named a pack, built from that pack's bytes, and is
+## waiting for this client to fetch the same one — so the local entry is dropped and the
+## announce is accepted as delivered content, checked against its mount like any other.
+## The link stays on the disk; `ArenaImportedMaps.add_mounted` makes the mount win for that
+## id once the pack is here.
+func _prefer_delivered(payload: Dictionary) -> void:
+	if not DotMapMessage.is_map_message(payload) \
+			or DotMapMessage.kind_of(payload) != DotMapMessage.KIND_ANNOUNCE:
+		return
+
+	var announced: Variant = payload.get("map", {})
+
+	if not (announced is Dictionary) or maps.session == null or maps.session.catalogue == null:
+		return
+
+	var def := DotMapDef.from_dictionary(announced as Dictionary)
+
+	if not ArenaMaps.is_delivered(def):
+		return
+
+	var known := maps.session.catalogue.get_map(def.id)
+
+	if known != null and known.is_local() and bool(known.meta.get("imported", false)):
+		maps.session.catalogue.remove(def.id)
 
 
 ## The world was replaced on this client.
