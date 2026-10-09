@@ -133,6 +133,7 @@ func _module_load() -> DotResult:
 	_add_movement_cvars()
 	_add_drop_cvars()
 	_add_spawn_cvars()
+	_add_unlag_cvar()
 
 	add_cvar(
 		"arena_streak_rewards", "3:heal,5:haste,7:empowered",
@@ -961,6 +962,17 @@ const SPAWN_CVARS := {
 	"arena_spawn_sight_penalty": ["sight_penalty", "What an enemy being able to see a site costs it"],
 	"arena_spawn_enemy_weight": ["enemy_weight", "What each metre from the nearest enemy is worth"],
 }
+
+
+## `arena_max_unlag_ms`: how far back a shot is judged, for a shooter's latency. See
+## [member ArenaGame.max_unlag_ms]; 0 turns lag compensation off.
+func _add_unlag_cvar() -> void:
+	add_cvar("arena_max_unlag_ms", str(game.max_unlag_ms),
+		"How far back lag compensation rewinds the other players for a shot, in ms (0 off)",
+		DotConVar.FLAG_ARCHIVE | DotConVar.FLAG_NOTIFY).with_min(0.0).changed.connect(
+		func(_old: String, new_value: String) -> void:
+			game.max_unlag_ms = new_value.to_float()
+			log_info("lag compensation limit changed", {"ms": game.max_unlag_ms}))
 
 
 func _add_spawn_cvars() -> void:

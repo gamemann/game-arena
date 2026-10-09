@@ -35,7 +35,7 @@ const SNAPSHOT_RATE := 16
 const RUN_TICKS := 96
 const LOSS_EVERY := 5
 
-const CHECKS := 192
+const CHECKS := 195
 
 ## The imported combat surf map the map-sync section also follows a client onto, and how
 ## many checks that adds. Without g2gfast-maps linked they are skipped and said so, and
@@ -296,6 +296,24 @@ func _test_command_wire() -> void:
 		"the aim is the movement's, not a second copy"
 	)
 
+	# Lag compensation's one field: how far behind the command's tick the client drew
+	# everybody, in quarter ticks. Sent only with a button down.
+	sent.view_lag_q = 37
+	var lagged := DotNetWriter.new()
+	sent.write(lagged)
+	var got_lag := ArenaNetCommand.new()
+	got_lag.read(DotNetReader.new(lagged.to_bytes()))
+	_check(got_lag.view_lag_q == 37 and absf(got_lag.view_lag_ticks() - 9.25) < 0.001,
+		"the view lag survives the wire (%d quarter ticks)" % got_lag.view_lag_q)
+	var idle := ArenaNetCommand.new()
+	idle.view_lag_q = 37
+	var quiet := DotNetWriter.new()
+	idle.write(quiet)
+	var got_idle := ArenaNetCommand.new()
+	got_idle.read(DotNetReader.new(quiet.to_bytes()))
+	_check(got_idle.view_lag_q == -1 and quiet.to_bytes().size() < lagged.to_bytes().size(),
+		"and a command with no button down sends none (%d bytes against %d)" % [quiet.to_bytes().size(), lagged.to_bytes().size()])
+
 	# The one thing quantisation cannot bound: a legal pair of components with an
 	# illegal length. Diagonal at full deflection is 41% more speed than anyone else.
 	var cheat := ArenaNetCommand.new()
@@ -454,6 +472,11 @@ func _run_ticks() -> void:
 func _test_convergence() -> void:
 	print("")
 	_section("[convergence]")
+
+	# The clients fired every eighth tick through encode_input, so the server rewound for
+	# their shots: a real client measures how far behind it draws everybody and says so.
+	var rewinds := int(_server_game.combat.describe().get("rewinds", 0))
+	_check(rewinds > 0, "the server rewound for the clients' shots (%d)" % rewinds)
 
 	for peer_id in _clients:
 		var entry: Dictionary = _clients[peer_id]

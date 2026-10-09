@@ -90,6 +90,9 @@ var net_beacon: bool = false
 var last_move: DotFpsCommand = DotFpsCommand.new()
 var last_fire: DotWeaponCommand = DotWeaponCommand.new()
 
+## The newest command's view lag in ticks, or -1; see [member ArenaNetCommand.view_lag_q].
+var last_view_lag: float = -1.0
+
 ## Newest tick whose state this behaviour has adopted. Client side, for reconciliation.
 var last_state_tick: int = -1
 
@@ -168,6 +171,7 @@ func _net_apply_input(input: DotNetInput, _tick: int) -> void:
 
 	last_move = command.move
 	last_fire = command.fire
+	last_view_lag = command.view_lag_ticks()
 
 
 # --- Simulation ------------------------------------------------------------

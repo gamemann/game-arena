@@ -30,12 +30,26 @@ var move: DotFpsCommand = DotFpsCommand.new()
 ## Weapons: the selected slot, attack, reload, and the rest of the buttons.
 var fire: DotWeaponCommand = DotWeaponCommand.new()
 
+## How far behind this command's tick the client was drawing everybody else, in quarter
+## ticks: the tick a shot fired on this command was aimed at, as the server rewinds to it
+## for lag compensation (`ArenaGame._rewind_to`). Sent only when a button is down -- a
+## command that cannot fire costs one bit for it -- and capped by the server, never
+## trusted: [constant MAX_VIEW_LAG_Q] here, and the combat config's rewind limit there.
+var view_lag_q: int = -1
+
+## 255 quarter ticks: just under four seconds at 64 ticks, far past any rewind limit.
+const MAX_VIEW_LAG_Q := 255
+
 
 func _write(writer: DotNetWriter) -> void:
 	move.write(writer)
 	# Slot and buttons only. The angles come from `move`; see the class notes.
 	writer.write_uint(clampi(fire.slot, 0, 15), 4)
 	writer.write_uint(fire.buttons, DotWeaponCommand.BUTTON_BITS)
+	var lagged := fire.buttons != 0 and view_lag_q >= 0
+	writer.write_bool(lagged)
+	if lagged:
+		writer.write_uint(clampi(view_lag_q, 0, MAX_VIEW_LAG_Q), 8)
 
 
 func _read(reader: DotNetReader) -> void:
@@ -47,6 +61,7 @@ func _read(reader: DotNetReader) -> void:
 	fire.buttons = reader.read_uint(DotWeaponCommand.BUTTON_BITS)
 	fire.yaw = move.yaw
 	fire.pitch = move.pitch
+	view_lag_q = reader.read_uint(8) if reader.read_bool() else -1
 
 
 ## Clamps what a client could exaggerate.
@@ -67,6 +82,12 @@ func _sanitise() -> void:
 	# aim pointing somewhere the movement never looked.
 	fire.yaw = move.yaw
 	fire.pitch = move.pitch
+	view_lag_q = clampi(view_lag_q, -1, MAX_VIEW_LAG_Q)
+
+
+## The view lag in ticks, or -1 for none sent.
+func view_lag_ticks() -> float:
+	return float(view_lag_q) * 0.25 if view_lag_q >= 0 else -1.0
 
 
 ## Whether two inputs are identical, so a held-still player costs less.
@@ -76,12 +97,12 @@ func _equals(other: DotNetInput) -> bool:
 	if them == null:
 		return false
 
-	return move.equals(them.move) and fire.equals(them.fire)
+	return move.equals(them.move) and fire.equals(them.fire) and view_lag_q == them.view_lag_q
 
 
 ## Bits one command costs, before dot-net's own framing.
 static func estimated_bits() -> int:
-	return DotFpsCommand.estimated_bits() + 4 + DotWeaponCommand.BUTTON_BITS
+	return DotFpsCommand.estimated_bits() + 4 + DotWeaponCommand.BUTTON_BITS + 1
 
 
 func describe() -> Dictionary:
@@ -89,4 +110,5 @@ func describe() -> Dictionary:
 		"tick": tick,
 		"move": move.describe(),
 		"fire": fire.describe(),
+		"view_lag_ticks": view_lag_ticks(),
 	}

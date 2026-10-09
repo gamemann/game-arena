@@ -252,6 +252,34 @@ var player_stack: ArenaPlayerStack = null
 ## player id -> [ArenaPlayer].
 var _players: Dictionary = {}
 
+## Lag compensation: how far back the server will rewind the other players for a shot,
+## in milliseconds (`arena_max_unlag_ms`; 0 judges every shot against the present).
+##
+## [b]It never rewound at all before 2026-10-09.[/b] `resolve_shot` was called with no
+## view tick, so a player on a 120 ms round trip had to lead every target by the lead,
+## the flight time and the interpolation delay together -- about 280 ms at 64 ticks --
+## and a shot at somebody exactly under the crosshair missed. Now each command carries
+## how far behind it the client drew everybody ([member ArenaNetCommand.view_lag_q]),
+## and the shot is traced against where the other players were then. 500 by default:
+## that covers a 250 ms round trip, and every millisecond more is a millisecond a
+## low-ping player can be shot around a corner they already left.
+var max_unlag_ms: float = 500.0:
+	set(value):
+		max_unlag_ms = maxf(value, 0.0)
+		if combat != null and combat.config != null:
+			combat.config.max_rewind_ms = max_unlag_ms
+			combat.config.lag_compensation = max_unlag_ms > 0.0
+
+## Ticks of position history kept per player for a rewind: two seconds at 64 ticks.
+const UNLAG_HISTORY := 128
+
+## id -> [PackedVector3Array positions, PackedInt32Array ticks], a ring per player.
+var _unlag: Dictionary = {}
+## id -> the position a rewind moved a player from, until it is restored.
+var _unlag_moved: Dictionary = {}
+## The shooter, whom a rewind leaves where they are.
+var _unlag_shooter: int = 0
+
 ## Movement keys changed from [method ArenaPlayer.arena_tunables]' defaults, key -> number.
 ##
 ## [b]Kept, and applied to every player who arrives later[/b], because a rule that only
@@ -390,9 +418,12 @@ func _build_combat() -> DotResult:
 
 	var config := DotCombatConfig.new()
 	config.tick_rate = tick_rate
-	config.lag_compensation = true
+	config.lag_compensation = max_unlag_ms > 0.0
+	config.max_rewind_ms = max_unlag_ms
 	config.max_origin_error = 2.5
 	combat.config = config
+	combat.rewind_fn = _unlag_rewind
+	combat.restore_fn = _unlag_restore
 
 	add_child(combat)
 
@@ -1120,6 +1151,7 @@ func add_player(
 
 
 func remove_player(id: int) -> void:
+	_unlag.erase(id)
 	var player := player_for(id)
 
 	if player == null:
@@ -1362,6 +1394,79 @@ func _loadout_key(id: int) -> String:
 ## [param commands] is `{player id: [DotFpsCommand, DotWeaponCommand]}`. A player with
 ## no entry repeats their last command, which is what a dropped input packet should
 ## look like.
+## Records every player's position for this tick, for [method _unlag_rewind].
+func _unlag_record() -> void:
+	for id in _players:
+		var player: ArenaPlayer = _players[id]
+		var ring: Array = _unlag.get(id, [])
+		if ring.is_empty():
+			var positions := PackedVector3Array()
+			positions.resize(UNLAG_HISTORY)
+			var ticks := PackedInt32Array()
+			ticks.resize(UNLAG_HISTORY)
+			ticks.fill(-1)
+			ring = [positions, ticks]
+			_unlag[id] = ring
+		# Packed arrays are values: taken out, written, and put back, or the write lands
+		# on a copy and the history stays empty (it did, the first time).
+		var positions: PackedVector3Array = ring[0]
+		var ticks: PackedInt32Array = ring[1]
+		var slot := _tick % UNLAG_HISTORY
+		var before := (_tick - 1) % UNLAG_HISTORY
+		# A respawn or a teleport: ten metres in one tick is 640 m/s at 64 ticks, which
+		# nothing moves at. Rewinding across it would stand a player's hitboxes where they
+		# died, or at the far end of a pit, so the history starts again from here.
+		if ticks[before] == _tick - 1 and positions[before].distance_to(player.global_position) > 10.0:
+			ticks.fill(-1)
+		positions[slot] = player.global_position
+		ticks[slot] = _tick
+		ring[0] = positions
+		ring[1] = ticks
+		_unlag[id] = ring
+
+
+## Where player [param id] was at [param at] (a fractional tick), between the two
+## recorded ticks either side; null when the history does not reach that far.
+func unlag_position_at(id: int, at: float) -> Variant:
+	var ring: Array = _unlag.get(id, [])
+	if ring.is_empty():
+		return null
+	var positions: PackedVector3Array = ring[0]
+	var ticks: PackedInt32Array = ring[1]
+	var lo := floori(at)
+	var a := lo % UNLAG_HISTORY
+	var b := (lo + 1) % UNLAG_HISTORY
+	if ticks[a] != lo:
+		return null
+	if ticks[b] != lo + 1:
+		return positions[a]
+	return positions[a].lerp(positions[b], at - float(lo))
+
+
+## dot-combat's rewind: every other living player, put where they were at [param view_tick].
+func _unlag_rewind(view_tick: float) -> void:
+	for id in _players:
+		if id == _unlag_shooter:
+			continue
+		var player: ArenaPlayer = _players[id]
+		if not player.is_alive():
+			continue
+		var then: Variant = unlag_position_at(id, view_tick)
+		if then == null:
+			continue
+		_unlag_moved[id] = player.global_position
+		player.global_position = then
+
+
+## And back, after the trace.
+func _unlag_restore() -> void:
+	for id in _unlag_moved:
+		var player: ArenaPlayer = _players.get(id)
+		if player != null:
+			player.global_position = _unlag_moved[id]
+	_unlag_moved.clear()
+
+
 func tick(commands: Dictionary = {}) -> void:
 	_tick += 1
 
@@ -1392,12 +1497,15 @@ func tick(commands: Dictionary = {}) -> void:
 				projectiles.accept(outcome)
 
 	if is_authority:
+		_unlag_record()
 		for shot in shots:
-			# No view tick: these are shots the server itself produced from commands it
-			# has already received, so there is nothing to rewind to. A real dedicated
-			# server passes the client's acknowledged tick here and lag compensation
-			# turns on with no other change.
-			combat.resolve_shot(shot)
+			# Traced against the other players where the shooter saw them: the command
+			# that fired carries how far behind its tick the client was drawing (-1 from
+			# a local player or a bot, who see the present, and nothing is rewound).
+			var pair: Array = commands.get(shot.attacker, [])
+			var lag: float = float(pair[2]) if pair.size() > 2 else -1.0
+			_unlag_shooter = shot.attacker
+			combat.resolve_shot(shot, float(_tick) - lag if lag >= 0.0 else -1.0)
 
 	# After the shots, before everything that can end the round: a hurt volume that kills
 	# somebody is a death the win check below has to count this tick.

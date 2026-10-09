@@ -764,15 +764,22 @@ func _play_window(window: Array) -> void:
 				next_slay += 300
 		await get_tree().process_frame
 
-	# Everything sent in the window gets six seconds to land. ENet doubles its resend
-	# timeout on every loss, so a reliable message unlucky four times running at 20% is
-	# about three seconds late -- one in a few hundred, and late is allowed; lost is not.
+	# Everything sent in the window gets 35 seconds to land; the wait ends the moment it
+	# has. 35 because the contract is ENet's own: with dot-core's peer timeouts a reliable
+	# command either arrives within 30 s or the peer is dropped, and a drop fails "still
+	# connected" above. Twenty failed one run in twenty (2026-10-09). ENet doubles a reliable command's resend timeout every time it goes unacknowledged,
+	# and a resend fails if the data OR its acknowledgement is lost: 36% a try at 20% each
+	# way, not 20%. Five failures in a row, about one command in a hundred and seventy (a
+	# window sends a few hundred), is 31 resend timeouts of ~230 ms, seven seconds; everything
+	# behind it on the channel waits too, because ENet delivers a channel in order. Six
+	# seconds was written for 20% a try and failed a run in eight on exactly that (2026-10-09).
+	# Late is allowed; lost, duplicated or reordered is not, and that is what is checked.
 	await _until(func() -> bool:
 		return _got_notices.size() - got_notices_from >= _sent_notices.size() - notices_from \
 			and _got_kills.size() - got_kills_from >= _sent_kills.size() - kills_from \
 			and _got_chat.size() - got_chat_from >= _sent_chat.size() - chat_from \
 			and _got_a_chat.size() - got_a_chat_from >= _sent_a_chat.size() - a_chat_from,
-		6.0)
+		35.0)
 
 	_measure_window(title, loss,
 		_sent_notices.slice(notices_from), _got_notices.slice(got_notices_from),
@@ -796,8 +803,15 @@ func _measure_window(
 	var said: Dictionary = _relay.describe()
 
 	# --- connection ---
-	_check(link.phase == DotClientLink.Phase.PLAYING and String(a["gone"][0]) == "",
-		"%s: A is still connected and playing" % title, "gone: '%s'" % a["gone"][0])
+	# Both ends. A client whose server has dropped it does not find out until its own ENet
+	# gives up, so asking only the client passed a window in which the server had
+	# disconnected A and A had heard nothing for seconds (2026-10-09: ENet's own peer
+	# timeouts, now dot-core's DotTransportENet.peer_timeout_*).
+	var a_session := int(a["session"])
+	var on_server := _game.player_for(a_session) != null
+	_check(link.phase == DotClientLink.Phase.PLAYING and String(a["gone"][0]) == "" and on_server,
+		"%s: A is still connected and playing, on both ends" % title,
+		"gone: '%s', on the server: %s" % [a["gone"][0], on_server])
 	var injected_down := float(_relay.down.loss_ratio())
 	var injected_up := float(_relay.up.loss_ratio())
 	_check(absf(injected_down - loss) < 0.06 and absf(injected_up - loss) < 0.06,

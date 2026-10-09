@@ -42,9 +42,16 @@ const CHANNEL := "arena.net"
 ## packet. Fixed width, so the command that follows starts at a known offset.
 const ACK_BYTES := 4
 
-## Commands in every input packet: this tick's and the two before it, so a packet lost
-## costs the server no tick unless two more after it are lost too. See [method encode_input].
-const INPUT_COPIES := 3
+## Commands in every input packet: this tick's and the four before it, so a packet lost
+## costs the server no tick unless four more after it are lost too. See [method encode_input].
+##
+## [b]Five, not three (2026-10-09).[/b] With three, at 20% loss the server was still short
+## of the command on 1.7% of its ticks in a bad run (headless_lossy: "a hole 4 times, not
+## there yet 7 times" of 641), ran each on the previous one while the player was turning,
+## and the prediction was off by over 5 cm on more than one tick in twenty until the
+## correction landed -- one run in twenty failing on it. Two more copies are a few bytes
+## each (a varint tick step and a command that is mostly the one before it).
+const INPUT_COPIES := 5
 
 ## Input packets taken, per peer. Server side; what `arena_net` reads to tell one client's
 ## lossy uplink from another's.
@@ -495,7 +502,7 @@ func _commands() -> Dictionary:
 
 	for session_id in _behaviours:
 		var behaviour: ArenaPlayerNet = _behaviours[session_id]
-		out[int(session_id)] = [behaviour.last_move, behaviour.last_fire]
+		out[int(session_id)] = [behaviour.last_move, behaviour.last_fire, behaviour.last_view_lag]
 
 	return out
 
@@ -527,6 +534,7 @@ func client_tick(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> void
 	command.delta = net.clock.tick_duration()
 	command.move = move
 	command.fire = fire
+	command.view_lag_q = view_lag_q(tick)
 
 	net.local_inputs().push(command)
 
@@ -601,6 +609,7 @@ func encode_input(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> Pac
 	command.delta = net.clock.tick_duration()
 	command.move = move
 	command.fire = fire
+	command.view_lag_q = view_lag_q(tick)
 
 	# The ones before this tick from the replay history; this one from the arguments,
 	# because a caller may encode before or after `client_tick` recorded it.
@@ -614,6 +623,21 @@ func encode_input(tick: int, move: DotFpsCommand, fire: DotWeaponCommand) -> Pac
 	var out := net.encode_ack()
 	out.append_array(writer.to_bytes())
 	return out
+
+
+## How far behind [param tick] this client is drawing everybody else, in quarter ticks:
+## what the server rewinds the other players by when this tick's command fires.
+##
+## Remote players are drawn at the receive timeline less the interpolation delay
+## ([method DotNetManager.interpolate_frame]); this command is for [param tick], ahead of
+## the server by the input lead. A shot on it was aimed at players as they were drawn, so
+## the difference is the whole of what the server has to undo: the lead, the flight time
+## and the interpolation delay. -1 when there is nothing to measure against yet.
+func view_lag_q(tick: int) -> int:
+	if net == null or net.interpolator == null or not net.clock.is_synced():
+		return -1
+	var drawn := float(net.clock.received_tick()) - net.interpolator.delay_ticks()
+	return clampi(int(roundf((float(tick) - drawn) * 4.0)), 0, ArenaNetCommand.MAX_VIEW_LAG_Q)
 
 
 ## Takes one of those packets. Server side.

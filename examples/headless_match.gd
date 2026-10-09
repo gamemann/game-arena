@@ -52,13 +52,13 @@ const SCORE_LIMIT := 6
 ## match that never ends fails the test instead of hanging the run.
 const MAX_TICKS := 64 * 90
 
-const CHECKS := 506
+const CHECKS := 513
 
 ## Sections entered against sections that ran to their last line, and against this. A
 ## runtime error inside a section aborts that function and nothing says so; a section that
 ## bailed out early after a failed guard is counted as not finished on purpose. The CHECKS
 ## total is the other half — see docs/testing.md.
-const SECTIONS := 32
+const SECTIONS := 33
 
 var _passed := 0
 var _failed := 0
@@ -125,6 +125,7 @@ func _run() -> void:
 	await _test_capture_the_flag()
 	await _test_drops()
 	await _test_weapon_modes()
+	await _test_lag_compensation()
 	await _test_streaks()
 
 	# Last, and it has to be. It replaces the combat manager, the match node and the
@@ -893,6 +894,68 @@ func _carried(game: ArenaGame, id: int) -> Array[StringName]:
 		var def: DotWeaponDef = game.player_for(id).arsenal.slot_at(slot).def
 		out.append(def.id)
 	return out
+
+
+## Lag compensation: a shot is traced against the other players where the shooter saw
+## them, as far back as `arena_max_unlag_ms` allows (2026-10-09; before, never).
+func _test_lag_compensation() -> void:
+	_section("lag compensation")
+	var game := _weapon_mode_game(ArenaMode.free_for_all(25), [940, 941])
+	if not _check(game != null, "a two-player game sets up"):
+		return
+	for _i in range(6):
+		await get_tree().process_frame
+	var shooter := game.player_for(940)
+	var target := game.player_for(941)
+	var floor_y := shooter.controller.state.position.y
+	for id in [940, 941]:
+		game.combat.health_of(id).invulnerable_until_tick = -1
+
+	# B walks sideways a quarter of a metre a tick, eight metres in front of A, for twenty
+	# ticks; the history is what the server records as it ticks.
+	var a_at := Vector3(0.0, floor_y, 0.0)
+	for k in range(20):
+		_stand(game, 940, a_at)
+		_stand(game, 941, Vector3(-2.5 + 0.25 * k, floor_y, -8.0))
+		game.tick({})
+	var now := game.current_tick()
+	var back := 12
+	var then: Variant = game.unlag_position_at(941, float(now - back))
+	_check(then is Vector3 and (then as Vector3).distance_to(target.global_position) > 2.5,
+		"the server remembers where B was %d ticks ago (%s, now %s)" % [back, then, target.global_position])
+
+	# A fires at where B WAS, as a client drawing B that far behind would.
+	var fire_at := func(view_tick: float) -> bool:
+		var shot := DotShot.make(&"rifle", 940, now, 0)
+		shot.origin = shooter.global_position + Vector3.UP * 1.5
+		var aim: Vector3 = ((then as Vector3) + Vector3.UP * 1.0) - shot.origin
+		shot.pellets = [aim.normalized()] as Array[Vector3]
+		shot.direction = aim.normalized()
+		shot.damage = 5.0
+		shot.damage_type = game.combat.damage_type(&"bullet")
+		shot.max_range = 100.0
+		game._unlag_shooter = 940
+		var _r := game.combat.resolve_shot(shot, view_tick)
+		# The hit, not the health: what lag compensation decides is whether the trace met
+		# B. What the damage then does (armour, protection) is the rules' business.
+		for d: DotDamage in shot.damages:
+			if d.victim == 941:
+				return true
+		return false
+
+	_check(fire_at.call(float(now - back)), "a shot aimed where A saw B, %d ticks back, hits B" % back)
+	_check(target.global_position.distance_to(Vector3(-2.5 + 0.25 * 19, floor_y, -8.0)) < 0.3,
+		"and B is put back where the server has him (%s)" % target.global_position)
+	_check(not fire_at.call(-1.0), "the same shot judged against the present misses")
+	game.max_unlag_ms = 0.0
+	_check(not fire_at.call(float(now - back)), "and with arena_max_unlag_ms 0 nothing is rewound")
+	game.max_unlag_ms = 50.0
+	_check(not fire_at.call(float(now - back)),
+		"nor past the limit: 50 ms is 3 ticks, and %d were asked for" % back)
+	game.max_unlag_ms = 500.0
+	remove_child(game)
+	game.queue_free()
+	_done()
 
 
 ## Gun game and a weapon pool: the mode decides what a player carries.
