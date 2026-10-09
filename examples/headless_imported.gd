@@ -960,7 +960,16 @@ func _test_every_map() -> void:
 			built += 1
 
 		var body := map.movement_body() as DotFpsPhysicsBody
+		# Its own collision layer, and the body asks only that one. The game from the
+		# earlier sections still has its map loaded in this same physics world, and a
+		# spawn of the map under test standing where that map has a wall was counted
+		# stuck: surf_akai_final, 24 of 32, and none when checked on its own (2026-10-09).
+		if solid is CollisionObject3D:
+			(solid as CollisionObject3D).collision_layer = ISOLATED_LAYER
+		body.collision_mask = ISOLATED_LAYER
 		var trace := map.shot_trace()
+		if "collision_mask" in trace:
+			trace.set("collision_mask", ISOLATED_LAYER)
 		var tunables := ArenaPlayer.arena_tunables()
 		var floored := 0
 		var stuck := 0
@@ -1003,6 +1012,10 @@ func _test_every_map() -> void:
 ## The query's capsule is placed by its CENTRE, so it is lifted half a height; and it is
 ## a little shorter and thinner than the player's, because a hull resting on a floor or
 ## against a wall touches it, and "touching" is not "inside".
+## The physics layer [method _test_every_map] puts each map on, which nothing else uses.
+const ISOLATED_LAYER := 1 << 19
+
+
 static func _in_solid(body: DotFpsPhysicsBody, feet: Vector3, tunables: DotFpsTunables) -> bool:
 	var height := tunables.stand_height - 0.2
 	return body.overlaps(feet + Vector3.UP * (0.1 + height * 0.5), height, tunables.radius - 0.05)
