@@ -58,7 +58,7 @@ const SCORE_LIMIT := 4
 const HURT_MAP := &"surf_xiv_v2a"
 
 const SECTIONS := 11
-const CHECKS := 55
+const CHECKS := 56
 
 var _passed := 0
 var _failed := 0
@@ -224,6 +224,28 @@ func _test_loads() -> bool:
 	_check(_game.match_node.spawn_points().size() == _game.map.spawns.size()
 		and _game.map.spawns.size() == (manifest.get("spawns", []) as Array).size(),
 		"every spawn the mapper placed is a spawn point (%d)" % _game.map.spawns.size())
+
+	# Water the map shipped no texture for is drawn as water (arena_bsp_water.gdshader), one
+	# material per such surface. Armed by skipping the water branch in _material_for.
+	var water_wanted := 0
+	for entry: Dictionary in manifest.get("surfaces", []):
+		var shipped: Variant = entry.get("texture", null)
+		if shipped is String and not (shipped as String).is_empty():
+			continue
+		if ArenaBspMap.is_water_material(str(entry.get("material", ""))):
+			water_wanted += 1
+	var water_drawn := 0
+	# Drawn the way a client draws it: the server never builds the visual.
+	var level := _game.map.to_scene()
+	for drawn: Node in level.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := drawn as MeshInstance3D
+		for i in range(mesh_instance.get_surface_override_material_count()):
+			var m := mesh_instance.get_surface_override_material(i)
+			if m != null and m.has_meta(&"water"):
+				water_drawn += 1
+	level.free()
+	_check(water_wanted > 0 and water_drawn == water_wanted,
+		"its untextured water is drawn as water (%d of %d)" % [water_drawn, water_wanted])
 
 	_game.match_node.rules.warmup_sec = 0.0
 	_game.match_node.rules.countdown_sec = 0.0

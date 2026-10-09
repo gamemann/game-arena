@@ -391,6 +391,30 @@ static func _surface_arrays(blob: PackedByteArray, s: Dictionary) -> Array:
 static var _grid: Texture2D = null
 
 
+## Whether a material name is water: its file name says `water` and it is not a
+## waterfall. game-g2gfast's G2GBspMap.is_water_material; keep the two in step.
+static func is_water_material(material: String) -> bool:
+	var last := material.to_lower().get_file()
+	return last.contains("water") and not last.contains("waterfall")
+
+
+## Water in the map's own colour where it measured one that is not grey, else the shader's
+## teal. See game-g2gfast's G2GBspMap._water_material.
+static func _water_material(s: Dictionary, lightmap: Texture2D) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = load(ArenaPaths.rebase("res://maps/arena_bsp_water.gdshader"))
+	mat.set_shader_parameter("lightmap_tex", lightmap)
+	mat.set_shader_parameter("light_boost", LIGHT_BOOST)
+	mat.set_shader_parameter("ambient", AMBIENT)
+	var colour: Variant = s.get("colour", null)
+	if colour is Array and (colour as Array).size() >= 3:
+		var c := Color(float(colour[0]), float(colour[1]), float(colour[2]))
+		if c.s > 0.25 and c.v > 0.04:
+			mat.set_shader_parameter("tint", Color(c.r, c.g, c.b, 1.0).lightened(0.15))
+	mat.set_meta(&"water", true)
+	return mat
+
+
 static func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	# [b]Two shaders, and the opaque one is the default.[/b] Writing ALPHA at all is what
@@ -425,6 +449,12 @@ static func _material_for(s: Dictionary, dir: String, lightmap: Texture2D) -> Sh
 					mat.set_shader_parameter("has_albedo2", true)
 
 			return mat
+
+	# [b]Water draws as water[/b] (game-g2gfast's rule, see arena_bsp_water.gdshader): the
+	# source game's water was never in a map, so a pool was an opaque grid floor a player
+	# sank through. A map that shipped its water texture keeps it, above.
+	if is_water_material(str(s.get("material", ""))):
+		return _water_material(s, lightmap)
 
 	# No texture the map carried: it lived in the source game's own archives, which on a
 	# surf map is most of the map. The grid, painted the colour the map's compiler measured
