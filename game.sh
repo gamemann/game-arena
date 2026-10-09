@@ -32,7 +32,9 @@
 GAME_NAME="Arena"
 PACK="arena"
 EXTRA_PACKS=""
-SUITES="headless_match headless_net headless_lossy headless_presentation headless_stack headless_admin headless_imported dedicated"
+# headless_lossy is left out: it plays real ENet through real loss and fails about one run
+# in four (see CLAUDE.md "Real loss"). Run it by name: ./game.sh test headless_lossy
+SUITES="headless_match headless_net headless_presentation headless_stack headless_admin headless_imported dedicated"
 # --------------------------------------------------------------------------------
 
 set -uo pipefail

@@ -21,10 +21,11 @@ const Relay := preload("res://addons/dot_net/testing/dot_net_udp_relay.gd")
 ##
 ## [code]--verbose[/code] adds the diagnostics every finding here was made with: A's clock
 ## every quarter second, its inputs and ENet's packet throttle every half second, input
-## transit and snapshot age, and a line per freeze. Two flags put a defect back, as
-## controls: [code]--stock-enet[/code] builds the server's ENet the way dot-core does
-## (see [method _boot]) and [code]--ping-rtt[/code] feeds the clock the heartbeat's round
-## trip instead of ENet's (see [method ArenaNetBridge.link_rtt_ms]). Both fail checks.
+## transit and snapshot age, and a line per freeze. [code]--ping-rtt[/code] puts a defect
+## back as a control: it feeds the clock the heartbeat's round trip instead of ENet's (see
+## [method ArenaNetBridge.link_rtt_ms]), and it fails checks. (`--stock-enet` was the other
+## until dot-core's DotTransportENet stopped advertising six bytes a second; its own
+## `dual_transport_selftest` holds that one now.)
 ##
 ## [b]What only this can see.[/b] `headless_net` drops one packet in five, but in its own
 ## loopback: in order, instantly, never twice, and never a reliable one. A browser's
@@ -242,28 +243,14 @@ func _boot() -> bool:
 	# No query listener: with one the UDP port is shared through a demux, which is its own
 	# measurement (dual-stack-follow-1, point 2). This one is about the game's traffic.
 	config.query_enabled = false
+	# Its own UDP port, not shared through the demux: that relay is its own measurement too.
+	config.enet_share_udp_port = false
 	config.stdin_console_enabled = false
 	config.log_level = "debug" if _verbose else "error"
 
-	# [b]The server's ENet, built as dot-core's DotTransportENet should build it.[/b] Godot's
-	# `ENetMultiplayerPeer.create_server` hands its `max_channels` argument to ENet as the
-	# host's INCOMING BANDWIDTH (modules/enet/enet_multiplayer_peer.cpp: `create_host_bound(
-	# bind_ip, port, max_clients, 0, max_channels + SYSCH_MAX, out_bandwidth)`), so a server
-	# made with dot-core's four channels tells every client it can take six bytes a second.
-	# ENet on the client believes it: its bandwidth throttle caps the packet throttle at
-	# 1/32 and drops 31 of every 32 unreliable packets -- the client's commands -- until
-	# the server's first bandwidth pass sends a correction, and then the RTT throttle takes
-	# up to twenty seconds to climb back. Measured here with `--stock-enet`, the control.
-	# Zero channels is the workaround: the channel limit ENet applies is its maximum either
-	# way (the same call passes 0 there), so the only thing it changes is the bandwidth.
-	if not "--stock-enet" in OS.get_cmdline_user_args():
-		var dual := DotTransportDual.new()
-		dual.enet_port = config.effective_enet_port()
-		dual.enet_bind_address = config.effective_enet_bind_address()
-		dual.share_udp_port = false
-		dual.enet = DotTransportENet.new()
-		dual.enet.channel_count = 0
-		config.transport = dual
+	# The server's ENet is dot-core's own: DotTransportENet no longer advertises the engine's
+	# channel count as its incoming bandwidth (which throttled every client's commands to
+	# 1/32 for its first seconds; see CLAUDE.md "Real loss"), so nothing is built by hand.
 
 	_server = DotServer.new()
 	_server.name = "Server"
