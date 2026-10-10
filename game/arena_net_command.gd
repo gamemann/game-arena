@@ -37,8 +37,14 @@ var fire: DotWeaponCommand = DotWeaponCommand.new()
 ## trusted: [constant MAX_VIEW_LAG_Q] here, and the combat config's rewind limit there.
 var view_lag_q: int = -1
 
-## 255 quarter ticks: just under four seconds at 64 ticks, far past any rewind limit.
-const MAX_VIEW_LAG_Q := 255
+## 1023 quarter ticks: four seconds at 64 ticks and two at 128, past any rewind limit.
+##
+## It was 255 in 8 bits, commented as "just under four seconds" -- which is 255 TICKS.
+## In quarter ticks it is 64 ticks, one second at 64 and half a second at 128, so on a
+## 128-tick server the wire clamped a 300-400 ms player below the rewind limit that was
+## meant to compensate them, whatever `arena_max_unlag_ms` said.
+const MAX_VIEW_LAG_Q := 1023
+const VIEW_LAG_BITS := 10
 
 
 func _write(writer: DotNetWriter) -> void:
@@ -49,7 +55,7 @@ func _write(writer: DotNetWriter) -> void:
 	var lagged := fire.buttons != 0 and view_lag_q >= 0
 	writer.write_bool(lagged)
 	if lagged:
-		writer.write_uint(clampi(view_lag_q, 0, MAX_VIEW_LAG_Q), 8)
+		writer.write_uint(clampi(view_lag_q, 0, MAX_VIEW_LAG_Q), VIEW_LAG_BITS)
 
 
 func _read(reader: DotNetReader) -> void:
@@ -61,7 +67,7 @@ func _read(reader: DotNetReader) -> void:
 	fire.buttons = reader.read_uint(DotWeaponCommand.BUTTON_BITS)
 	fire.yaw = move.yaw
 	fire.pitch = move.pitch
-	view_lag_q = reader.read_uint(8) if reader.read_bool() else -1
+	view_lag_q = reader.read_uint(VIEW_LAG_BITS) if reader.read_bool() else -1
 
 
 ## Clamps what a client could exaggerate.

@@ -260,10 +260,12 @@ var _players: Dictionary = {}
 ## the flight time and the interpolation delay together -- about 280 ms at 64 ticks --
 ## and a shot at somebody exactly under the crosshair missed. Now each command carries
 ## how far behind it the client drew everybody ([member ArenaNetCommand.view_lag_q]),
-## and the shot is traced against where the other players were then. 500 by default:
-## that covers a 250 ms round trip, and every millisecond more is a millisecond a
-## low-ping player can be shot around a corner they already left.
-var max_unlag_ms: float = 500.0:
+## and the shot is traced against where the other players were then. 1000 by default
+## (it was 500, which covers a 250 ms round trip and clamped a player joining from
+## another continent at 300-400 ms): every millisecond more is a millisecond a low-ping
+## player can be shot around a corner they already left, but that only happens when the
+## shooter really is that far behind, and refusing them is worse. UNLAG_HISTORY holds 2 s.
+var max_unlag_ms: float = 1000.0:
 	set(value):
 		max_unlag_ms = maxf(value, 0.0)
 		if combat != null and combat.config != null:
