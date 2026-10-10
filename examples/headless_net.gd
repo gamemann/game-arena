@@ -344,8 +344,8 @@ func _join_everyone() -> void:
 
 	# What the identity layer resolved for peer 2: a member's site avatar, translated.
 	var site_doc := DotAvatar.make(&"builtin")
-	site_doc.set_part(&"top", &"skin-c")
-	site_doc.set_part(&"face", &"skin-k")
+	site_doc.set_part(&"top", &"top.skin-c")
+	site_doc.set_part(&"face", &"face.skin-k")
 	var dressed: DotAvatar = preload("../game/arena_avatars.gd").from_site(site_doc)
 	var dressed_session := int(_clients[2]["session"])
 	_server_bridge.avatar_fn = func(session_id: int) -> DotAvatar:

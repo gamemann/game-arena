@@ -225,7 +225,9 @@ static func _site_skin(foreign: DotAvatar, slot: StringName) -> String:
 	if foreign == null or foreign.schema_id != &"builtin":
 		return ""
 
-	var part := String(foreign.part_in(slot))
+	# The site writes a part as `<slot>.<skin>` (`top.skin-k`). Read bare, every site avatar
+	# failed the check below and fell back to the stock body.
+	var part := String(foreign.part_in(slot)).trim_prefix(String(slot) + ".")
 
 	if part.length() != 6 or not part.begins_with("skin-"):
 		return ""

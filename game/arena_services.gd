@@ -540,22 +540,34 @@ func _on_player_chat(event: DotEvent) -> void:
 
 
 ## What the router calls to put one line in front of some peers.
+##
+## [b]The router's own wire, unflattened.[/b] This used to be `describe()` handed to
+## `send_system_to`, which made every line a player typed a SYSTEM line whose text happened
+## to start with their name — drawn as "[Server]: WhoZ: hello", and pushed onto the HUD's
+## centre notice with the server's announcements. The client's `DotChatClient.receive` reads
+## this form and keeps the speaker apart from the text; dot-server's own payload is only its
+## fallback, for a server running without dot-chat.
 func _send_chat(wire: Dictionary, recipients: PackedInt32Array) -> void:
-	if server.chat == null:
+	if not DotChatMessage.from_dictionary(wire).ok:
 		return
-
-	var message := DotChatMessage.from_dictionary(wire)
-
-	if not message.ok:
-		return
-
-	var line := (message.value as DotChatMessage).describe()
 
 	for peer in recipients:
-		var session := server.session_of(peer)
+		_send_wire(server.session_of(peer), wire)
 
-		if session != null:
-			server.chat.send_system_to(session, line)
+
+## One dot-chat line to one session, if it can still be reached.
+##
+## The same reachability test as `DotChatManager._can_reach`: a session the server has not
+## yet noticed leaving is still active, and an RPC at a peer that is gone prints an engine
+## error per line.
+func _send_wire(session: DotClientSession, wire: Dictionary) -> void:
+	if session == null or not session.is_active():
+		return
+	var mp := server.multiplayer
+	if mp == null or mp.multiplayer_peer == null or not Array(mp.get_peers()).has(session.peer_id):
+		return
+
+	server.send_kind(session.peer_id, DotEnvelope.CHAT_LINE, wire, DotEnvelope.Lane.EVENT)
 
 
 func _playing_peers() -> PackedInt32Array:
@@ -677,12 +689,8 @@ func add_peer(peer: int) -> void:
 
 	if session != null:
 		for row in chat.backlog_for(peer):
-			var message := DotChatMessage.from_dictionary(row)
-
-			if message.ok:
-				server.chat.send_system_to(
-					session, (message.value as DotChatMessage).describe()
-				)
+			if row is Dictionary and DotChatMessage.from_dictionary(row).ok:
+				_send_wire(session, row)
 
 	chat.join_notice(peer, CH_ALL)
 

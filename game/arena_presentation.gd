@@ -678,6 +678,11 @@ func _build_chat() -> void:
 	chat_window.name = "ChatWindow"
 	chat_window.open_action = &"arena_chat"
 	chat_window.team_action = &"arena_chat_team"
+	# [b]An outline, because the floors are pale.[/b] Light-blue names and white text over
+	# light grey tiles were a log the players asked, in that log, to be able to read. dot-ui
+	# outlines rather than panels on purpose (see `DotFeedView`): a backing box is a grey
+	# rectangle in the corner of the view even when nobody is talking.
+	chat_window.outline_size = 5
 	# Flush with the left edge the health and armour bars use, and lifted clear of them.
 	# `ArenaHud` puts health at 96 pixels off the bottom and armour at 56; a box at the
 	# default inset draws its log straight through both, which is the kind of thing only a

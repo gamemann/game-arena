@@ -454,7 +454,6 @@ func _build_netcode() -> DotResult:
 	var extra := extras.attach(bridge, game)
 	DotLog.result(CHANNEL, "the client's chat, voice and map layers", extra)
 
-	extras.line_received.connect(_on_chat_line)
 	extras.said.connect(_on_said)
 
 	# What the server says is carrying chat. It decides whether the box is drawn at all
@@ -509,11 +508,6 @@ func _say_ready() -> void:
 ## than an oversight: a scrolling window with an input field is a screen, and a screen
 ## is [DotScreenStack]'s. [DotChatClient] is holding the history the moment somebody
 ## writes one.
-func _on_chat_line(text: String) -> void:
-	if hud != null:
-		hud.notice(text)
-
-
 # --- Chat ------------------------------------------------------------------
 
 ## Joins the chat box to the two things it needs: a way out, and a way to stop the player.
@@ -572,6 +566,11 @@ func _local_display_name() -> String:
 
 ## A line somebody said, in the chat box, with the name drawn apart from the text.
 func _on_said(speaker: String, text: String, kind: String) -> void:
+	# The server's own lines also go on the HUD's centre notice. Only those: every line
+	# used to, which put whatever anybody typed in the middle of the screen.
+	if kind == "system" and hud != null:
+		hud.notice(text)
+
 	if presentation == null or presentation.chat_window == null:
 		return
 
